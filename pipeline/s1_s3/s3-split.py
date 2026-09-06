@@ -115,9 +115,27 @@ def extract_turns(raw_lines: list[dict]) -> list[dict]:
 
         user_msgs = [m for m in msgs
                      if isinstance(m, dict) and m.get("role") == "user"]
-        # 首行且是全量 messages：只认最后一条 user 消息，其余是上一段会话的历史
+        # 首行且是全量 messages：只认最后**一条含真实文本的** user 消息，
+        # 其余是上一段会话的历史。
+        #
+        # 「含真实文本」这个限定不能省。首版写的是无条件 `user_msgs[-1:]`，
+        # 实测让 1086 个单元（15.3%）退化成「整条会话一个单元」：这类会话首行
+        # 的最后一条 user 消息是 `tool_result`，或 `<system-reminder>` /
+        # `<command-name>` / `Caveat:` 这类注入噪声 —— 取出来是空块，`turns`
+        # 为空，于是走进下面 `if not turns` 的兜底分支，被标成 B_NO_RAW。
+        # 症状很隐蔽：这些会话**有** raw.jsonl，却和真的没有 raw.jsonl 的会话
+        # 混在同一个 reason 里，还共享 high 置信度（理由是「整条一个单元，
+        # 不存在切错的可能」）—— 而它们其实是**该切没切**。
+        #
+        # 往前找一条即可命中真实指令（150 例抽样中 101 例）。防幻影单元的
+        # 不变量没有松动：首行仍然最多产出一个轮次。
         if line_no == 0 and not incremental and len(user_msgs) > 1:
-            user_msgs = user_msgs[-1:]
+            for m in reversed(user_msgs):
+                if seg.user_text_blocks(m):
+                    user_msgs = [m]
+                    break
+            else:
+                user_msgs = user_msgs[-1:]
 
         # 一行 raw = 一次 API 调用 = 最多一个「触发它的用户轮次」。
         #
@@ -348,6 +366,18 @@ def split_session(rec: dict) -> list[dict]:
         }
 
     # 无 raw.jsonl 或提取不到轮次 → 整条会话作单个单元（§4.3）
+    #
+    # ## 这两种情况必须分开标，不能都记 B_NO_RAW
+    #
+    # `B_NO_RAW` 的 high 置信度理由是「整条会话一个单元，不存在切错的可能」——
+    # 这句话只对**真的没有 raw.jsonl** 成立。有 raw.jsonl 却提取不出轮次的，
+    # 是**该切没切**：切分信号缺失，不代表会话里只有一个任务。
+    #
+    # 混在一起标的代价（2026-09-06 实测）：1282 个 B_NO_RAW 单元里 1232 个其实
+    # 有 raw.jsonl，它们冒用 high 置信度，还把 high 档精确率从 75% 抬到 84%
+    # （不切分就不会切错，可裁判样本 100% 命中）—— **缺陷让门禁数字更好看**，
+    # 所以三道门禁全绿也没抓到它。修掉两处提取缺陷后剩 138 条确实无可用文本，
+    # 它们改记 `B_EXTRACT_FAILED` + low，交 Phase 2 复判。
     if not turns:
         instr = ""
         instr_path = os.path.join(common.INSTR_DIR, f"{sid}.txt")
@@ -357,9 +387,12 @@ def split_session(rec: dict) -> list[dict]:
                     instr = f.read()
             except OSError:
                 instr = ""
-        u = unit(1, "no_raw_jsonl", None, rec.get("start_time"), instr)
-        u["boundary_reason"] = "B_NO_RAW"
-        u["boundary_confidence"] = seg.boundary_confidence("B_NO_RAW")
+        has_raw = bool(rec.get("has_raw"))
+        reason = "B_EXTRACT_FAILED" if has_raw else "B_NO_RAW"
+        u = unit(1, "extract_failed" if has_raw else "no_raw_jsonl",
+                 None, rec.get("start_time"), instr)
+        u["boundary_reason"] = reason
+        u["boundary_confidence"] = seg.boundary_confidence(reason)
         u["raw_index_range"] = None
         return [u]
 

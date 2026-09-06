@@ -152,6 +152,45 @@ def is_noise(text: str) -> bool:
     return text.lstrip().startswith(NOISE_PREFIXES)
 
 
+# slash command 的参数里藏着真实指令。
+#
+# `<command-name>` 整块被判噪声是对的（`/model`、`/clear` 这类确实不是任务），
+# 但用户常把任务写在参数里：`/goal '<路径>' 请你核对文档是否有误`。实测这类
+# 会话有 332 条**整条提取不出任何轮次**，全部退化成「整条会话一个单元」并冒用
+# high 置信度；其中 194 条（58%）的指令就在 `<command-args>` 里。
+#
+# 命令分布：/goal 614、/add-question 187、/study 1、/topic-expand 1 —— 都是
+# 「把任务作为参数传进去」的自定义命令，不是内置的开关型命令。
+_CMD_ARGS_RE = re.compile(
+    r"<command-name>\s*(.*?)\s*</command-name>.*?"
+    r"<command-args>\s*(.*?)\s*</command-args>",
+    re.S,
+)
+
+# 参数要够长且像任务才认，否则 `/model opus` 这种开关值会被当成指令。
+CMD_ARGS_MIN_LEN = 15
+
+
+def extract_command_args(text: str) -> list[str]:
+    """从 slash command 块里取出像任务的参数
+
+    只认同时满足两条的参数：长度 ≥ `CMD_ARGS_MIN_LEN`，且命中
+    `TASK_START_RE`（含动词+对象）。两条都是为了挡开关型命令的参数值 ——
+    `/model opus-5`、`/effort max` 不是任务。
+    """
+    out = []
+    for m in _CMD_ARGS_RE.finditer(text or ""):
+        args = (m.group(2) or "").strip()
+        if len(args) < CMD_ARGS_MIN_LEN:
+            continue
+        if not TASK_START_RE.search(args):
+            continue
+        if is_noise(args):
+            continue
+        out.append(args)
+    return out
+
+
 def user_text_blocks(msg: dict) -> list[str]:
     """从一条 user 消息里取出非噪声 text 块
 
@@ -172,6 +211,9 @@ def user_text_blocks(msg: dict) -> list[str]:
     out = []
     for t in blocks:
         if is_noise(t):
+            # 噪声块里可能裹着 slash command 的任务参数（`/goal … 请你核对…`），
+            # 丢掉整块会让这类会话一个轮次都提取不出来。见 extract_command_args。
+            out.extend(extract_command_args(t))
             continue
         t = unwrap_user_text(t)
         # 拆包后再查一次：`<session>` 里也可能裹着 harness 注入的提示词
@@ -348,6 +390,12 @@ BOUNDARY_CONFIDENCE = {
     "B_TIME_GAP": "high",       # 实测 73.0%
     "B_FILE_DISJOINT": "medium",  # 实测 57.1%
     "B_TASK_PATTERN": "low",    # 实测 37.4% —— 必须交 Phase 2 LLM 复判
+    # 有 raw.jsonl 但一个非噪声文本块都提取不出来（实测 138 条）。
+    #
+    # 与 B_NO_RAW 分开标是 2026-09-06 修掉的一个缺陷：两者原先共用 B_NO_RAW，
+    # 于是「该切没切」的会话冒用了「不存在切错可能」的 high 置信度。切分信号
+    # 缺失 ≠ 会话里只有一个任务，所以这一档是 low，交 Phase 2 复判。
+    "B_EXTRACT_FAILED": "low",
 }
 
 

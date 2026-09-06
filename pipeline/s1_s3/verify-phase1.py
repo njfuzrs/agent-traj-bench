@@ -364,6 +364,38 @@ def check_s3(units: list[dict] | None = None):
     else:
         ok("interrupted 单元均已淘汰（§4.3）")
 
+    # B_NO_RAW 只许盖「真的没有 raw.jsonl」的会话（2026-09-06 加）
+    #
+    # 这道门禁补的是一个漏了整轮的缺陷：`B_NO_RAW` 走的是 `if not turns` 兜底
+    # 分支，它同时盖住两种情况 —— ① 真没有 raw.jsonl；② 有 raw.jsonl 但轮次
+    # 提取返回空。②  实测占 1232/1282，是**该切没切**，却和 ① 共享 high 置信度
+    # （理由「整条一个单元，不存在切错的可能」对 ② 根本不成立）。
+    #
+    # 它躲过了原有全部门禁：区间不重叠（只有一个单元）、单调递增（同上）、
+    # high 档精确率反而被它抬高（不切分就不会切错，那 36 个可裁判样本 100% 命中）。
+    # 换句话说**缺陷让门禁数字更好看**，这类缺陷不专门盯就永远发现不了。
+    mislabeled = [u["unit_id"] for u in kept
+                  if u.get("boundary_reason") == "B_NO_RAW" and u.get("has_raw")]
+    if mislabeled:
+        fail(f"{len(mislabeled)} 个单元标 B_NO_RAW 但会话实际有 raw.jsonl —— "
+             f"是轮次提取失败（该切没切），不是无 raw；"
+             f"且它们正冒用 high 置信度：{mislabeled[:3]}")
+    else:
+        n_nr = sum(1 for u in kept if u.get("boundary_reason") == "B_NO_RAW")
+        n_ef = sum(1 for u in kept if u.get("boundary_reason") == "B_EXTRACT_FAILED")
+        ok(f"B_NO_RAW {n_nr} 个均确为无 raw.jsonl；"
+           f"提取失败的 {n_ef} 个已单列 B_EXTRACT_FAILED")
+
+    # 提取失败的单元不许标成 high —— 它们是「该切没切」，不是「不可能切错」
+    ef_high = [u["unit_id"] for u in kept
+               if u.get("boundary_reason") == "B_EXTRACT_FAILED"
+               and u.get("boundary_confidence") != "low"]
+    if ef_high:
+        fail(f"{len(ef_high)} 个 B_EXTRACT_FAILED 单元置信度不是 low —— "
+             f"切分信号缺失不等于会话只有一个任务：{ef_high[:3]}")
+    else:
+        ok("B_EXTRACT_FAILED 单元均标 low（交 Phase 2 复判）")
+
     # 置信度字段必须齐全 —— 它是本阶段披露局限的载体
     noconf = [u["unit_id"] for u in kept if not u.get("boundary_confidence")]
     if noconf:
@@ -668,6 +700,12 @@ def self_test() -> int:
          check_s3,
          [{k: v for k, v in u.items() if k != "boundary_confidence"} for u in units],
          "缺 boundary_confidence"),
+        # S3：B_NO_RAW 混入「有 raw 但提取失败」的单元（2026-09-06 的真实缺陷）
+        ("S3 B_NO_RAW 冒用",
+         check_s3,
+         [{**u, "boundary_reason": "B_NO_RAW", "has_raw": True}
+          if u.get("keep") and u.get("seq") == 1 else u for u in units],
+         "会话实际有 raw.jsonl"),
         # S3：区间重叠（门禁③要抓的核心缺陷，必须自证它真的会红）
         ("S3 step_range 重叠",
          check_s3,

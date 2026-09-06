@@ -394,6 +394,65 @@ def test_s3_boundary_confidence_calibrated():
     assert seg.boundary_confidence("B_FILE_DISJOINT") == "medium"
     assert seg.boundary_confidence("B_TASK_PATTERN") == "low"
     assert seg.boundary_confidence("未知信号") == "low"
+    # 提取失败 ≠ 不可能切错，必须是 low（2026-09-06 修的缺陷）
+    assert seg.boundary_confidence("B_EXTRACT_FAILED") == "low"
+
+
+def test_s3_extract_failed_not_confused_with_no_raw():
+    """B_EXTRACT_FAILED 与 B_NO_RAW 必须分开，且只有后者配 high
+
+    这两者原先共用 B_NO_RAW，理由是「整条会话一个单元，不存在切错的可能」——
+    但这句话只对**真的没有 raw.jsonl** 成立。有 raw.jsonl 却提取不出轮次的是
+    **该切没切**，切分信号缺失不代表会话里只有一个任务。
+
+    实测代价：1282 个 B_NO_RAW 单元里 1232 个其实有 raw.jsonl，冒用 high 置信度
+    并把 high 档精确率从 75% 抬高到 84%（不切分就不会切错）。缺陷让门禁数字更
+    好看，所以三道门禁全绿也没抓到它。
+    """
+    assert seg.boundary_confidence("B_NO_RAW") == "high"
+    assert seg.boundary_confidence("B_EXTRACT_FAILED") == "low"
+    assert seg.BOUNDARY_CONFIDENCE["B_NO_RAW"] != seg.BOUNDARY_CONFIDENCE["B_EXTRACT_FAILED"]
+
+
+# ── S3 切分：slash command 参数里的真实指令 ──────────────────────────
+
+def test_s3_extract_command_args_recovers_instruction():
+    """slash command 的参数里藏着真实指令，不能随整块噪声丢掉
+
+    `<command-name>` 整块判噪声是对的（/model、/clear 不是任务），但用户常把
+    任务写在参数里。实测 332 条会话整条提取不出轮次，其中 194 条（58%）的指令
+    就在 `<command-args>` 里；命令分布 /goal 614、/add-question 187。
+    """
+    text = (
+        "<command-name>/goal</command-name>\n"
+        "<command-message>goal</command-message>\n"
+        "<command-args>请审查 evals/eval-judge.ts 以及相关的评分计算代码</command-args>\n"
+    )
+    got = seg.extract_command_args(text)
+    assert len(got) == 1
+    assert got[0].startswith("请审查")
+
+
+def test_s3_command_args_ignores_switch_values():
+    """开关型命令的参数值不是任务：/model opus-5 不能被当成指令
+
+    两条限制各挡一类：长度 <15 挡掉短值，TASK_START_RE 挡掉不含动词+对象的值。
+    """
+    assert seg.extract_command_args(
+        "<command-name>/model</command-name><command-args>opus-5</command-args>") == []
+    # 够长但不含任务动词，同样不认
+    assert seg.extract_command_args(
+        "<command-name>/effort</command-name>"
+        "<command-args>maximum effort setting value here</command-args>") == []
+
+
+def test_s3_command_args_reached_through_noise_block():
+    """user_text_blocks 要能穿过噪声块拿到 command-args（端到端）"""
+    msg = {"role": "user", "content": [{"type": "text", "text": (
+        "<command-name>/goal</command-name>"
+        "<command-args>请你重构 auth 模块，把 token 校验抽成独立函数</command-args>")}]}
+    blocks = seg.user_text_blocks(msg)
+    assert len(blocks) == 1 and "重构" in blocks[0]
 
 
 # ── S3 切分：轮次提取与区间映射 ─────────────────────────────────────
@@ -429,6 +488,54 @@ def test_s3_new_session_first_line_kept():
     }]
     turns = s3.extract_turns(raw)
     assert len(turns) == 1 and turns[0]["text"] == "请实现一个功能"
+
+
+def test_s3_first_line_skips_trailing_noise_to_find_instruction():
+    """⑩b 首行末尾是 tool_result / 注入噪声时，要往前找到真实指令
+
+    这条锁的是一个真实缺陷（2026-09-06 修）：上一条测试的「只取最后一条 user
+    消息」若写成无条件 `user_msgs[-1:]`，实测让 **1086 个单元（15.3%）**退化成
+    「整条会话一个单元」—— 这类会话首行的最后一条 user 消息是 tool_result 或
+    `<system-reminder>` / `<command-name>` 这类注入噪声，取出来是空块，turns
+    为空，于是被标成 B_NO_RAW。
+
+    症状隐蔽之处：这些会话**有** raw.jsonl，却和真的没有 raw.jsonl 的会话混在
+    同一个 reason 里，还共享 high 置信度（理由是「整条一个单元，不存在切错的
+    可能」）—— 而它们其实是**该切没切**。修掉后保留单元 7094 → 7385，
+    step_range 映射率 83.5% → 94.4%。
+
+    防幻影单元的不变量不许因此松动：首行仍然最多产出一个轮次。
+    """
+    raw = [{
+        "index": 1, "timestamp": "2026-08-19T13:05:36",
+        "request": {"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "历史轮次，很久以前问的"}]},
+            {"role": "assistant", "content": []},
+            {"role": "user", "content": [{"type": "text", "text": "请你修复登录接口的超时问题"}]},
+            # 真实指令之后跟着的全是噪声，无条件取 [-1:] 会取到空
+            {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+            {"role": "user", "content": [{"type": "text", "text": "<system-reminder>ctx</system-reminder>"}]},
+        ]},
+    }]
+    turns = s3.extract_turns(raw)
+    assert len(turns) == 1, "首行仍然只能产出一个轮次（防幻影单元）"
+    assert turns[0]["text"] == "请你修复登录接口的超时问题"
+
+
+def test_s3_first_line_all_noise_still_degrades():
+    """首行确实全是噪声时，取不到轮次是正确行为（不许硬造一个）
+
+    与上一条配对：修法只是「往前找」，不是「无论如何都要产出轮次」。
+    全噪声的首行应当仍然提取不到 —— 该走 B_NO_RAW 兜底的就该走。
+    """
+    raw = [{
+        "index": 1, "timestamp": "2026-08-19T13:05:36",
+        "request": {"messages": [
+            {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+            {"role": "user", "content": [{"type": "text", "text": "<system-reminder>ctx</system-reminder>"}]},
+        ]},
+    }]
+    assert s3.extract_turns(raw) == []
 
 
 def test_s3_one_raw_line_one_turn():
