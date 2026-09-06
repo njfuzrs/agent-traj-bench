@@ -404,12 +404,43 @@ def check_agent_source(records: list[dict]):
              f"三类 id 形态，判定逻辑可疑")
 
     trashed = sum(1 for r in records if r.get("legacy_trashed"))
-    expected = len(repo_map.load_legacy_trashed())
-    if expected and trashed != expected:
-        fail(f"legacy_trashed 标注 {trashed} 条，清单有 {expected} 条 —— "
-             f"差额说明有会话不在索引里（可能又被移出主目录）")
+    listed = repo_map.load_legacy_trashed()
+
+    # 这道门禁要抓的是「1722 条又被移出主目录」（§9.2 问题 1 会复发）。
+    # 但清单条数不能直接当期望值：其中有会话云端本就没有 session.traj
+    # （实测 1 条，`.pulled` 记 `"session.traj": "missing"`），它永远进不了
+    # 索引 —— 拿它当差额会让门禁恒红，等于废掉。
+    #
+    # 所以拆成两条独立判定：
+    #   ① 目录还在不在（真正的故障，必须红）
+    #   ② 在索引里的条数 == 有 session.traj 的条数（标注是否漏打）
+    # 无 traj 的那几条单独报出来，是数据事实而非故障。
+    if os.path.isdir(SESSIONS_DIR):
+        gone, no_traj = [], []
+        for sid in listed:
+            d = os.path.join(SESSIONS_DIR, sid)
+            if not os.path.isdir(d):
+                gone.append(sid)
+            elif not os.path.exists(os.path.join(d, "session.traj")):
+                no_traj.append(sid)
+        if gone:
+            fail(f"清单里有 {len(gone)} 条会话的目录已不在 {SESSIONS_DIR} —— "
+                 f"又被移出主目录了，会让 pull.py 重复下载"
+                 f"（§9.2 问题 1）：{sorted(gone)[:3]}")
+        else:
+            ok(f"清单 {len(listed)} 条的目录全部在主目录内（未再被移走）")
+        expected = len(listed) - len(no_traj)
+        if no_traj:
+            warn(f"清单里 {len(no_traj)} 条云端无 session.traj，永远进不了索引"
+                 f"（数据事实，非故障）：{sorted(no_traj)}")
     else:
-        ok(f"legacy_trashed 标注 {trashed} 条，与清单一致")
+        expected = len(listed)
+
+    if expected and trashed != expected:
+        fail(f"legacy_trashed 标注 {trashed} 条，与清单可入索引的 {expected} 条不符 —— "
+             f"标注逻辑漏打或索引过期")
+    else:
+        ok(f"legacy_trashed 标注 {trashed} 条，与清单可入索引部分一致")
 
 
 def check_provenance(records: list[dict]):
