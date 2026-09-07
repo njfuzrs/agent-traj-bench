@@ -1,0 +1,12 @@
+{
+    "task": {
+        "path": "/Users/zhourusheng/.cache/harbor/tasks/packages/hello-world/hello-world/38d7a077f07fbee8efc78db5dec9a72f82e727510ad1dcfeac0b55fa845256b7"
+    },
+    "trial_name": "38d7a077f07fbee8efc78db5dec9a72f__NnTLhSD",
+    "trials_dir": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/tz-runs/nop/2026-09-07__17-02-55",
+    "verifier_timeout_multiplier": 6.0,
+    "agent": {
+        "name": "nop"
+    },
+    "job_id": "2ef8efe8-5356-4a3d-a2f5-3ba3839b273a"
+}

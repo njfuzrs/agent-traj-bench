@@ -1,0 +1,9 @@
+{
+  "exec-opts": [
+    "native.cgroupdriver=cgroupfs"
+  ],
+  "features": {
+    "buildkit": true,
+    "containerd-snapshotter": true
+  }
+}

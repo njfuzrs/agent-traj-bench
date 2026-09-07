@@ -1,0 +1,39 @@
+{
+  "version": "v0.2-mini",
+  "status": "in_progress",
+  "frozen_at": null,
+  "schema_version": "harbor-1.4",
+  "task_count": null,
+  "plan": "docs-research/trajectory-platform/bench-mvp-plan.md@v1.2",
+  "execution_base": "harbor 0.22.0（sid-code/evals/external-benchmarks/harbor，只调用不修改）",
+  "note": "与 bench/（v0.1，844 条已冻结）平级，不覆盖、不迁移。task_count 与 frozen_at 由 T7 冻结时写入。",
+  "progress": {
+    "TZ": {
+      "state": "done",
+      "date": "2026-09-07",
+      "report": "bench/v0.2-mini/reports/tz-preflight.md",
+      "gate": "oracle=1 且 nop=0，reward 双源一致"
+    },
+    "T0": {
+      "state": "done",
+      "date": "2026-09-07",
+      "artifacts": ["scripts/mvp/", "bench/v0.2-mini/"],
+      "gate": "pytest 68 passed / 0 skipped；harbor Task.is_valid_dir 认格式"
+    },
+    "T1": {
+      "state": "done",
+      "date": "2026-09-07",
+      "artifacts": [
+        "bench/v0.2-mini/meta/candidates.jsonl",
+        "bench/v0.2-mini/meta/candidates.stats.json"
+      ],
+      "gate": "182 条 ≥120；S41/M52/L89 三档各 ≥15；反向自证非零退出"
+    },
+    "T2": { "state": "todo" },
+    "T3": { "state": "todo" },
+    "T4": { "state": "todo" },
+    "T5": { "state": "todo" },
+    "T6": { "state": "todo" },
+    "T7": { "state": "todo" }
+  }
+}

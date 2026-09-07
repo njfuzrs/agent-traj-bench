@@ -1,0 +1,7 @@
+# 由 sync-proxy-port 生成，**不要手工写死端口**（2026-08-31 教训：
+# 写死的 7881 在飞鸟云换口后让 docker pull 全线失败，报错却指向 registry）。
+# 端口来自 detect-proxy-port.sh 的实证探测。
+[Service]
+Environment="HTTP_PROXY=http://192.168.5.2:7881"
+Environment="HTTPS_PROXY=http://192.168.5.2:7881"
+Environment="NO_PROXY=localhost,127.0.0.1,192.168.5.0/24,10.0.0.0/8,172.16.0.0/12,*.local,ghcr.io,pkg-containers.githubusercontent.com,*.githubusercontent.com"
