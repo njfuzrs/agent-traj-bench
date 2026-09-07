@@ -179,6 +179,22 @@ bug_fix。两个修法都在 `labeler.py`：`HIT_CAP = 2`（同一类别命中�
 **Phase 2 必须对 low 档 2938 条做 LLM 复判**（`B_TASK_PATTERN` 实测精确率仅
 37.4%）。这是对自身局限的披露，不是绕过验收。
 
+> ⚠️ **2026-09-07 补充：上面这句「对 2938 条做 LLM 复判」照字面执行会做错。**
+> 完整方案见 `docs-research/trajectory-platform/bench-curation-design.md` §9.6，
+> 三处要点：
+> **(a) `2938` 是边界数，不是调用数。** 判一个边界是否新任务必须看它前后的轮次，
+> 送审单位只能是**会话** —— 2793 个 `B_TASK_PATTERN` 边界分布在 1222 个会话，
+> 加 medium 档共 **1355 个会话**。
+> **(b) 漏了「少切」，它比多切更危险。** 召回仅 58.8%，说明规则不只多切还漏切。
+> 多切产生的碎片在 S4 会被自然淘汰（有一层免疫），少切产生的「一个 task 塞两件
+> 不相关的事」能通过 S4 和 S5，到 Phase 3 才暴露成「不存在单一 gold patch」。
+> 故 prompt 要写成「给出完整任务划分」而非「判断这些边界对不对」，做**双向 diff**，
+> 送审范围扩到**全部 1400 条多轮会话**。
+> **(c) 换一个裁判不等于有了裁判。** 坑⑤ 论证了 hook 裁判不可信；直接拿未校准的
+> LLM 判定覆盖 `step_range`，等于把这段论证作废。**前置门槛：50-80 条人工校准集，
+> 同时报规则与 LLM 两个 κ，κ≥0.6 才允许改写 `step_range`**；κ<0.6 则只落
+> `boundary_disputed` 降权字段。
+
 **⑥ 「提取不出轮次」不等于「不可能切错」—— 这两件事必须分开标。**
 
 这是本轮最值得记住的一个缺陷，因为**它让门禁数字变得更好看**，所以三道门禁全绿
@@ -239,10 +255,15 @@ backend/venv/bin/python -m pytest tests/test_phase1.py -q     # 117 项
 | 源信息 | `agent_source` / `model` / `vendor` / `repo` / `repo_resolution` / `provenance` / `batch_version` |
 | 分类与客观量 | `category` / `category_confidence` / `tags` / `difficulty` / `difficulty_basis` / `edit_ops` / `error_ops` / `n_test_cmds` / `n_files` / `session_steps` / `unique_tools` |
 
-进 Phase 2（S4 分诊 + S5 去重）之前要注意的四件事：
+进 Phase 2（S3.5 切分复判 + S4 分诊 + S5 去重）之前要注意的四件事：
 
-1. **low 档 2938 条边界需 LLM 复判**（见坑⑤）。分诊前做，否则切错的单元会被当成
-   合法 task 进 L1/L2。
+1. **切分复判要排在 S4 之前**（见坑⑤及其 2026-09-07 补充）。否则切错的单元会被当成
+   合法 task 进 L1/L2。**注意口径**：判定单位是**会话不是边界** —— 送审 **1400 条
+   多轮会话**（不是 2938 个边界），双向查多切与少切；且**必须先建 50-80 条人工校准集
+   并量 κ**，κ≥0.6 才允许改写 `step_range`。主判用 `claude-opus-5`，交叉裁判用另一
+   厂商模型。成本约 $13-26。完整方案见方案文档 §9.6。
+   `B_NO_RAW` 那 28 条**判不了**（没有 `raw.jsonl` 就没有轮次序列），按 steps 过长
+   淘汰处置。
 2. **`needs_review` 32 条不进公开 split**。它们含 high 级敏感命中（`sk-` 密钥、
    身份证、内联凭据等），已在产物里标好。
 3. **`repo_resolution == conflict` 的单元要降权**（573 个单元，来自 269 条会话）。
