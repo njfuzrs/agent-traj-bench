@@ -1,0 +1,612 @@
+#!/usr/bin/env python3
+"""Agent-Traj-Bench v0.2-mini（MVP）的单元测试
+
+出处：`docs-research/trajectory-platform/bench-mvp-plan.md` v1.2 §4 T0
+
+与 phase0/phase1 的分工一致：门禁验「产物合不合格」，本文件验「逻辑对不对」——
+用构造输入固定住每条**实测得来**的判定规则，防止后续改动悄悄把它们改回错的写法。
+
+被固定的实测结论（每条都对应方案里的一段标定，或 TZ 的一次实测）：
+
+  common  ① `tool_input` 是 Python repr 时也要能解析（§3.2）
+          ② 路径映射必须严格前缀匹配，`.claude/projects/` 与跨仓路径要丢弃（§3.4）
+          ③ 难度分档按 edit_ops 现算，不用 Phase 1 的 difficulty（§3.7 坑二）
+          ④ reward 要从 `verifier_result.rewards.reward` 读，
+             `verifier_result.reward` 恒为 None（§3.8-D + TZ 实测）
+          ⑤ harbor jobs 目录必须在 $HOME 之下（TZ R-3，colima 只挂 $HOME）
+          ⑥ mirror 只读访问：仓库不在名单内要抛而不是猜
+  T1      ⑦ 终点 high 的判据是「末单元或下一单元起点 high」（§4 T1）
+          ⑧ 条件⑤写成 in ('none','low') 必须把候选池筛成 0（§3.1 陷阱）
+          ⑨ 八条筛选链的顺序固定 —— funnel 的逐条剩余数是对账依据
+  T3 格式 ⑩ 生成的 task 目录要能被 harbor 的 `Task.is_valid_dir()` 认（§3.8-B）
+  骨架    ⑪ 未实现的 T2/T3/T4/T5/T7 必须以非零码退出，不许静默产出空结果
+
+用法：
+    python3 -m pytest scripts/mvp/tests/test_mvp.py -v
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+MVP = Path(__file__).resolve().parent.parent
+REPO_ROOT = MVP.parent.parent
+sys.path.insert(0, str(MVP))
+
+import common as c  # noqa: E402
+
+
+def load_t1():
+    """T1 脚本名带连字符，不能直接 import，用 spec 加载。"""
+    spec = importlib.util.spec_from_file_location("t1_select", MVP / "t1-select-candidates.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ── ① tool_input 双格式解析（§3.2） ────────────────────────────────
+
+
+def test_parse_tool_input_json():
+    assert c.parse_tool_input('{"file_path": "a.ts"}') == {"file_path": "a.ts"}
+
+
+def test_parse_tool_input_python_repr():
+    """§3.2：`tool_input` 可能是 Python repr —— 单引号 + False/True/None。
+
+    只用 `json.loads` 会在这种输入上静默失败，形态是「patch 反解出来是空的」，
+    完全不指向解析器。所以两个解析器都要试。
+    """
+    raw = "{'file_path': 'a.ts', 'replace_all': False, 'x': None, 'y': True}"
+    got = c.parse_tool_input(raw)
+    assert got == {"file_path": "a.ts", "replace_all": False, "x": None, "y": True}
+
+
+def test_parse_tool_input_dict_passthrough():
+    """T0 实测：本项目切片里 4933/4933 个 tool_input 已经是 dict，dict 是主路径。"""
+    d = {"file_path": "a.ts"}
+    assert c.parse_tool_input(d) is d
+
+
+@pytest.mark.parametrize("bad", [None, 123, "", "not-a-dict", "[1,2,3]"])
+def test_parse_tool_input_bad_returns_empty(bad):
+    """解析不出来返回 {} 而不是抛 —— 单条脏数据不该让整批反解中断。"""
+    assert c.parse_tool_input(bad) == {}
+
+
+# ── ② 路径映射严格前缀（§3.4） ─────────────────────────────────────
+
+
+def test_map_repo_path_in_repo():
+    p = "/Users/zhourusheng/Code/person/sid-code/src/agent/x.ts"
+    assert c.map_repo_path(p) == "src/agent/x.ts"
+
+
+def test_map_repo_path_rejects_claude_projects():
+    """§3.4：21 次锚点失败是路径映射粗糙导致的，其中一类是 .claude/projects/memory/。
+
+    这条测试盯着的是**不许写 `split('sid-code/')`** —— 那种模糊切分会把下面这个
+    路径也当成仓库内文件，形态是「锚点校验失败率虚高」，看着像轨迹质量差，
+    实际是映射写糙了。
+    """
+    p = "/Users/zhourusheng/.claude/projects/memory/sid-code/notes.md"
+    assert c.map_repo_path(p) is None
+
+
+def test_map_repo_path_rejects_cross_repo():
+    """§3.4 的另一类失败：跨仓路径混进来。指定 repo 时必须拒绝别的仓库。"""
+    p = "/Users/zhourusheng/Code/ruijie/iam-studio-fe/src/x.vue"
+    assert c.map_repo_path(p, repo="person/sid-code") is None
+    assert c.map_repo_path(p, repo="ruijie/iam-studio-fe") == "src/x.vue"
+
+
+def test_map_repo_path_repo_root_is_not_a_file():
+    assert c.map_repo_path("/Users/zhourusheng/Code/person/sid-code/") is None
+
+
+@pytest.mark.parametrize("bad", [None, "", 123, "relative/path.ts", "/tmp/x.ts"])
+def test_map_repo_path_bad_input(bad):
+    assert c.map_repo_path(bad) is None
+
+
+# ── ③ 难度分档（§3.7 坑二） ────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "edit_ops,expected",
+    [(0, "S"), (1, "S"), (3, "S"), (4, "M"), (10, "M"), (11, "L"), (99, "L")],
+)
+def test_band_boundaries(edit_ops, expected):
+    """档位边界写死在代码里，报告直接引它。改了这里就要同步改报告口径。"""
+    assert c.band(edit_ops) == expected
+
+
+# ── ④ reward 读取路径（§3.8-D + TZ 实测） ──────────────────────────
+
+
+def test_read_reward_uses_nested_rewards(tmp_path):
+    """§3.8-D + TZ 实测：正确路径是 `verifier_result.rewards.reward`（嵌套 dict）。
+
+    ⚠️ 同一份 result.json 里 `verifier_result.reward` **恒为 None** ——
+    TZ 实测确认（reports/tz-preflight.md §3）。写错这个路径的形态是
+    「所有 task 都 0 分 / None」**且不报错**，是 R1「绿着坏掉」的经典成因。
+    这条测试就是拿一份「嵌套有值、平铺为 None」的真实形状来固定读法。
+    """
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "result.json").write_text(
+        json.dumps({"verifier_result": {"reward": None, "rewards": {"reward": 1.0, "f2p": 1.0}}}),
+        encoding="utf-8",
+    )
+    assert c.read_reward(trial) == 1.0
+
+
+def test_read_reward_zero_is_not_none(tmp_path):
+    """0.0 与「读不到」必须分得开 —— 混了就无法区分「真 0 分」与「路径写错」。"""
+    trial = tmp_path / "trial"
+    trial.mkdir()
+    (trial / "result.json").write_text(json.dumps({"verifier_result": {"rewards": {"reward": 0.0}}}), encoding="utf-8")
+    assert c.read_reward(trial) == 0.0
+
+
+def test_read_reward_missing_returns_none(tmp_path):
+    assert c.read_reward(tmp_path) is None
+
+
+# ── ⑤ harbor jobs 目录必须在 $HOME 下（TZ R-3） ────────────────────
+
+
+def test_assert_jobs_dir_rejects_tmp():
+    """TZ R-3：本机 colima `mounts: []`，VM 内只挂了 $HOME 一个 virtiofs。
+
+    harbor 的 docker environment 声明 `capabilities.mounted=True`
+    （environments/docker/docker.py:303），于是 verifier/verifier.py:203 跳过
+    download，假定 trial 目录是 bind mount。用 /tmp 时 verifier 的产出全写在
+    **VM 自己的 /private/tmp**，宿主永远读不到 —— 形态是
+    `RewardFileNotFoundError`，而它指向「reward 没写」这个**错误方向**。
+    """
+    with pytest.raises(ValueError, match="HOME"):
+        c.assert_jobs_dir_ok("/tmp/harbor-runs")
+
+
+def test_assert_jobs_dir_accepts_home():
+    p = c.assert_jobs_dir_ok(c.MVP_REPORTS / "t5-gate")
+    assert p.is_relative_to(Path.home().resolve())
+
+
+def test_harbor_env_disables_telemetry():
+    """TZ R-2：遥测默认**开**（`telemetry.py:45` 的 _DISABLED_VALUES 不含空串）。
+
+    我们的 instruction.md 含私有仓库信息，必须关。"0" 在那个集合里。
+    """
+    assert c.HARBOR_ENV["HARBOR_TELEMETRY"] == "0"
+
+
+# ── ⑥ mirror 只读访问（§3.3 / 纪律 2） ─────────────────────────────
+
+
+def test_mirror_path_rejects_unknown_repo():
+    """仓库不在名单内要抛，不猜路径 —— 猜出来的形态是「mirror 里没有这个 commit」。"""
+    with pytest.raises(KeyError):
+        c.mirror_path("person/does-not-exist")
+
+
+def test_repo_mirrors_are_the_two_target_repos():
+    """条件②只做这两个仓库（mirror 可用且 commit 密度够，§3.3）。"""
+    assert set(c.REPO_MIRRORS) == {"person/sid-code", "ruijie/iam-studio-fe"}
+
+
+# ── ⑦ 终点 high 的判据（§4 T1） ────────────────────────────────────
+
+
+def _unit(sid, seq, conf="high", **kw):
+    d = {"sid": sid, "seq": seq, "boundary_confidence": conf, "unit_id": f"{sid}#{seq}"}
+    d.update(kw)
+    return d
+
+
+def test_endpoint_high_last_unit_of_session():
+    """会话最后一个单元：终点就是会话结束，算 high。"""
+    t1 = load_t1()
+    units = [_unit("s1", 1), _unit("s1", 2)]
+    by_sid = {"s1": units}
+    assert t1.endpoint_is_high(by_sid, units[1]) is True
+
+
+def test_endpoint_high_next_unit_low_is_rejected():
+    """§4 T1：下一个单元起点 low → 本单元终点不可信。
+
+    只看单元自己的 `boundary_confidence` 会把这种「起点 high 但尾巴被 low 边界
+    切断」的单元放进来，它的 step_range 终点不可信，patch 会反解出多余改动。
+    """
+    t1 = load_t1()
+    units = [_unit("s1", 1), _unit("s1", 2, conf="low")]
+    by_sid = {"s1": units}
+    assert t1.endpoint_is_high(by_sid, units[0]) is False
+    assert t1.endpoint_is_high(by_sid, units[1]) is True  # 它自己是末单元
+
+
+def test_endpoint_high_uses_nearest_next_not_any():
+    """要看**紧邻的**下一个单元，不是「任意后继」—— seq 有空洞时也得取最小的那个。"""
+    t1 = load_t1()
+    units = [_unit("s1", 1), _unit("s1", 5, conf="low"), _unit("s1", 9)]
+    by_sid = {"s1": units}
+    assert t1.endpoint_is_high(by_sid, units[0]) is False
+
+
+# ── ⑧⑨ 筛选链与陷阱（§3.1 / §4 T1） ───────────────────────────────
+
+
+def _candidate_unit(**kw):
+    """一条能通过全部八条筛选的单元，测试按需改单个字段让它落选。"""
+    d = {
+        "unit_id": "sidA#01",
+        "sid": "sidA",
+        "seq": 1,
+        "boundary_confidence": "high",
+        "repo": "person/sid-code",
+        "repo_resolution": "exact",
+        "edit_ops": 5,
+        "n_test_cmds": 2,
+        "secret_severity": "medium",  # ⚠️ 覆盖 80% 单元，不是真实泄漏
+        "started_at": "2026-07-01T10:00:00",
+        "category": "bug_fix",
+        "instruction_len": 200,
+        "instruction_clean": "修一个 bug",
+        "step_range": [0, 10],
+    }
+    d.update(kw)
+    return d
+
+
+def test_select_keeps_medium_secret_severity():
+    """§3.1 的陷阱本体：`medium` 是脱敏残留标记，**不能**被过滤掉。
+
+    分布是 medium 6136 / None 1524 / high 32 —— medium 覆盖 80% 单元。
+    """
+    t1 = load_t1()
+    kept, _ = t1.select([_candidate_unit(secret_severity="medium")])
+    assert len(kept) == 1
+
+
+def test_select_drops_high_secret_severity():
+    t1 = load_t1()
+    kept, _ = t1.select([_candidate_unit(secret_severity="high")])
+    assert kept == []
+
+
+def test_select_strict_secret_zeroes_the_pool():
+    """§4 T1 反向自证的逻辑内核：错写法必须把候选池筛成 0。
+
+    脚本级的自证（`--selftest-strict-secret`）验的是「主路径以非零码退出」，
+    这里验的是「筛选函数本身在错写法下归零」。两层各管一段。
+    """
+    t1 = load_t1()
+    units = [_candidate_unit(secret_severity="medium") for _ in range(5)]
+    kept, funnel = t1.select(units, strict_secret=True)
+    assert kept == []
+    assert any(cnt == 0 for _, cnt in funnel)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("boundary_confidence", "low"),  # ①
+        ("repo", "person/claude-trace"),  # ②不在名单
+        ("repo_resolution", "unresolved"),  # ②未锚定
+        ("repo_resolution", "conflict"),  # ②冲突
+        ("edit_ops", 0),  # ③
+        ("n_test_cmds", 0),  # ④
+        ("started_at", "2026-05-31T23:59:59"),  # ⑥
+        ("category", "doc_authoring"),  # ⑦
+        ("instruction_len", 59),  # ⑧下界
+        ("instruction_len", 1201),  # ⑧上界
+    ],
+)
+def test_select_each_condition_rejects(field, value):
+    """八条筛选链逐条都要真的起作用 —— 少任何一条都会放进不该有的候选。"""
+    t1 = load_t1()
+    kept, _ = t1.select([_candidate_unit(**{field: value})])
+    assert kept == []
+
+
+def test_select_boundary_values_are_inclusive():
+    """⑧ 是闭区间 [60, 1200]，⑥ 是 >= '2026-06'。边界值必须**留下**。"""
+    t1 = load_t1()
+    for value in (60, 1200):
+        kept, _ = t1.select([_candidate_unit(instruction_len=value)])
+        assert len(kept) == 1, f"instruction_len={value} 应保留"
+    kept, _ = t1.select([_candidate_unit(started_at="2026-06-01T00:00:00")])
+    assert len(kept) == 1
+
+
+def test_select_funnel_order_is_fixed():
+    """funnel 的逐条剩余数是与 §3.1 实测值对账的依据，顺序不能变。
+
+    ①→2937 是方案写明的锚点；调顺序会让这个数字失去可比性。
+    """
+    t1 = load_t1()
+    _, funnel = t1.select([_candidate_unit()])
+    labels = [label for label, _ in funnel]
+    assert labels[0] == "全量单元"
+    for i, marker in enumerate("①②③④⑤⑥⑦⑧", start=1):
+        assert labels[i].startswith(marker), f"第 {i} 步应是 {marker}，实际 {labels[i]}"
+
+
+def test_band_is_attached_to_rows():
+    t1 = load_t1()
+    rows = t1.build_rows([_candidate_unit(edit_ops=2), _candidate_unit(edit_ops=20)])
+    assert [r["band"] for r in rows] == ["S", "L"]
+
+
+# ── T1 真实产物的对账（跑过 T1 才有，没有就跳过） ──────────────────
+
+
+@pytest.mark.skipif(not c.CANDIDATES_STATS.exists(), reason="尚未跑过 T1，无 candidates.stats.json")
+def test_t1_artifact_matches_plan_anchors():
+    """T1 产物要对上方案 §4 T1 的三个实测预期：①→2937、⑦→266、⑧→约 182。
+
+    对不上不一定是代码错了 —— 也可能是 labeled-v2.jsonl 重跑过。
+    但**必须有人看一眼**，所以固定成断言而不是打印。
+    """
+    stats = json.loads(c.CANDIDATES_STATS.read_text(encoding="utf-8"))
+    funnel = {row["step"]: row["remaining"] for row in stats["funnel"]}
+    step1 = next(v for k, v in funnel.items() if k.startswith("①"))
+    step7 = next(v for k, v in funnel.items() if k.startswith("⑦"))
+    assert step1 == 2937, f"①「两端 high」实测应为 2937，实际 {step1}"
+    assert step7 == 266, f"⑦「四类」实测应为 266，实际 {step7}"
+    assert stats["n_candidates"] >= 120, "候选池须 ≥120（目标交付 50，需 2 倍余量）"
+    bands = stats["distributions"]["by_band"]
+    for b in ("S", "M", "L"):
+        assert bands.get(b, 0) >= 15, f"难度档 {b} 只有 {bands.get(b, 0)} 条，须 ≥15"
+
+
+@pytest.mark.skipif(not c.CANDIDATES.exists(), reason="尚未跑过 T1")
+def test_t1_candidates_rows_are_wellformed():
+    rows = list(c.read_jsonl(c.CANDIDATES))
+    assert rows
+    for r in rows[:50]:
+        assert r["repo"] in c.REPO_MIRRORS
+        assert r["boundary_confidence"] == "high"
+        assert r["secret_severity"] != "high"
+        assert r["edit_ops"] >= 1
+        assert r["band"] == c.band(r["edit_ops"])
+        assert 60 <= r["instruction_len"] <= 1200
+
+
+# ── ⑩ 生成的 task 目录要被 harbor 认（§3.8-B） ─────────────────────
+
+
+def _write_minimal_task(task_dir: Path) -> None:
+    """按 harbor 的 TaskPaths 契约写一个最小 task（§3.8-B 的官方 docstring）。"""
+    (task_dir / "environment").mkdir(parents=True)
+    (task_dir / "solution").mkdir()
+    (task_dir / "tests").mkdir()
+    (task_dir / "instruction.md").write_text("修一个 bug。\n", encoding="utf-8")
+    (task_dir / "task.toml").write_text(
+        'schema_version = "1.4"\n\n'
+        "[metadata]\n\n"
+        "[verifier]\ntimeout_sec = 900.0\n\n"
+        "[agent]\ntimeout_sec = 900.0\n\n"
+        "[environment]\nbuild_timeout_sec = 600.0\n",
+        encoding="utf-8",
+    )
+    (task_dir / "environment" / "Dockerfile").write_text("FROM ubuntu:24.04\nWORKDIR /repo\n", encoding="utf-8")
+    (task_dir / "solution" / "solve.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+    (task_dir / "tests" / "test.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+
+
+#: harbor 是 `uv tool install` 装的，**自带一个 python 3.13**。
+#: 不能把它的 site-packages 塞进 sys.path 来 import —— `pydantic_core` 是原生扩展，
+#: 编给 3.13 的 .so 在本仓库的 venv（3.14）里加载不了，形态是
+#: `No module named 'pydantic_core._pydantic_core'`，看着像 harbor 没装。
+#: 所以走 subprocess，用**它自己的解释器**跑校验。
+HARBOR_PYTHON = Path.home() / ".local/share/uv/tools/harbor/bin/python"
+
+
+def harbor_task_is_valid(task_dir: Path) -> bool:
+    """问 harbor 自己「这个目录是不是合法 task」。
+
+    ⚠️ 用 `Task.is_valid_dir()` 而**不是** `harbor check`：后者要跑 LLM 评委
+    （`--agent` 默认 claude-code），既慢又要密钥，还会因为模型心情不同而抖动，
+    不能当格式门禁。前者是纯确定性校验，正是我们要的「harbor 认不认这个格式」。
+    """
+    if not HARBOR_PYTHON.exists():
+        pytest.skip(f"未找到 harbor 自带解释器: {HARBOR_PYTHON}")
+    proc = subprocess.run(
+        [
+            str(HARBOR_PYTHON),
+            "-c",
+            "import sys\n"
+            "from harbor.models.task.task import Task\n"
+            "print('VALID' if Task.is_valid_dir(sys.argv[1]) else 'INVALID')\n",
+            str(task_dir),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if "VALID" not in proc.stdout:
+        pytest.fail(f"调 harbor 校验失败：\n{proc.stdout}\n{proc.stderr}")
+    return "INVALID" not in proc.stdout
+
+
+def test_minimal_task_dir_is_valid_for_harbor(tmp_path):
+    """§3.8-B：T3 产出的目录必须被 harbor 直接认。
+
+    v1.0 原先设计的 `task.yaml` / `gold_patch.diff` 扁平布局 harbor 认不出来 ——
+    这条测试把「直接产出终态」这个决定固定住（§4 T0 验收项之一）。
+    """
+    task_dir = tmp_path / "T0001"
+    _write_minimal_task(task_dir)
+    assert harbor_task_is_valid(task_dir) is True
+
+
+def test_task_dir_missing_instruction_is_invalid(tmp_path):
+    """反向：缺 instruction.md 必须**不**被认 —— 否则上一条等于没验。"""
+    task_dir = tmp_path / "T0002"
+    _write_minimal_task(task_dir)
+    (task_dir / "instruction.md").unlink()
+    assert harbor_task_is_valid(task_dir) is False
+
+
+def test_task_dir_missing_test_script_is_invalid(tmp_path):
+    task_dir = tmp_path / "T0003"
+    _write_minimal_task(task_dir)
+    (task_dir / "tests" / "test.sh").unlink()
+    assert harbor_task_is_valid(task_dir) is False
+
+
+# ── ⑪ 未实现的骨架必须非零退出 ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "t2-resolve-base-patch.py",
+        "t3-build-harbor-tasks.py",
+        "t4-build-env.py",
+        "t5-gate.sh",
+        "t7-baseline.sh",
+    ],
+)
+def test_unimplemented_skeletons_exit_nonzero(script):
+    """T0 只交付骨架。**不许静默产出空结果** —— 那会让 T2 拿着空文件「成功」跑完。
+
+    退出码 64（EX_USAGE）而不是 1，是为了与「实现了但失败」区分开。
+    """
+    path = MVP / script
+    cmd = ["bash", str(path)] if path.suffix == ".sh" else [sys.executable, str(path)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
+    assert proc.returncode != 0, f"{script} 未实现却以 0 退出"
+    assert "尚未实现" in (proc.stdout + proc.stderr)
+
+
+# ── 目录约定（§4 T0 四条纪律） ─────────────────────────────────────
+
+
+def test_mvp_dir_is_separate_from_v01():
+    """纪律 3：v0.2-mini 是新目录，不覆盖、不迁移 bench/ 下 v0.1 的 844 条。"""
+    assert c.MVP_DIR.name == "v0.2-mini"
+    assert c.MVP_DIR.parent.name == "bench"
+    assert c.MVP_DIR != c.MVP_DIR.parent
+
+
+def test_sessions_dir_is_readonly_by_convention():
+    """纪律 1：`data/pulled_sessions/` 只读。
+
+    这条没法用代码强制（Python 拦不住 open(..., 'w')），所以退一步验
+    「常量指向的是那个只读湖，且本模块没有任何写它的辅助函数」——
+    真正的护栏是 code review 与这条测试的存在本身。
+
+    背景：`pull.py:246` 的去重只查 `<sid>/.pulled`，移走/改名/删除会让下次
+    同步判为「未拉取」并重复下载 —— 上一轮 1722 条就是这么来的。
+    """
+    assert c.SESSIONS_DIR.name == "pulled_sessions"
+    writers = [n for n in dir(c) if n.startswith(("write_", "move_", "delete_")) and n != "write_jsonl"]
+    assert writers == [], f"common.py 不该有写原始层的辅助函数: {writers}"
+
+
+def test_no_harbor_base_files_are_written():
+    """纪律 4：不改 harbor 底座里的任何文件。
+
+    `sid-code/evals/external-benchmarks/harbor/` 是它自己的资产 ——
+    `registry.local.json` 是已发表结论（59 个 run）的取数源，动它等于让旧结论
+    不可复算。这里验 common.py 里没有任何指向那个目录的**代码**常量。
+
+    ⚠️ 判据必须走 AST 而不是逐行 grep：注释与 docstring 里**要**写清这条纪律
+    （不写下来纪律就传不下去），逐行 grep 会把这些说明文字本身判成违规。
+    要禁的是**可执行的字符串常量**，不是对它的描述。
+    """
+    import ast
+
+    src = (MVP / "common.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    # 收集全部 docstring 节点的 id，遍历时跳过它们
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc is not None and node.body:
+                first = node.body[0]
+                if isinstance(first, ast.Expr):
+                    docstrings.add(id(first.value))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or id(node) in docstrings:
+            continue
+        if isinstance(node.value, str) and "external-benchmarks" in node.value:
+            pytest.fail(f"common.py 第 {node.lineno} 行有指向 harbor 底座的字符串常量: {node.value[:80]!r}")
+
+
+def test_ensure_mvp_dirs_creates_only_under_v02(tmp_path, monkeypatch):
+    monkeypatch.setattr(c, "MVP_META", tmp_path / "v0.2-mini" / "meta")
+    monkeypatch.setattr(c, "MVP_TASKS", tmp_path / "v0.2-mini" / "tasks")
+    monkeypatch.setattr(c, "MVP_REPORTS", tmp_path / "v0.2-mini" / "reports")
+    c.ensure_mvp_dirs()
+    assert (tmp_path / "v0.2-mini" / "meta").is_dir()
+    assert (tmp_path / "v0.2-mini" / "tasks").is_dir()
+    assert (tmp_path / "v0.2-mini" / "reports").is_dir()
+    assert sorted(os.listdir(tmp_path)) == ["v0.2-mini"]
+
+
+# ── 真实数据的冒烟（缺数据就跳过） ─────────────────────────────────
+
+
+@pytest.mark.skipif(not c.LABELED_V2.exists(), reason="无 labeled-v2.jsonl")
+def test_labeled_v2_has_fields_t1_depends_on():
+    """T1 依赖的字段必须都在 —— 上游改字段名时这条先红，而不是候选池悄悄变空。"""
+    row = next(iter(c.read_jsonl(c.LABELED_V2)))
+    for field in (
+        "unit_id",
+        "sid",
+        "seq",
+        "boundary_confidence",
+        "repo",
+        "repo_resolution",
+        "edit_ops",
+        "n_test_cmds",
+        "secret_severity",
+        "started_at",
+        "category",
+        "instruction_len",
+        "step_range",
+    ):
+        assert field in row, f"labeled-v2 缺字段 {field}"
+
+
+@pytest.mark.skipif(
+    not (Path.home() / "Code/_archive/bench-mirrors/person_sid-code.git").exists(),
+    reason="无 mirror 归档",
+)
+def test_resolve_base_commit_on_real_mirror():
+    """§3.3：按时间戳反查真的能取到 commit（只查 refs/heads/main）。"""
+    sha = c.resolve_base_commit("person/sid-code", "2026-07-15T10:00:00")
+    assert sha and len(sha) == 40
+
+
+@pytest.mark.skipif(not (c.SESSIONS_DIR).exists(), reason="无 data/pulled_sessions/")
+def test_iter_traj_actions_respects_step_range():
+    """`step_range` 是闭区间，且只产出带 tool_name 的 action step。"""
+    sid = next(
+        (
+            r["sid"]
+            for r in (c.read_jsonl(c.CANDIDATES) if c.CANDIDATES.exists() else [])
+            if (c.SESSIONS_DIR / r["sid"] / "session.traj").exists()
+        ),
+        None,
+    )
+    if not isinstance(sid, str):
+        pytest.skip("候选池里没有本地可读的 session.traj")
+    steps = list(c.iter_traj_actions(sid, [0, 5]))
+    assert all(0 <= i <= 5 for i, _, _ in steps)
+    assert all(tn for _, tn, _ in steps)
+    assert all(isinstance(ti, dict) for _, _, ti in steps)
