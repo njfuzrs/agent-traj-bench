@@ -470,7 +470,7 @@ def test_task_dir_missing_test_script_is_invalid(tmp_path):
 @pytest.mark.parametrize(
     "script",
     [
-        "t2-resolve-base-patch.py",
+        # T2 已在 2026-09-08 实现，从这张名单里移出（它现在归下面的 ⑫-⑯ 管）
         "t3-build-harbor-tasks.py",
         "t4-build-env.py",
         "t5-gate.sh",
@@ -478,7 +478,7 @@ def test_task_dir_missing_test_script_is_invalid(tmp_path):
     ],
 )
 def test_unimplemented_skeletons_exit_nonzero(script):
-    """T0 只交付骨架。**不许静默产出空结果** —— 那会让 T2 拿着空文件「成功」跑完。
+    """T0 只交付骨架。**不许静默产出空结果** —— 那会让 T3 拿着空文件「成功」跑完。
 
     退出码 64（EX_USAGE）而不是 1，是为了与「实现了但失败」区分开。
     """
@@ -610,3 +610,260 @@ def test_iter_traj_actions_respects_step_range():
     assert all(0 <= i <= 5 for i, _, _ in steps)
     assert all(tn for _, tn, _ in steps)
     assert all(isinstance(ti, dict) for _, _, ti in steps)
+
+
+# ══════════════════════════════════════════════════════════════════
+# T2 — base_commit 反查 + patch 反解（2026-09-08 实现）
+#
+# 固定住 T2 实测得来的五条判定规则。每条都是**跑 182 条候选跑出来的**，
+# 不是从方案抄的 —— 方案里没有 ⑫ 与 ⑯ 这两条。
+# ══════════════════════════════════════════════════════════════════
+
+
+def load_t2():
+    """T2 脚本名带连字符，同 load_t1。"""
+    spec = importlib.util.spec_from_file_location("t2_resolve", MVP / "t2-resolve-base-patch.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# ── ⑫ 采集当时失败的写操作必须跳过（T2 实测，方案没写） ──────────────
+
+
+def test_observation_errors_maps_tool_use_id():
+    """`is_error` 是从 observation step 上读的，按 `tool_use_id` 配对。"""
+    traj = [
+        {"message_type": "action", "tool_name": "Edit", "tool_use_id": "a"},
+        {"message_type": "observation", "tool_use_id": "a", "is_error": True},
+        {"message_type": "action", "tool_name": "Edit", "tool_use_id": "b"},
+        {"message_type": "observation", "tool_use_id": "b", "is_error": False},
+    ]
+    assert c.observation_errors(traj) == {"a": True, "b": False}
+
+
+def test_failed_write_ops_are_flagged_not_silently_dropped(tmp_path, monkeypatch):
+    """失败的写操作要**带 `failed=True` 产出**，而不是在迭代器里悄悄消失。
+
+    为什么不在 `iter_write_actions` 里直接跳过：T2 要把跳过的次数写进
+    `resolved.jsonl`（`n_failed_ops_skipped`）留痕。静默丢弃等于让后面的人
+    无法判断「这条 patch 到底缺不缺东西」。
+    """
+    sid = "sess-fail"
+    d = tmp_path / sid
+    d.mkdir()
+    (d / "session.traj").write_text(
+        json.dumps(
+            {
+                "trajectory": [
+                    {"message_type": "action", "tool_name": "Edit", "tool_use_id": "t1",
+                     "tool_input": {"file_path": "/x/a.ts", "old_string": "a", "new_string": "b"}},
+                    {"message_type": "observation", "tool_use_id": "t1", "is_error": True,
+                     "content": "<tool_use_error>String to replace not found in file.</tool_use_error>"},
+                    {"message_type": "action", "tool_name": "Edit", "tool_use_id": "t2",
+                     "tool_input": {"file_path": "/x/a.ts", "old_string": "c", "new_string": "d"}},
+                    {"message_type": "observation", "tool_use_id": "t2", "is_error": False},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(c, "SESSIONS_DIR", tmp_path)
+    got = [(tn, ti.get("old_string"), failed) for _, tn, ti, failed in c.iter_write_actions(sid)]
+    assert got == [("Edit", "a", True), ("Edit", "c", False)]
+
+
+def test_replaying_failed_edit_would_corrupt_patch():
+    """反向自证 ⑫：把失败的 Edit 也重放，重建就会在**后一个** Edit 上崩。
+
+    这正是实测踩到的形态 —— 它表现为「old_string 对不上」，看着像轨迹质量差或
+    base 反查偏了，其实是我们重放了一次本就没生效的编辑。
+    """
+    t2 = load_t2()
+    original = "keep\nreal\n"
+    failed_edit = ("Edit", {"old_string": "ghost", "new_string": "X"})   # 采集当时就没匹配上
+    good_edit = ("Edit", {"old_string": "real", "new_string": "fixed"})
+
+    # 正确做法：跳过失败的那次
+    ok, reason = t2.apply_edits(original, [good_edit])
+    assert reason is None and ok == "keep\nfixed\n"
+
+    # 错误做法：连失败的一起重放 → 立刻报 old_string_not_found
+    bad, reason = t2.apply_edits(original, [failed_edit, good_edit])
+    assert bad is None and reason == "old_string_not_found"
+
+
+# ── ⑬ 重建失败要淘汰整条候选，不许「尽力而为」 ─────────────────────
+
+
+def test_apply_edits_aborts_instead_of_skipping_bad_edit():
+    """一个 Edit 对不上，后续 Edit 的上下文就都不可信了 —— 必须整条淘汰。
+
+    「跳过这一个、继续应用后面的」会产出一份**看着像** gold patch、
+    实际错位的 diff。这是 §3.8-F「绿着坏掉」那一类，宁可淘汰。
+    """
+    t2 = load_t2()
+    seq = [
+        ("Edit", {"old_string": "nope", "new_string": "X"}),
+        ("Edit", {"old_string": "line", "new_string": "Y"}),
+    ]
+    out, reason = t2.apply_edits("line\n", seq)
+    assert out is None
+    assert reason == "old_string_not_found"
+
+
+def test_apply_edits_write_replaces_whole_file():
+    t2 = load_t2()
+    out, reason = t2.apply_edits("old\n", [("Write", {"content": "brand new\n"})])
+    assert reason is None and out == "brand new\n"
+
+
+def test_apply_edits_replace_all_semantics():
+    """`replace_all` 决定替换次数，默认只替第一处。"""
+    t2 = load_t2()
+    once, _ = t2.apply_edits("a a a\n", [("Edit", {"old_string": "a", "new_string": "b"})])
+    assert once == "b a a\n"
+    allof, _ = t2.apply_edits(
+        "a a a\n", [("Edit", {"old_string": "a", "new_string": "b", "replace_all": True})]
+    )
+    assert allof == "b b b\n"
+
+
+def test_phantom_file_is_named_distinctly():
+    """base 里没有、且首个 Edit 带非空 old_string → `phantom_file`。
+
+    实测 122 例：开发者工作区里有、但从未进 main（分支未合 78 / 只在别的 ref 36 /
+    base 之后才合入 8）。它与 `old_string_not_found` 分开命名，是因为**根因不同**：
+    前者是仓库历史的问题，后者是重建逻辑或 base 反查的问题。混成一个名字，
+    T6 人工过目时就没法判断该去查哪边。
+    """
+    t2 = load_t2()
+    out, reason = t2.apply_edits(None, [("Edit", {"old_string": "x", "new_string": "y"})])
+    assert out is None and reason == "phantom_file"
+
+
+def test_new_file_via_empty_old_string_succeeds():
+    """空 `old_string` = 新建文件的整体写入，不算 phantom。"""
+    t2 = load_t2()
+    out, reason = t2.apply_edits(None, [("Edit", {"old_string": "", "new_string": "hello\n"})])
+    assert reason is None and out == "hello\n"
+
+
+# ── ⑭ 文档必须从 code patch 剔除（§3.7 坑一） ──────────────────────
+
+
+@pytest.mark.parametrize(
+    "rel,expected",
+    [
+        ("docs/bugfixes/todo/20260807-遥测落盘恒空.md", True),
+        ("README.md", True),
+        ("packages/core/README.md", True),
+        ("src/app.ts", False),
+        ("tests/permission/mode.test.ts", False),
+    ],
+)
+def test_is_doc(rel, expected):
+    """`docs/bugfixes/*.md` 直接写明根因与修复方案 —— 留在 patch 里就是答案泄漏。"""
+    assert load_t2().is_doc(rel) is expected
+
+
+# ── ⑮ 路径映射的往返不变式（反向自证的观测点） ─────────────────────
+
+
+def test_roundtrip_holds_for_strict_mapping():
+    """严格映射下 `前缀 + 相对路径 == 原绝对路径` 恒成立（182 条实测 0 违反）。"""
+    t2 = load_t2()
+    abs_path = "/Users/zhourusheng/Code/person/sid-code/src/app.ts"
+    rel = c.map_repo_path(abs_path, "person/sid-code")
+    assert rel == "src/app.ts"
+    assert t2.roundtrip_ok(abs_path, rel, "person/sid-code") is True
+
+
+def test_roundtrip_breaks_for_fuzzy_mapping():
+    """反向自证 ⑮：模糊切分把 `.claude/projects/.../memory/MEMORY.md`
+    切成仓库内的 `memory/MEMORY.md`，往返不变式立刻破。
+
+    这就是 §3.4 那 21 条锚点失败的来源，也是 `--selftest-fuzzy-path` 的原理。
+    """
+    t2 = load_t2()
+    leaky = (
+        "/Users/zhourusheng/.claude/projects/"
+        "-Users-zhourusheng-Code-person-sid-code/memory/MEMORY.md"
+    )
+    assert c.map_repo_path(leaky, "person/sid-code") is None      # 严格映射丢弃
+    fuzzy = t2.fuzzy_map_repo_path(leaky, "person/sid-code")
+    assert fuzzy == "memory/MEMORY.md"                            # 模糊切分放进来了
+    assert t2.roundtrip_ok(leaky, fuzzy, "person/sid-code") is False   # 守卫抓住
+
+
+def test_selftest_fuzzy_path_reds_out():
+    """`--selftest-fuzzy-path` 必须以退出码 3 报红，且真的列出泄漏路径。
+
+    自证的对象是**主路径上的守卫**（注入 path_mapper），不是另写一段只验自己的
+    分支 —— 沿用 T1 `--selftest-strict-secret` 的做法。
+    """
+    proc = subprocess.run(
+        [sys.executable, str(MVP / "t2-resolve-base-patch.py"), "--selftest-fuzzy-path", "--limit", "40"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert proc.returncode == 3, f"期望退出码 3，实得 {proc.returncode}"
+    assert "泄漏守卫生效" in proc.stderr
+    assert ".claude/projects" in proc.stderr
+
+
+# ── ⑯ 「在仓库目录下」≠「是仓库内容」（T2 实测，方案没写） ────────────
+
+
+def test_dropped_path_classification_distinguishes_worktree():
+    """三类被丢弃的路径**后果不同**，不能都当无害。
+
+    - `out_of_scope`：`~/.claude/projects/*/memory/*.md` → 真不是仓库内容，丢掉无损
+    - `same_repo_worktree`：同仓 worktree 的真代码 → patch 缺一块，该淘汰
+    - `cross_repo`：另一个目标仓库 → 混仓单元，该淘汰
+    """
+    t2 = load_t2()
+    assert t2.classify_dropped("/tmp/scratch.ts", "person/sid-code") == "out_of_scope"
+    assert (
+        t2.classify_dropped(
+            "/Users/zhourusheng/Code/person/sid-code-worktrees/obs/packages/x.ts", "person/sid-code"
+        )
+        == "same_repo_worktree"
+    )
+    assert (
+        t2.classify_dropped(
+            "/Users/zhourusheng/Code/ruijie/iam-studio-fe/src/x.ts", "person/sid-code"
+        )
+        == "cross_repo"
+    )
+
+
+def test_gitignored_uses_base_gitignore_not_head():
+    """`.claude/worktrees/...` **通过了**严格前缀映射，只有 `.gitignore` 能拦住它。
+
+    实测抓到的真实泄漏：它确实在 `/Code/person/sid-code/` 下面（所以前缀映射放行、
+    往返不变式也成立），但那是 git worktree —— 另一个分支的临时检出。本仓
+    `.gitignore` 用 `.claude/*` fail-closed 挡住了它。12 条候选、214 次写操作命中。
+
+    判据用 `git check-ignore` 而不是自己写 pattern：`.claude/*` 配 `!.claude/skills/`
+    的否定放行、目录不下降、`**` 与前导 `/` 的差别，自己实现一定漏。
+    这里就验它认得那条否定规则。
+    """
+    t2 = load_t2()
+    repo = "person/sid-code"
+    base = c.resolve_base_commit(repo, "2026-09-01T00:00:00")
+    assert base, "mirror 里应能反查到 base"
+    ignored = t2.gitignored(
+        repo,
+        base,
+        [
+            ".claude/worktrees/fix-lsp/packages/core/tests/lsp/client.test.ts",
+            ".claude/skills/eval-session/SKILL.md",
+            "src/app.ts",
+        ],
+    )
+    assert ".claude/worktrees/fix-lsp/packages/core/tests/lsp/client.test.ts" in ignored
+    assert ".claude/skills/eval-session/SKILL.md" not in ignored, "skills/ 是仓库资产，被否定规则放行"
+    assert "src/app.ts" not in ignored

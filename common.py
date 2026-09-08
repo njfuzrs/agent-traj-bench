@@ -303,3 +303,79 @@ def write_jsonl(path: Path | str, rows) -> int:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             n += 1
     return n
+
+
+# ── 写操作迭代（T2 实测补充，不在方案原文） ────────────────────────
+
+# Edit / Write / MultiEdit —— 唯一会改变工作区的三个工具
+WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit"})
+
+
+def load_trajectory(sid: str) -> list[dict]:
+    """读某会话的 `trajectory` 数组。读不到就返回 `[]`（调用方按「取不到轨迹」淘汰）。
+
+    只读 `data/pulled_sessions/<sid>/session.traj`（纪律 1）。
+    """
+    path = SESSIONS_DIR / sid / "session.traj"
+    if not path.exists():
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except Exception:
+        return []
+    return doc.get("trajectory") or []
+
+
+def observation_errors(trajectory: list[dict]) -> dict[str, bool]:
+    """`tool_use_id` → 该调用在**采集当时**是否报错。
+
+    轨迹是 action / observation 成对的：`message_type == 'observation'` 的 step
+    带 `tool_use_id` 与 `is_error`，指向前面那个 action 的执行结果。
+    """
+    out: dict[str, bool] = {}
+    for step in trajectory:
+        if step.get("message_type") != "observation":
+            continue
+        tuid = step.get("tool_use_id")
+        if tuid:
+            out[tuid] = bool(step.get("is_error"))
+    return out
+
+
+def iter_write_actions(sid: str, step_range=None):
+    """产出区间内的写操作 `(index, tool_name, tool_input, failed)`。
+
+    `failed=True` 表示**这次调用在采集当时就失败了**（observation 的
+    `is_error`）—— 调用方必须跳过它。
+
+    ## 为什么必须按 `is_error` 过滤（T2 实测，方案 §3.2/§4 T2 都没记这条）
+
+    轨迹忠实记录了 agent 的**每一次尝试**，包含失败的那些。182 条候选的区间内
+    有 **43 次写操作是失败的**（Edit 41 / Write 2），三种形态：
+
+      - `String to replace not found in file.` —— agent 自己记错了原文
+      - `No changes to make: old_string and new_string are exactly the same.`
+      - `File has been modified since read...` —— 期间被 linter 或用户改过
+
+    把这些当成成功的改动重放，得到的 patch 就不是开发者真正落下的那份。形态是
+    「重建到某个文件时 `old_string` 对不上」，而它看着像**轨迹质量差或 base 反查
+    偏了**，其实是我们重放了一次本就没生效的编辑。实测跳掉之后，
+    全文件重建成功的候选从 **99 → 110**，锚点命中率 95.9% → 96.1%。
+
+    `failed` 由调用方判读而不是在这里直接跳过：T2 要把跳过的次数写进
+    `resolved.jsonl` 留痕，静默丢弃等于让后面的人无法判断「这条 patch 缺不缺东西」。
+    """
+    trajectory = load_trajectory(sid)
+    if not trajectory:
+        return
+    errors = observation_errors(trajectory)
+    lo, hi = (step_range[0], step_range[1]) if step_range else (None, None)
+    for i, step in enumerate(trajectory):
+        if lo is not None and not (lo <= i <= hi):
+            continue
+        tool_name = step.get("tool_name")
+        if tool_name not in WRITE_TOOLS:
+            continue
+        failed = errors.get(step.get("tool_use_id"), False)
+        yield i, tool_name, parse_tool_input(step.get("tool_input")), failed
