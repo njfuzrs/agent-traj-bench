@@ -108,6 +108,41 @@ def sh_single_quote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+#: bun 只认文件名里带这四种标记的文件为测试（实测报错原文：
+#: `Tests need ".test", "_test_", ".spec" or "_spec_" in the filename`）。
+BUN_TEST_MARKERS = (".test.", ".spec.", "_test_", "_spec_")
+
+
+def is_bun_test_file(path: str) -> bool:
+    """这个文件 bun 会不会当测试收集。
+
+    ## 🔴 为什么必须过这道滤网（实测抓到的第四处坑）
+
+    T2 的 `is_test` 标记是**按用途**判的（`tests/` 目录下、随 test_patch 一起进来），
+    但 bun 是**按文件名**收集的。两者不等价，实测撞到一个真实反例：
+
+        tests/preload-isolate-sid-home.ts     ← is_test=true，但**没有 `.test.`**
+
+    它是个 preload 辅助文件（给同进程后续测试设 HOME 隔离兜底），不是测试。
+    把它塞进 `bun test` 的参数里，实测行为是：
+
+        单独跑它            → 报 `Tests need ".test" ... in the filename`，**不写 XML**
+        与正常测试一起跑    → **exit 0**、日志只报正常那个文件、它从 XML 里**整个消失**
+
+    第二种是致命的：bun **不报错也不非零退出**，而 `score.py` 的文件覆盖核对会发现
+    它不在 XML 里 → 判 f2p=0 → **这条 task 连 oracle 都做不出来**，
+    形态是「参考解也拿 0 分」，会被误判成 patch 反解错了。
+
+    与 §2.2 那条正好互补：那条是「文件加载失败被漏掉」，这条是「文件根本没被收集」，
+    两条都靠**文件覆盖核对**兜住 —— 这是它第二次证明自己不是多余的。
+
+    ⚠️ **但这类文件仍要参与测试保护**：它随 test_patch 落地，agent 同样能改它，
+    所以 `restore` / `remove` 名单**不过这道滤网**，只有 `bun test` 的参数过。
+    """
+    name = path.rsplit("/", 1)[-1]
+    return any(m in name for m in BUN_TEST_MARKERS)
+
+
 def instruction_md(snap: dict, instruction: str) -> str:
     """题面 = `instruction_clean` 原文（§4 T3 ①「不加工」）。
 
@@ -372,11 +407,24 @@ def build_one(task_id: str, row: dict, snap: dict, p2p: list[str], instruction: 
             f"Task.is_valid_dir() 抓到，会变成「全批 reward=0」"
         )
     task_dir = c.MVP_TASKS / task_id
-    files = row.get("files") or {}
-    f2p = sorted(p for p, v in files.items() if v.get("is_test"))
+    files: dict = row.get("files") or {}
+    # test_patch 带进来的所有测试相关文件（**含 bun 不收集的辅助文件**）。
+    # 保护名单用这一份 —— 辅助文件 agent 同样能改。
+    test_files = sorted(p for p, v in files.items() if v.get("is_test"))
+    # F2P 只放 bun 真会收集的文件：塞进辅助文件会让它从 XML 消失 → f2p 恒 0，
+    # 连 oracle 都做不出来（见 is_bun_test_file 的 docstring）
+    f2p = [p for p in test_files if is_bun_test_file(p)]
+    f2p_excluded = [p for p in test_files if not is_bun_test_file(p)]
+    if not f2p:
+        # 空 F2P 等于「这条 task 没有判据」。score.py 对空名单判 0（规则：空名单不是
+        # 满分），但那时形态是「所有 task 的 f2p 都 0」，容易被误读成判分坏了。
+        raise ValueError(
+            f"{task_id} 过滤后 F2P 为空（test_patch 带进来的 {len(test_files)} 个文件 "
+            f"bun 一个都不收集：{test_files}）—— 这条 task 无判据，应由 T6 决定去留"
+        )
     # 还原名单：base 上有的 checkout 回去，base 上没有的（新增测试）直接删
-    restore = sorted(p for p in f2p if files[p].get("base_exists")) + sorted(p2p)
-    remove = sorted(p for p in f2p if not files[p].get("base_exists"))
+    restore = sorted(p for p in test_files if files[p].get("base_exists")) + sorted(p2p)
+    remove = sorted(p for p in test_files if not files[p].get("base_exists"))
 
     (task_dir / "solution").mkdir(parents=True, exist_ok=True)
     (task_dir / "tests").mkdir(parents=True, exist_ok=True)
@@ -427,6 +475,9 @@ def build_one(task_id: str, row: dict, snap: dict, p2p: list[str], instruction: 
         "p2p": p2p,
         "n_f2p": len(f2p),
         "n_p2p": len(p2p),
+        # test_patch 带进来但 bun 不收集的文件（辅助/preload）。它们**不进 F2P**
+        # （否则从 XML 消失 → f2p 恒 0），但**仍在保护名单里**（agent 能改它们）。
+        "f2p_excluded_not_bun_test": f2p_excluded,
         "protection": {"restore": restore, "remove": remove},
         "n_code_files": row.get("n_code_files"),
         "n_test_files": row.get("n_test_files"),

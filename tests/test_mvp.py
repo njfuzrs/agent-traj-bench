@@ -40,6 +40,10 @@
                 （3 条 monorepo 的 test_cmd 自带带引号的正则）
           ㉛-㉝ P2P **真实产物**的对账（没跑过采样就跳过）：不与自身 patch 重叠、
                 不含 T4 的两个 canary（含即证明采错了文件树）、名单不短于下限
+             ㉞ F2P 只放 bun 会收集的文件（`.test.`/`.spec.`/`_test_`/`_spec_`）——
+                T2 的 is_test 按用途判、bun 按文件名收集，两者不等价。实测 T0010 的
+                preload 辅助文件混进 F2P 会让 bun **静默跳过**（exit 0、不进 XML）
+                → f2p 恒 0 → 连 oracle 都做不出来。但它仍须留在保护名单里
 
 用法：
     python3 -m pytest scripts/mvp/tests/test_mvp.py -v
@@ -1368,3 +1372,56 @@ def test_t3_p2p_lists_meet_the_size_floor():
         for tid, lst in (rec.get("p2p") or {}).items():
             assert len(lst) >= p2p_mod.P2P_MIN, f"{tid} 的 P2P 只有 {len(lst)} 个"
             assert len(lst) == len(set(lst)), f"{tid} 的 P2P 名单有重复"
+
+
+def test_t3_f2p_only_contains_files_bun_will_collect():
+    """㉞ F2P 只许放 bun 会收集的文件；辅助文件要排除，但**仍须受保护**。
+
+    T2 的 `is_test` 是**按用途**判的（`tests/` 下、随 test_patch 进来），
+    bun 是**按文件名**收集的（`.test.` / `.spec.` / `_test_` / `_spec_`）。两者不等价，
+    实测撞到真实反例 —— T0010 的 `tests/preload-isolate-sid-home.ts`（preload 辅助）：
+
+        单独跑它         → 报 `Tests need ".test" ... in the filename`，**连 XML 都不写**
+        与正常测试一起跑 → **exit 0**、日志不提它、它从 XML 里**整个消失**
+
+    第二种致命：bun 不报错也不非零退出，`score.py` 的文件覆盖核对会判它 missing →
+    f2p=0 → **连 oracle 都做不出来**，形态是「参考解也拿 0 分」，
+    会被误诊成 T2 的 patch 反解错了。
+
+    ⚠️ 反向要求同样重要：这类文件随 test_patch 落地、agent 能改它，
+    所以它**必须留在 restore/remove 保护名单里**，只是不进 `bun test` 的参数。
+    """
+    t3 = load_t3()
+    assert t3.is_bun_test_file("tests/a.test.ts")
+    assert t3.is_bun_test_file("tests/a.spec.tsx")
+    assert t3.is_bun_test_file("tests/_test_helper.ts")
+    # 真实反例：用途是测试相关，但 bun 不收集
+    assert not t3.is_bun_test_file("tests/preload-isolate-sid-home.ts")
+    assert not t3.is_bun_test_file("tests/helpers/setup.ts")
+    # 目录名里带 .test. 不算 —— bun 看的是**文件名**
+    assert not t3.is_bun_test_file("tests/x.test.dir/helper.ts")
+
+
+def test_t3_generated_meta_keeps_helper_protected_but_out_of_f2p():
+    """㉞' 行为验证：已生成的 task 里，被排除的辅助文件必须仍在保护名单中。
+
+    只做「排除」不做「保护」的话，agent 改掉 preload 辅助文件就能影响同进程后续测试，
+    而没有任何机制会还原它。
+    """
+    metas = sorted(c.MVP_TASKS.glob("T*/meta.json"))
+    if not metas:
+        pytest.skip("T3 还没生成任何 task")
+    checked = 0
+    for mp in metas:
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        excluded = m.get("f2p_excluded_not_bun_test") or []
+        protected = set(m["protection"]["restore"]) | set(m["protection"]["remove"])
+        for p in excluded:
+            assert p not in m["f2p"], f"{mp.parent.name}: {p} 不该进 F2P"
+            assert p in protected, f"{mp.parent.name}: {p} 被排除了却没受保护"
+            checked += 1
+        # 正向：F2P 里每一个都必须是 bun 认的文件名
+        t3 = load_t3()
+        for p in m["f2p"]:
+            assert t3.is_bun_test_file(p), f"{mp.parent.name}: F2P 含 bun 不收集的 {p}"
+    print(f"（checked {checked} 个被排除的辅助文件）")
