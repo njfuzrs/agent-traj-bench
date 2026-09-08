@@ -1,9 +1,0 @@
-{
-    "task": {
-        "path": "/Users/zhourusheng/.cache/harbor/tasks/packages/hello-world/hello-world/38d7a077f07fbee8efc78db5dec9a72f82e727510ad1dcfeac0b55fa845256b7"
-    },
-    "trial_name": "38d7a077f07fbee8efc78db5dec9a72f__WbxLrgN",
-    "trials_dir": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/tz-runs/oracle/2026-09-07__17-00-09",
-    "verifier_timeout_multiplier": 6.0,
-    "job_id": "aa975d88-e16d-4357-b8f5-5c247e10489b"
-}

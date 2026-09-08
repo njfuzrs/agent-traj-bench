@@ -11,25 +11,25 @@
             "skipped": 0,
             "pending": 0,
             "other": 0,
-            "start": 1788771737.1912034,
-            "stop": 1788771737.2200563
+            "start": 1788774462.881176,
+            "stop": 1788774462.9060962
         },
         "tests": [
             {
                 "name": "test_state.py::test_hello_file_exists",
                 "status": "passed",
-                "duration": 0.0003922700125258416,
-                "start": 1788771737.2186997,
-                "stop": 1788771737.2193167,
+                "duration": 0.00034921400947496295,
+                "start": 1788774462.904842,
+                "stop": 1788774462.905373,
                 "retries": 0,
                 "file_path": "test_state.py"
             },
             {
                 "name": "test_state.py::test_hello_file_contents",
                 "status": "passed",
-                "duration": 0.0003573110152501613,
-                "start": 1788771737.2193944,
-                "stop": 1788771737.2198906,
+                "duration": 0.0003242559905629605,
+                "start": 1788774462.9054456,
+                "stop": 1788774462.9059272,
                 "retries": 0,
                 "file_path": "test_state.py"
             }

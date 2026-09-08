@@ -1,0 +1,9 @@
+{
+    "task": {
+        "path": "/Users/zhourusheng/.cache/harbor/tasks/packages/hello-world/hello-world/38d7a077f07fbee8efc78db5dec9a72f82e727510ad1dcfeac0b55fa845256b7"
+    },
+    "trial_name": "38d7a077f07fbee8efc78db5dec9a72f__izeCyX5",
+    "trials_dir": "bench/v0.2-mini/reports/tz-runs-v2/oracle/2026-09-07__17-47-12",
+    "verifier_timeout_multiplier": 6.0,
+    "job_id": "ecf9eef1-4ff1-40dd-b10d-4bad2e38e29f"
+}

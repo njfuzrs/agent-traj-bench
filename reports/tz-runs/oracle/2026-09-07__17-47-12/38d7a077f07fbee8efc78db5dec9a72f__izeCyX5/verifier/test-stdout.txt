@@ -4,20 +4,20 @@ Get:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease [126 kB]
 Get:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease [126 kB]
 Get:5 http://ports.ubuntu.com/ubuntu-ports noble/main arm64 Packages [1776 kB]
 Get:6 http://ports.ubuntu.com/ubuntu-ports noble/restricted arm64 Packages [113 kB]
-Get:7 http://ports.ubuntu.com/ubuntu-ports noble/universe arm64 Packages [19.0 MB]
-Get:8 http://ports.ubuntu.com/ubuntu-ports noble/multiverse arm64 Packages [274 kB]
-Get:9 http://ports.ubuntu.com/ubuntu-ports noble-updates/main arm64 Packages [1624 kB]
-Get:10 http://ports.ubuntu.com/ubuntu-ports noble-updates/restricted arm64 Packages [2822 kB]
-Get:11 http://ports.ubuntu.com/ubuntu-ports noble-updates/universe arm64 Packages [2195 kB]
-Get:12 http://ports.ubuntu.com/ubuntu-ports noble-updates/multiverse arm64 Packages [92.2 kB]
+Get:7 http://ports.ubuntu.com/ubuntu-ports noble/multiverse arm64 Packages [274 kB]
+Get:8 http://ports.ubuntu.com/ubuntu-ports noble/universe arm64 Packages [19.0 MB]
+Get:9 http://ports.ubuntu.com/ubuntu-ports noble-updates/restricted arm64 Packages [2822 kB]
+Get:10 http://ports.ubuntu.com/ubuntu-ports noble-updates/main arm64 Packages [1624 kB]
+Get:11 http://ports.ubuntu.com/ubuntu-ports noble-updates/multiverse arm64 Packages [92.2 kB]
+Get:12 http://ports.ubuntu.com/ubuntu-ports noble-updates/universe arm64 Packages [2195 kB]
 Get:13 http://ports.ubuntu.com/ubuntu-ports noble-backports/main arm64 Packages [48.9 kB]
 Get:14 http://ports.ubuntu.com/ubuntu-ports noble-backports/multiverse arm64 Packages [671 B]
 Get:15 http://ports.ubuntu.com/ubuntu-ports noble-backports/universe arm64 Packages [36.3 kB]
-Get:16 http://ports.ubuntu.com/ubuntu-ports noble-security/restricted arm64 Packages [2693 kB]
+Get:16 http://ports.ubuntu.com/ubuntu-ports noble-security/universe arm64 Packages [1616 kB]
 Get:17 http://ports.ubuntu.com/ubuntu-ports noble-security/multiverse arm64 Packages [87.7 kB]
-Get:18 http://ports.ubuntu.com/ubuntu-ports noble-security/main arm64 Packages [1306 kB]
-Get:19 http://ports.ubuntu.com/ubuntu-ports noble-security/universe arm64 Packages [1616 kB]
-Fetched 34.3 MB in 13s (2721 kB/s)
+Get:18 http://ports.ubuntu.com/ubuntu-ports noble-security/restricted arm64 Packages [2693 kB]
+Get:19 http://ports.ubuntu.com/ubuntu-ports noble-security/main arm64 Packages [1306 kB]
+Fetched 34.3 MB in 9s (3823 kB/s)
 Reading package lists...
 Reading package lists...
 Building dependency tree...
@@ -64,7 +64,7 @@ Get:20 http://ports.ubuntu.com/ubuntu-ports noble-updates/main arm64 curl arm64 
 Get:21 http://ports.ubuntu.com/ubuntu-ports noble-updates/main arm64 libldap-common all 2.6.10+dfsg-0ubuntu0.24.04.1 [32.9 kB]
 Get:22 http://ports.ubuntu.com/ubuntu-ports noble-updates/main arm64 libsasl2-modules arm64 2.1.28+dfsg1-5ubuntu3.1 [69.6 kB]
 debconf: delaying package configuration, since apt-utils is not installed
-Fetched 5381 kB in 6s (967 kB/s)
+Fetched 5381 kB in 4s (1411 kB/s)
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 4376 files and directories currently installed.)
 Preparing to unpack .../libssl3t64_3.0.13-0ubuntu3.15_arm64.deb ...
 Unpacking libssl3t64:arm64 (3.0.13-0ubuntu3.15) over (3.0.13-0ubuntu3.12) ...
@@ -183,60 +183,17 @@ Downloading cpython-3.14.0-linux-aarch64-gnu (download) (28.6MiB)
  Downloading cpython-3.14.0-linux-aarch64-gnu (download)
 Downloading pygments (1.2MiB)
  Downloading pygments
-Installed 6 packages in 10ms
+Installed 6 packages in 29ms
 ============================= test session starts ==============================
 platform linux -- Python 3.14.0, pytest-8.4.1, pluggy-1.6.0
 rootdir: /tests
 plugins: json-ctrf-0.3.5
 collected 2 items
 
-../tests/test_state.py FF                                                [100%]
+../tests/test_state.py ..                                                [100%]
 
-=================================== FAILURES ===================================
-____________________________ test_hello_file_exists ____________________________
-
-    def test_hello_file_exists():
-        hello_path = Path("/app/hello.txt")
-    
->       assert hello_path.exists(), f"File {hello_path} does not exist"
-E       AssertionError: File /app/hello.txt does not exist
-E       assert False
-E        +  where False = exists()
-E        +    where exists = PosixPath('/app/hello.txt').exists
-
-/tests/test_state.py:10: AssertionError
-___________________________ test_hello_file_contents ___________________________
-
-    def test_hello_file_contents():
-        hello_path = Path("/app/hello.txt")
-    
->       content = hello_path.read_text().strip()
-                  ^^^^^^^^^^^^^^^^^^^^^^
-
-/tests/test_state.py:16: 
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/root/.local/share/uv/python/cpython-3.14.0-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py:792: in read_text
-    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-
-self = PosixPath('/app/hello.txt'), mode = 'r', buffering = -1
-encoding = 'utf-8', errors = None, newline = None
-
-    def open(self, mode='r', buffering=-1, encoding=None,
-             errors=None, newline=None):
-        """
-        Open the file pointed to by this path and return a file object, as
-        the built-in open() function does.
-        """
-        if "b" not in mode:
-            encoding = io.text_encoding(encoding)
->       return io.open(self, mode, buffering, encoding, errors, newline)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       FileNotFoundError: [Errno 2] No such file or directory: '/app/hello.txt'
-
-/root/.local/share/uv/python/cpython-3.14.0-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py:776: FileNotFoundError
+==================================== PASSES ====================================
 =========================== short test summary info ============================
-FAILED ../tests/test_state.py::test_hello_file_exists - AssertionError: File ...
-FAILED ../tests/test_state.py::test_hello_file_contents - FileNotFoundError: ...
-============================== 2 failed in 0.04s ===============================
+PASSED ../tests/test_state.py::test_hello_file_exists
+PASSED ../tests/test_state.py::test_hello_file_contents
+============================== 2 passed in 0.03s ===============================

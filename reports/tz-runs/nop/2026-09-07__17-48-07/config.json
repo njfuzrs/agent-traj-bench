@@ -1,5 +1,5 @@
 {
-    "jobs_dir": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/tz-runs/nop",
+    "jobs_dir": "bench/v0.2-mini/reports/tz-runs-v2/nop",
     "verifier_timeout_multiplier": 6.0,
     "n_concurrent_trials": 1,
     "agents": [
