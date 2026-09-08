@@ -471,8 +471,8 @@ def test_task_dir_missing_test_script_is_invalid(tmp_path):
     "script",
     [
         # T2 已在 2026-09-08 实现，从这张名单里移出（它现在归下面的 ⑫-⑯ 管）
+        # T4 已在 2026-09-08 实现，归下面的 ⑰-㉑ 管
         "t3-build-harbor-tasks.py",
-        "t4-build-env.py",
         "t5-gate.sh",
         "t7-baseline.sh",
     ],
@@ -867,3 +867,99 @@ def test_gitignored_uses_base_gitignore_not_head():
     assert ".claude/worktrees/fix-lsp/packages/core/tests/lsp/client.test.ts" in ignored
     assert ".claude/skills/eval-session/SKILL.md" not in ignored, "skills/ 是仓库资产，被否定规则放行"
     assert "src/app.ts" not in ignored
+
+
+# ── ⑰-㉑ T4：快照剔除泄漏面 + 步骤④交叉验收（2026-09-08 实现） ──────
+
+
+def load_t4():
+    spec = importlib.util.spec_from_file_location("t4_env", MVP / "t4-build-env.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_t4_strip_uses_removeprefix_not_lstrip():
+    """⑰ `.claude/` 必须被剔掉 —— `lstrip('./')` 会把它啃成 `claude/` 导致漏剔。
+
+    这是实现过程中真实中过的一枪，由**容器内泄漏扫描**抓出来：
+    `'.claude/x'.lstrip('./')` → `'claude/x'`（字符集剥离，不是前缀剥离），
+    于是 `.claude/` 前缀整个失效、泄漏面静默存活。
+    """
+    t4 = load_t4()
+    assert t4.strip_leaks(".claude/skills/eval-session/SKILL.md")
+    assert t4.strip_leaks("./.claude/skills/eval-session/SKILL.md")
+    # 反证：错的写法（lstrip）会漏，固定住这个差异
+    assert ".claude/x".lstrip("./") == "claude/x"
+    assert ".claude/x".removeprefix("./") == ".claude/x"
+
+
+def test_t4_strip_is_top_level_anchored():
+    """⑱ 剔除必须顶层锚定 —— 嵌套的 skill `evals/` 是真实仓库资产，不能剔。
+
+    实测：`packages/core/src/skill/builtin/*/evals/` 下 61 个文件是 skill 的
+    baseline case，且 `tests/skill/code-review.test.ts:66` 明确断言该目录存在。
+    按子串剔 `evals` 会打断这些**存活测试**。
+    """
+    t4 = load_t4()
+    assert t4.strip_leaks("evals/_judge/calibration-set/summary.md")
+    assert not t4.strip_leaks("packages/core/src/skill/builtin/code-review/evals/case_cr_001.yaml")
+    assert not t4.strip_leaks("src/skill/builtin/ci-self-heal/evals/case_csh_001.yaml")
+    assert not t4.strip_leaks("evals-foo/bar.ts"), "尾 / 是契约，别让 evals 误命中 evals-foo/"
+
+
+def test_t4_leak_files_are_file_granular():
+    """⑲ 评测工作流按**文件**剔，不能整剔 `.github/` —— 同目录有无关资产。
+
+    这四个是容器内扫描抓出来的漏网（前缀清单只锚顶层目录，抓不到散落在
+    `.github/workflows/` 下的评测工作流）。而 `ci.yml` / `docs-lint.yml`
+    是无关资产，整剔 `.github/` 会连它们一起丢。
+    """
+    t4 = load_t4()
+    assert t4.strip_leaks(".github/workflows/judge-calibration.yml")
+    assert t4.strip_leaks(".github/workflows/eval-weekly.yml")
+    assert not t4.strip_leaks(".github/workflows/ci.yml")
+    assert not t4.strip_leaks(".github/workflows/docs-lint.yml")
+
+
+def test_t4_eval_framework_mode_distinguishes_two_mechanisms():
+    """⑳ `file:` 与 `workspace:` 必须分开判 —— 混为一谈会白淘汰 47 条 task。
+
+    实测推翻了方案 §3.8-E 的假设：47 条 base 把 eval-framework 声明成
+    `file:../eval-framework`（**仓库外**），`bun install` 在**未剔除的对照镜像**上
+    同样失败 —— 那是既有问题，与剔除无关。只有 3 条 monorepo base 的
+    `workspace:*` 才真被剔除打断。
+    """
+    t4 = load_t4()
+    repo = "person/sid-code"
+    # 2026-07 的 base：file:../eval-framework
+    assert t4.eval_framework_mode(repo, "9b5706c047921c0de089f0ca6a9fc4a931e50ce5") == "external"
+    # monorepo base：workspace:*
+    assert t4.eval_framework_mode(repo, "16cb147266b9131896460972aba3f6b873ac8f48") == "workspace"
+
+
+def test_t4_cross_verify_catches_patch_touching_stripped_path():
+    """㉑ 步骤④必须抓出「patch 触及被剔除路径」——这正是两层各自都绿的破口。
+
+    T2 在 mirror 真实 commit 上验 apply --check，T4 的快照剔过泄漏路径。
+    patch 若触及被剔的路径，两处验收都通过而容器里必然失败（§4.9 衔接②）。
+    这里注入一条必中的前缀，守卫必须报红 —— 防止步骤④退化成空转。
+    """
+    t4 = load_t4()
+    rows = [r for r in c.read_jsonl(c.RESOLVED) if r.get("ok") and r["repo"] != t4.IAM_REPO]
+    assert rows, "T2 应已交付 ok 候选"
+    row = rows[0]
+    mode = t4.eval_framework_mode(row["repo"], row["base_commit"])
+    gz, _ = t4.build_snapshot(row["repo"], row["base_commit"], mode)
+    assert t4.cross_verify(gz, row)["cross_ok"], "正常路径下步骤④应通过"
+
+    # 注入：把 patch 必然触及的 src/ 也当泄漏面 → 守卫必须报红
+    keep = t4.LEAK_PREFIXES
+    try:
+        t4.LEAK_PREFIXES = keep + ("src/", "tests/")
+        res = t4.cross_verify(gz, row)
+        assert not res["cross_ok"], "步骤④是空转：patch 触及被剔路径却仍报绿"
+        assert "被剔除路径" in (res["cross_fail_reason"] or "")
+    finally:
+        t4.LEAK_PREFIXES = keep
