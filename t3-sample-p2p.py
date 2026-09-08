@@ -274,7 +274,26 @@ def main() -> int:
     ap.add_argument("--only-base", default=None, help="只处理某个 base_commit（前缀匹配）")
     ap.add_argument("--keep-images", action="store_true", help="采完不删镜像（默认删，磁盘只剩 41GB）")
     ap.add_argument("--resume", action="store_true", help="跳过 p2p.jsonl 里已采过的 base")
+    ap.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="已有 p2p.jsonl 时从头重采并覆盖它（**会丢弃数小时的容器产物**，慎用）",
+    )
     args = ap.parse_args()
+
+    # 🔴 防手滑覆盖：本脚本要跑数小时（50 个容器），而 --resume 是**可选**的 ——
+    # 不带它重跑会把已采好的 p2p.jsonl 从头覆盖掉，且没有任何提示。
+    # 采样结果不可从别处重建（要重新起 50 个容器），所以这里改成必须显式表态。
+    if P2P_OUT.exists() and not (args.resume or args.overwrite or args.only_base or args.limit):
+        n_done = sum(1 for _ in c.read_jsonl(P2P_OUT))
+        print(
+            f"🔴 {P2P_OUT} 已存在（{n_done} 个 base）。它是数小时容器跑出来的产物，"
+            f"不可从别处重建。\n"
+            f"   续采：--resume（跳过已采过的 base）\n"
+            f"   重采：--overwrite（**丢弃现有结果**）",
+            file=sys.stderr,
+        )
+        return 2
 
     c.ensure_mvp_dirs()
     rows = [r for r in c.read_jsonl(SNAPSHOTS) if r.get("ok")]
@@ -285,10 +304,25 @@ def main() -> int:
     for r in rows:
         by_base.setdefault(r["base_commit"], []).append(r)
 
+    # 🔴 已有产物必须**无条件读进来**，哪怕本轮只重采一个 base ——
+    # 落盘那步是「done + 本轮结果」的合并覆写（见函数末尾），
+    # 若这里不读，`--only-base` / `--limit` 会把 p2p.jsonl 从 50 行截成 1 行，
+    # 且没有任何报错。只有 --overwrite 才是「真从头来」，那时才该丢掉旧的。
+    done_all: dict[str, dict] = {}
+    if P2P_OUT.exists() and not args.overwrite:
+        done_all = {d["base_commit"]: d for d in c.read_jsonl(P2P_OUT)}
+
+    # 跳过名单只包含**采成功**的 base：失败的那些正是 --resume 要重试的对象。
+    # 把 ok=false 也算作「已采」，会让 --resume 对着一批失败记录空转报成功。
     done: dict[str, dict] = {}
-    if args.resume and P2P_OUT.exists():
-        done = {d["base_commit"]: d for d in c.read_jsonl(P2P_OUT)}
-        print(f"resume：已有 {len(done)} 个 base 采过", file=sys.stderr)
+    if args.resume:
+        done = {b: d for b, d in done_all.items() if d.get("ok")}
+        retry = sorted(b[:8] for b, d in done_all.items() if not d.get("ok"))
+        print(
+            f"resume：已采成功 {len(done)} 个 base 将跳过"
+            + (f"；{len(retry)} 个失败的会重采：{retry}" if retry else ""),
+            file=sys.stderr,
+        )
 
     bases = list(by_base)
     if args.only_base:
@@ -397,7 +431,7 @@ def main() -> int:
 
         out.append(rec)
         # 每个 base 采完就落盘 —— 3-4 小时的任务，中断了不该从头再来
-        merged = {**done, **{r["base_commit"]: r for r in out}}
+        merged = {**done_all, **{r["base_commit"]: r for r in out}}
         c.write_jsonl(P2P_OUT, [merged[b] for b in by_base if b in merged])
 
     ok = [r for r in out if r.get("ok")]

@@ -44,6 +44,13 @@
                 T2 的 is_test 按用途判、bun 按文件名收集，两者不等价。实测 T0010 的
                 preload 辅助文件混进 F2P 会让 bun **静默跳过**（exit 0、不进 XML）
                 → f2p 恒 0 → 连 oracle 都做不出来。但它仍须留在保护名单里
+             ㉟ 采样脚本不许静默覆盖已有的 `p2p.jsonl`（数小时容器产物，不可重建）
+             ㊱ 产物齐全自查：缺文件与**零字节**文件同罪（空 gold_patch = oracle 静默 0 分）
+             ㊲ 齐全自查必须有**不写盘**的 `--check-only` 路径 —— 实测把它放在生成之后
+                做不出反向自证②：生成是幂等重写，跑一遍就把删掉的文件补回来了
+             ㊳㊴ 采样脚本两处「命令报成功 + 产物悄悄不对」（为重采 T0029 读代码时发现）：
+                ㊳ `--only-base`/`--limit` 的合并覆写会把 p2p.jsonl 从 50 行截成 1 行
+                ㊴ `--resume` 把 ok:false 也当已采，失败的 base 被永久跳过
 
 用法：
     python3 -m pytest scripts/mvp/tests/test_mvp.py -v
@@ -54,6 +61,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1425,3 +1433,125 @@ def test_t3_generated_meta_keeps_helper_protected_but_out_of_f2p():
         for p in m["f2p"]:
             assert t3.is_bun_test_file(p), f"{mp.parent.name}: F2P 含 bun 不收集的 {p}"
     print(f"（checked {checked} 个被排除的辅助文件）")
+
+
+def test_t3_sampler_refuses_to_clobber_existing_p2p_artifact(tmp_path):
+    """㉟ 已有 `p2p.jsonl` 时，不带 `--resume` / `--overwrite` 重跑必须拒绝执行。
+
+    采样要起 50 个容器、跑一两小时，产物**不可从别处重建**。而 `--resume` 是可选参数 ——
+    手滑重跑一次就会把已采好的结果从头覆盖掉，且过程中没有任何提示
+    （每采完一个 base 就落盘，覆盖是渐进的，等发现时前面的已经没了）。
+
+    所以改成必须显式表态：续采 `--resume`，重采 `--overwrite`。
+    """
+    script = MVP / "t3-sample-p2p.py"
+    fake_meta = tmp_path / "bench/v0.2-mini/meta"
+    fake_meta.mkdir(parents=True)
+    (fake_meta / "p2p.jsonl").write_text('{"base_commit":"deadbeef","ok":true}\n', encoding="utf-8")
+    # 用 MVP_DIR 环境变量把产物目录指到 tmp_path（common.py 支持覆盖）
+    env = {**os.environ, "MVP_DIR": str(tmp_path / "bench/v0.2-mini")}
+    proc = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, cwd=REPO_ROOT, env=env
+    )
+    if "已存在" not in (proc.stdout + proc.stderr):
+        pytest.skip("MVP_DIR 覆盖不生效（common.py 的目录常量在 import 时固化），跳过")
+    assert proc.returncode == 2, "已有产物却仍以 0 退出 —— 会静默覆盖数小时的结果"
+    assert (fake_meta / "p2p.jsonl").read_text(encoding="utf-8").strip(), "产物被清空了"
+
+
+def test_t3_missing_files_flags_absent_and_empty_artifacts(tmp_path):
+    """㊱ 产物齐全自查：缺文件与**零字节文件**都必须算不齐。
+
+    零字节和缺失同罪，而且更隐蔽 —— 空的 `gold_patch.diff` 在容器里是
+    「`git apply` 成功但什么都没改」，即 **oracle 静默拿 0 分**，
+    形态是「参考解做不出来」，会被误诊成 T2 的 patch 反解错了（与 ㉞ 同一个坑）。
+    """
+    t3 = load_t3()
+    d = tmp_path / "T9999"
+    for rel in t3.REQUIRED_FILES:
+        f = d / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x", encoding="utf-8")
+    assert t3.missing_files(d) == [], "齐备的目录不该报缺"
+
+    (d / "tests/score.py").unlink()
+    (d / "solution/gold_patch.diff").write_text("", encoding="utf-8")  # 零字节
+    assert sorted(t3.missing_files(d)) == ["solution/gold_patch.diff", "tests/score.py"]
+
+    # environment/ 是 T4 的产物，本脚本不写但必须核 —— 缺快照要在生成阶段就炸，
+    # 而不是等 T5 建镜像时才失败
+    assert "environment/repo-snapshot.tar.gz" in t3.REQUIRED_FILES
+
+
+def test_t3_check_only_does_not_regenerate_and_reports_damage():
+    """㊲ 反向自证②：删掉某条的 `tests/score.py`，自查必须报错。
+
+    🔴 这条测试存在的理由是一次实测失败：最初把齐全自查放在**生成之后**，
+    于是反向自证做不出来 —— 生成是幂等重写，跑一遍就把删掉的文件补回来了，
+    末尾那次核对永远看不到「产物被破坏」的状态（`rc=0`，两次实测都是）。
+    它只能抓到「生成器自己漏写」，抓不到交付物在盘上被改坏。
+
+    所以必须有一条**不写盘**的路径 `--check-only`。本测试同时验两件事：
+    ① 破坏后它报非零；② 它**没有**顺手把文件补回来（否则又退化成上面那种自欺）。
+    """
+    t3_script = MVP / "t3-build-harbor-tasks.py"
+    victim = c.MVP_TASKS / "T0002" / "tests" / "score.py"
+    if not victim.exists():
+        pytest.skip("T3 还没生成 T0002")
+    saved = victim.read_text(encoding="utf-8")
+    try:
+        victim.unlink()
+        proc = subprocess.run(
+            [sys.executable, str(t3_script), "--check-only"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert proc.returncode == 2, f"缺 score.py 却以 {proc.returncode} 退出"
+        assert "tests/score.py" in (proc.stdout + proc.stderr)
+        assert not victim.exists(), "--check-only 把文件补回来了 —— 它不该写盘"
+    finally:
+        victim.write_text(saved, encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(t3_script), "--check-only"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert proc.returncode == 0, f"恢复后仍报不齐：\n{proc.stdout}\n{proc.stderr}"
+
+
+def test_t3_sampler_merges_onto_all_existing_records_not_just_resumed():
+    """㊳ `--only-base` / `--limit` 不许把 `p2p.jsonl` 从 50 行截断成 1 行。
+
+    🔴 实测缺陷（为重采 T0029 读代码时发现）：落盘那步是
+    「已有记录 + 本轮结果」的**合并覆写**，但「已有记录」原先只在 `--resume`
+    分支里读。于是 `--only-base xxx` 重采单个 base 时，合并的左半边是空字典
+    → 覆写后整个文件只剩这一个 base。
+
+    形态是**命令成功退出、打印「采样完成」，而 49 个 base 的数小时产物没了** ——
+    产物不可从别处重建（要重新起 50 个容器）。这条测试盯的是源码结构，
+    因为跑真流程需要 docker，而缺陷恰恰只在「重采单个 base」这条路径上暴露。
+    """
+    src = (MVP / "t3-sample-p2p.py").read_text(encoding="utf-8")
+    # 合并必须用「无条件读入的全量」，不能用「只在 resume 下才填的跳过名单」
+    assert "merged = {**done_all," in src, "落盘的左半边不是全量已有记录 —— 会截断产物"
+    # done_all 的读入不许挂在 args.resume 上（只有 --overwrite 才该丢弃旧的）
+    m = re.search(r"if P2P_OUT\.exists\(\) and not args\.overwrite:\s*\n\s*done_all = ", src)
+    assert m, "done_all 的读入条件不对：必须无条件读、仅 --overwrite 丢弃"
+
+
+def test_t3_sampler_resume_retries_failed_bases():
+    """㊴ `--resume` 不许把「采失败」的 base 当成「已采过」跳过。
+
+    🔴 实测缺陷：T0029 的 base 首轮因宿主取包超时构建失败（`ok:false`）。
+    跳过名单原先不看 `ok` 字段，于是 `--resume` 会永久跳过它 ——
+    打印「50/50 完成」，而那条始终是 `ok:false`。
+
+    与 ㊳ 同一形态：**命令报成功、产物悄悄不对**。
+    """
+    src = (MVP / "t3-sample-p2p.py").read_text(encoding="utf-8")
+    assert re.search(
+        r'done = \{b: d for b, d in done_all\.items\(\) if d\.get\("ok"\)\}', src
+    ), "resume 的跳过名单没有按 ok 过滤 —— 失败的 base 会被永久跳过"

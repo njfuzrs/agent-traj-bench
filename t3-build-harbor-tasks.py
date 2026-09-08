@@ -102,6 +102,42 @@ BUILD_TIMEOUT = 1800.0
 #: 超时在 harbor 里是 error 而不是低分，会污染基线的「做不出来」与「没做完」两类。
 AGENT_TIMEOUT_BY_BAND = {"S": 900.0, "M": 1800.0, "L": 2700.0}
 
+#: 一个 task 目录**必须齐**的文件。方案 §4 T3 的验收项写的是「脚本自查每个 task 目录，
+#: 缺一个即报错」，且反向自证②要求「删掉某条的 tests/score.py → 自查必须报错」。
+#:
+#: 为什么要显式列成常量而不是「生成完就完事」：生成器写文件的路径分支不止一条
+#: （patch 落盘、名单落盘、模板渲染各一处），少写一个文件**不会报错** ——
+#: 形态是 harbor 的 `Task.is_valid_dir()` 照样报 VALID（它只查它关心的那几个），
+#: 而缺的那个在跑到容器里时才炸，此时已经过了门禁。所以在生成的**出口**核一次。
+#:
+#: `environment/` 两个文件是 T4 的产物，本脚本不写但**必须核** ——
+#: 缺快照的 task 进了产物，形态是 T5 建镜像时才失败（见 t4-env.md §9.1 的重建提示）。
+REQUIRED_FILES = (
+    "instruction.md",
+    "task.toml",
+    "meta.json",
+    "solution/solve.sh",
+    "solution/gold_patch.diff",
+    "tests/test.sh",
+    "tests/test_patch.diff",
+    "tests/score.py",
+    "tests/f2p.json",
+    "tests/p2p.json",
+    "environment/Dockerfile",
+    "environment/repo-snapshot.tar.gz",
+)
+
+
+def missing_files(task_dir: Path) -> list[str]:
+    """返回缺失或**空**的必需文件。空文件与缺文件同罪 —— 零字节的 `gold_patch.diff`
+    在容器里是「apply 成功但什么都没改」，即 oracle 静默拿 0 分。"""
+    out = []
+    for rel in REQUIRED_FILES:
+        f = task_dir / rel
+        if not f.exists() or f.stat().st_size == 0:
+            out.append(rel)
+    return out
+
 
 def sh_single_quote(s: str) -> str:
     """POSIX 单引号转义。测试路径来自仓库、不是用户输入，但生成器**不该假定**输入干净。"""
@@ -506,6 +542,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="T3 — 生成 harbor 原生格式的 task 目录")
     ap.add_argument("--only", default=None, help="只生成某条 task（调试用）")
     ap.add_argument(
+        "--check-only",
+        action="store_true",
+        help="只核对已有产物是否齐全，**不重新生成**（反向自证②要用：生成会把缺的文件补回来）",
+    )
+    ap.add_argument(
         "--allow-missing-p2p",
         action="store_true",
         help="P2P 未采全时也生成（**只用于调试**，正式产物必须全采完）",
@@ -514,6 +555,22 @@ def main() -> int:
 
     c.ensure_mvp_dirs()
     snaps = {r["task_id"]: r for r in c.read_jsonl(SNAPSHOTS) if r.get("ok")}
+
+    # 🔴 --check-only 必须在生成之前分叉出去，不能只在末尾加个核对。
+    # 原因：生成是**幂等重写** —— 跑一遍就把缺的文件补回来了，末尾那次核对
+    # 永远看不到「产物被破坏」的状态（只能抓到生成器自己漏写）。
+    # 而验收项要的是「删掉某条的 tests/score.py → 自查必须报错」，
+    # 那就必须有一条**不写盘**的路径。T5 的门禁也该用这条来复核交付物。
+    if args.check_only:
+        todo_c = [args.only] if args.only else sorted(snaps)
+        incomplete_c = {t: m for t in todo_c if (m := missing_files(c.MVP_TASKS / t))}
+        if incomplete_c:
+            print(f"🔴 {len(incomplete_c)}/{len(todo_c)} 条 task 的产物不齐：", file=sys.stderr)
+            for t, miss in sorted(incomplete_c.items()):
+                print(f"   {t}: {miss}", file=sys.stderr)
+            return 2
+        print(f"✅ {len(todo_c)} 条 task 的 {len(REQUIRED_FILES)} 个文件全部齐备且非空")
+        return 0
     resolved = {r["unit_id"]: r for r in c.read_jsonl(c.RESOLVED) if r.get("ok")}
     # 题面只在 candidates.jsonl 里（T1 产物），resolved.jsonl 没带上这个字段
     instructions = {
@@ -563,9 +620,27 @@ def main() -> int:
             )
         )
 
+    # 产物齐全自查（方案 §4 T3 验收项 + 反向自证②）。放在生成出口而不是逐条 build_one
+    # 里面：build_one 只知道自己写了什么，核不到 T4 的 environment/ 那两个文件。
+    incomplete = {t: m for t in todo if (m := missing_files(c.MVP_TASKS / t))}
+    if incomplete:
+        print(
+            f"🔴 {len(incomplete)} 条 task 的产物不齐（缺失或空文件）：",
+            file=sys.stderr,
+        )
+        for t, miss in sorted(incomplete.items())[:10]:
+            print(f"   {t}: {miss}", file=sys.stderr)
+        print(
+            "   environment/ 两个文件属 T4：快照不入 git，换机器后先跑 "
+            "scripts/mvp/t4-build-env.py 重建",
+            file=sys.stderr,
+        )
+        return 2
+
     stats = {
         "task": "T3",
         "n_tasks": len(built),
+        "files_per_task": len(REQUIRED_FILES),
         "reward_file": "reward.json",
         "reward_keys": ["reward", "f2p", "p2p"],
         "filter_mode": "path",
