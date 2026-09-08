@@ -163,14 +163,85 @@ patch 若触及被剔的路径，**两处验收都通过、容器里必然失败
   差值主要就是那 13 个 ripgrep 用例。**比对基线时必须同镜像同条件** —— 跨镜像比数字
   会把「工具缺失」误读成「剔除打断了测试」。
 
-## 九、交给下游的三件事
+## 九、交接给 T3
 
-1. **T3 采 P2P 必须用本 task 的剔除后快照**（§4.9 衔接①）。
-   `tasks/T####/environment/repo-snapshot.tar.gz` 即输入；
-   在 mirror 原始 commit 上采会采到已被剔除的测试 → **P2P 恒败 → 全部 reward=0**，
-   形态像「task 太难」。上面 §4 那 2 条断言 runner 落盘的测试是现成的例子。
-2. **`snapshots.jsonl` 的字段供 T3 回写 `meta.json` 的 `snapshot`**：
-   `tar_sha256` / `tar_bytes` / `n_files_stripped` / `stripped_top_dirs` /
-   `eval_framework_mode` / `test_cmd`。
-3. **T7 的 dataset card Limitations 要写两条**：单仓库（iam 因内网 registry 被挡）、
-   以及 stub / 保留 manifest 这两处残余泄漏面的处置与论证。
+### 9.1 输入已就绪
+
+| 交接物 | 路径 | 用途 |
+|---|---|---|
+| 剔除后快照 × 65 | `tasks/T####/environment/repo-snapshot.tar.gz` | **采 P2P 的唯一合法输入**（衔接①） |
+| Dockerfile × 65 | `tasks/T####/environment/Dockerfile` | 已含 `git init` 单 commit + `bun install` |
+| 快照元数据 | `meta/snapshots.jsonl`（70 行 = 65 ok + 5 blocked） | 回写 `meta.json` 的 `snapshot` 字段 |
+
+`snapshots.jsonl` 可直接取用的字段：`tar_sha256` / `tar_bytes` / `n_files_kept` /
+`n_files_stripped` / `stripped_top_dirs` / `eval_framework_mode` / `test_cmd` /
+`cross_apply_check`。
+
+⚠️ **快照本体不在 git 里**（429MB，`du` 看到 409MB 是块对齐差异，含私有仓库源码，
+见 §8）。换机器或清过工作区后，
+先 `python3 scripts/mvp/t4-build-env.py` 重建，再开 T3 —— 校验和会与
+`snapshots.jsonl` 逐条比对，不一致说明 mirror 或 `resolved.jsonl` 变了。
+
+### 9.2 🔴 P2P 必须采在剔除后的快照上（衔接①，采错了整批归零）
+
+在 mirror 原始 commit 上采，会采到**已被剔除的测试** → 容器内那些文件不存在 →
+**P2P 恒败 → 全部 reward=0**，形态像「task 太难」而不是「名单采错了」。
+
+**现成的例子**（§4 已量化）：`tests/skill/{incident-rca,security-audit}.test.ts`
+断言 `scripts/eval/run-*-skill.ts` 落盘存在，指向被剔的 runner。
+在剔除后的快照上采样会自然排除它们，**不需要特殊处理** —— 但如果发现它们进了
+P2P 名单，说明采样跑在了错误的文件树上。
+
+### 9.3 ⚠️ T3 开工前需要定的三个决定（会改变实现，不是风格问题）
+
+1. **P2P 采样是否按 base 去重**。65 条 task 覆盖 **50 个 unique base**，每个 base
+   跑一次全量 `bun test` 实测 45–145 秒，串行约 40–90 分钟。按 base 去重可省 15 次
+   （50 而非 65 次）再摊回 task。建议去重，但要接受这个耗时量级。
+2. **「采样 20-30 个 P2P」的单位是文件还是用例**。方案 §T3 原文写「采样 20-30 个」，
+   但同时要求**用文件路径而非 `--test-name-pattern` 选择**（因为测试名含中文与空格，
+   实测样例 `切换权限模式`）。所以口径必须先定：20-30 个**文件**（推荐，与路径选择
+   方式自洽）还是 20-30 个**用例**（则需把用例映射回文件，且同文件多用例时要做
+   regex 转义并在 `meta.json` 标 `filter_mode: "name"`）。
+3. **候选 P2P 是否跑两次取交集**。T4 只验了**全量** `bun test` 同 commit 两次一致
+   （4577/27 逐字相同），**没有逐文件验 flaky**。P2P 名单一旦选进 flaky 测试，
+   T5 门禁的判据「nop 的 p2p=1」会随机失败，且形态像 task 坏了。
+   建议采样后对候选 P2P 文件跑两次取交集，多一轮时间换稳定。
+
+### 9.4 ⚠️ 比对 `bun test` 基线必须同镜像同条件
+
+本报告里出现过两组基线数，**它们不可互相比较**：
+
+| 来源 | 镜像 | 结果 |
+|---|---|---|
+| §4 剔除影响对照表 | **探针镜像**（未装 ripgrep） | 4549 pass / 55 fail |
+| §1 一致性验收 | **正式产物**（已装 ripgrep 14.1.1） | 4577 pass / 27 fail |
+
+差值主要就是 `tests/tool/ripgrep.test.ts` 的 13 个用例。
+**跨镜像比数字会把「工具缺失」误读成「剔除打断了测试」** ——
+这与 §2 那个「红着其实没坏」是同一类错误，只是换了一层。
+T3 若要重做剔除影响评估，请用正式产物镜像重跑双侧，不要引用 §4 的绝对值。
+
+### 9.5 可复用的本地镜像（非必需，可随时删）
+
+T4 验收时建了 4 个代表镜像，覆盖 06/07/08 三个月份 + monorepo 分支，T5 跑门禁可复用：
+
+| 镜像 | base | 分支 | 大小 |
+|---|---|---|---|
+| `t4:T0006` | `5a092172`（2026-06） | external | 705MB |
+| `t4:T0001` | `9b5706c0`（2026-07） | external | 716MB |
+| `t4:T0002` | `76b60150`（2026-08） | external | 807MB |
+| `t4:T0043` | `16cb1472`（monorepo） | workspace | 932MB |
+
+不需要时：`docker rmi t4:T0001 t4:T0002 t4:T0006 t4:T0043`（共约 3.1GB）。
+注意 colima profile 是 **swebench**，`colima status` 不带 `-p swebench` 会误报未运行。
+
+## 十、遗留问题（不属于 T4 范围，但必须有人接）
+
+| # | 遗留项 | 归属 | 不做的后果 |
+|---|---|---|---|
+| 1 | dataset card 的 Limitations 要写**单仓库**：5 条 iam 因私有 registry 需凭据被挡（§5），存活 65 条全是 `person/sid-code` | **T7** | 对外发布时隐瞒了覆盖面局限，属于数据集披露缺陷 |
+| 2 | dataset card 要写**两处残余泄漏面**及其论证：`/eval-framework` stub（在 `/repo` 外、零处 import）与保留的真 manifest（判分本体已剔）（§2） | **T7** | 同上；且这两处是主动决策，不写等于隐藏 |
+| 3 | **iam 的 5 条能否救回**：内网 registry 当前可达，技术上可装依赖，但需把 `_authToken` 烤进镜像。若将来有内网私服镜像或 vendored 依赖方案，这 5 条可回归、benchmark 恢复双仓库 | v0.3 | 无损失，但 benchmark 长期停留在单仓库 |
+| 4 | **快照按 base 去重**：65 份快照对应 50 个 unique base，有 15 份是重复内容（tar 合计 429MB → 去重后 324MB） | v0.3 | 磁盘冗余，当前规模下不是问题（方案 §T4「已知坑」也主张先用笨办法） |
+| 5 | **T6 的泄漏扫描要在容器内查**，不能只复用 T4 的剔除清单 —— T4 的两处漏剔都是容器内 `ls` 抓出来的，清单本身不自证完备（§3） | **T6** | 漏剔的泄漏面静默存活，agent 可直接读到答案 |
+| 6 | **T5/T6 的门禁要自己验一次会不会报红**。T4 的反向自证阈值是拍的，导致它自称检查却永远返绿（§7） | **T5 / T6** | 门禁空转，「全绿」不代表真的通过 |
