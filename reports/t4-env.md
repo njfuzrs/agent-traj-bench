@@ -1,0 +1,176 @@
+# T4 — env 镜像 + 仓库快照（剔除泄漏面）+ 步骤④交叉验收
+
+> 日期：2026-09-08 ｜ 脚本：`scripts/mvp/t4-build-env.py`
+> 输入：`meta/resolved.jsonl`（T2 的 70 条 ok）+ mirror（只读）
+> 产物：`tasks/T####/environment/{Dockerfile,repo-snapshot.tar.gz}` × 65
+>       + `meta/snapshots.jsonl`（剔除清单 + 校验和）
+
+## 一、结果
+
+| 指标 | 数字 | 验收线 | 结论 |
+|---|---|---|---|
+| 快照产出 | **65** / 70 | — | ✅ |
+| **步骤④交叉 `apply --check`** | **65 / 65 全过**（test+code 双 patch = 130 次） | 全过 | ✅ |
+| 容器内泄漏扫描 | 65 份快照 **零违规** | 零违规 | ✅ |
+| 快照校验和 | 65 / 65 与 `snapshots.jsonl` 逐条相符 | 全对 | ✅ |
+| 真实资产存活 | 65 / 65 保有嵌套 skill `evals/` + `package.json` + `bun.lock` | 不误剔 | ✅ |
+| env 不可构建 | 5（全部 `ruijie/iam-studio-fe`） | — | ⚠️ 见 §4 |
+| 06/07/08 三月份 + monorepo 分支 | 4 个代表镜像**全部构建成功** | 均可构建 | ✅ |
+| `--network none` 下跑完整 test | 三月份均可执行（3003 / 4604 / 7864 tests） | 可执行 | ✅ |
+| 同 commit 跑两次结果一致 | 4577 pass / 27 fail，两次**逐字相同** | 一致 | ✅ |
+| 单测 | **89 passed / 0 skipped**（新增 5 条 T4 回归） | 全绿 | ✅ |
+
+难度分布 S 5 / M 22 / L 38（T2 是 S 5 / M 25 / L 40，差额即被挡的 5 条 iam）。
+快照体积：中位数 2.5MB，区间 0.8–14.7MB，合计 429MB。剔除量 706–773 文件/条。
+
+**存活 65 条 ≥ 方案的 40 条底线**，T5 门禁的输入量充足。
+
+## 二、🔴 实测推翻了方案的一个前提（本轮最重要的一条）
+
+方案 §3.8-E 假定「剔除 `packages/eval-framework/` 会打断 `bun install`，打断就淘汰该
+task」。**这个因果是错的。照方案的预案执行，会白淘汰 47 条 task（存活从 65 掉到 18）。**
+
+怎么发现的：剔除后 `bun install --frozen-lockfile` 确实报
+`ENOENT: failed opening cache/package/version dir for package eval-framework`。
+形态完全符合方案的预言 —— 但我用**未剔除的对照镜像**跑了同一条命令，**报同一个错**。
+
+根因：50 条 sid base 里有 **47 条**把它声明成 **`file:../eval-framework`** ——
+指向**仓库外**的兄弟目录，**任何快照里都不可能有它**。这是既有问题，与剔除无关。
+
+两个分支的机理必须分开处理（判据落在 `eval_framework_mode()`）：
+
+| 形态 | 条数 | 剔除是否打断 | 处置 |
+|---|---|---|---|
+| `file:../eval-framework`（仓库外） | 62 | ❌ 无关 | 镜像内 `/eval-framework` 造最小 stub 闭合 resolver |
+| `workspace:*`（仓库内） | 3 | ✅ 真打断 | 只保留 `packages/eval-framework/package.json` 这一个 manifest，其余全剔 |
+
+两处残余泄漏面都已核过，都是**可证不参与判分**的死物：
+
+- **stub**：在 `/repo` **之外**，不属于仓库内容；且快照内**零处 import 它**
+  （`grep -rlE "(from|require\(|import\()\s*['\"]eval-framework"` 命中 0）。
+- **保留的真 manifest**：只有 name/version/deps 与 `"eval:run": "bun run core/runner.ts"`
+  一条指针，而 `core/runner.ts` 已被剔除 —— **判分逻辑本体不在里面**。
+  （合成 stub manifest 试过，破 `--frozen-lockfile`：真 manifest 的 deps 在 bun.lock
+  里有记录，所以必须留真的那份。）
+
+**教训**：「剔除后坏了」≠「剔除导致坏了」。**必须先跑未剔除的对照**，
+否则会把「本来就坏」记成自己的锅，反向淘汰掉一批本可用的 task。
+与 §3.8-F「绿着坏掉」同源，只是方向相反 —— 这次是**红着其实没坏**。
+
+## 三、容器内泄漏扫描抓到的两件事（都不是推演出来的）
+
+§4.9 要求「泄漏扫描在容器内查」。实践证明这条不能省 —— 两个漏洞都是它抓出来的，
+只看剔除计数发现不了。
+
+**① `lstrip('./')` 是字符集剥离，不是前缀剥离。**
+`'.claude/x'.lstrip('./')` → `'claude/x'`，于是 `.claude/` 前缀**整个漏剔**，
+泄漏面静默存活。我自己的探针就中了这一枪，容器内 `ls .claude` 一下就露出来。
+必须用 `removeprefix('./')`。已固定为单测 ⑰。
+
+**② 4 个评测工作流散落在 `.github/workflows/`，前缀清单抓不到。**
+`judge-calibration.yml` / `eval-weekly.yml` / `eval-pr-smoke.yml` / `northstar-weekly.yml`
+点名 `evals/**`、`scripts/eval/**`、`evals/_judge/calibration-set/`，
+且 `judge-calibration.yml` 把校准集路径与 pairwise 判分方法写在注释里 ——
+正是 §3.8-E 列的泄漏面。
+
+处置按**文件粒度**、不整剔 `.github/`：同目录的 `ci.yml` / `docs-lint.yml` 是无关资产。
+剔除安全性已核：存活测试引用的 `.github` 是 `tests/tool/glob.test.ts:19`
+在**临时目录**里 `mkdirSync` 自建的，不读仓库这份。已固定为单测 ⑲。
+
+## 四、剔除必须顶层锚定（差点打断存活测试）
+
+`packages/core/src/skill/builtin/*/evals/` 下 61 个文件是 **skill 的 baseline case，
+属于真实仓库资产**，且 `tests/skill/code-review.test.ts:66` 明确断言该目录存在。
+按子串剔 `evals` 会打断这些**存活测试**。
+
+所以判据是 `n == p or n.startswith(p)`（p 自带尾 `/`），只锚顶层；
+尾 `/` 也是契约的一部分 —— 少了它 `evals` 会误命中 `evals-foo/`。
+
+剔除对测试的净影响已用对照量化（同一 base，剔除 vs 未剔除，均 `--network none`）：
+
+| | 未剔除 | 剔除后 | 差 |
+|---|---|---|---|
+| pass | 4809 | 4549 | 移除了 23 个测试文件 |
+| fail | 59 | 55 | **新增失败 2 条** |
+
+新增的 2 条是 `tests/skill/{incident-rca,security-audit}.test.ts` 断言
+`scripts/eval/run-*-skill.ts` **落盘存在** —— 它们直接指向被剔的 runner，
+属于「测试评测机制本身」，本就不该进 P2P 名单。
+**T3 采 P2P 时必须在剔除后的快照上采**（§4.9 衔接①），这 2 条会自然落选。
+
+## 五、⚠️ 5 条 `ruijie/iam-studio-fe` 没有可构建的 env
+
+`anka-app/packages/{tag-studio,risk-query-studio}` 依赖
+`@ruijie/{utils,eslint-config,typescript-config,crypto-interceptor}`，
+它们**只存在于内网私有 registry**（地址见 base 时点的 `anka-app/.npmrc`，本报告
+刻意不记具体 IP:端口 —— 判读只需要「私有 registry + 需凭据」这个事实），公网 registry 404
+（实测 `ERR_PNPM_FETCH_404`）。拉它必须带 `anka-app/.npmrc` 里的 `_authToken`。
+
+运行期 `--network none` 要求依赖在**构建期**装好，而装它就得把凭据烤进镜像 ——
+**违反 §T4「不在容器里配私钥」**。所以这 5 条记 `drop_reason=registry_unreachable`，
+不产快照。这是纪律决定，不是技术障碍：内网当前可达（`nc` 通），
+但把凭据写进 task 镜像会让产物无法对外分发。
+
+影响可接受：存活 65 条全是 `person/sid-code`，仍远超 40 条底线。
+代价是**benchmark 退化为单仓库**，这条要写进 T7 的 dataset card Limitations。
+
+## 六、步骤④为什么不能省，以及它非空转的证据
+
+T2 在 **mirror 真实 commit** 上验 `apply --check`；T4 的快照**剔除过泄漏路径**。
+patch 若触及被剔的路径，**两处验收都通过、容器里必然失败** —— 单看 T2 或单看 T4
+都发现不了（§4.9 衔接②）。
+
+65 条全过。但「全过」本身可疑，所以两层守卫各做了反向对照：
+
+| 对照 | 注入 | 结果 |
+|---|---|---|
+| 路径守卫 | 把 `src/` `tests/` 也当泄漏面（必中 patch 路径） | **6/6 报红**，逐条列出被剔路径 |
+| `apply --check` 层 | 往 hunk 上下文塞一行 base 里不存在的内容 | **4/4 报红** |
+| 顶层锚定退化成子串匹配 | `--selftest-substring-leak` | **6/6 报红**，退出码 3 |
+
+## 七、⚠️ 我的反向自证自己坏过一次（形态值得记）
+
+第一版 `--selftest-substring-leak` 写成「剔除量 > 900 就算报红」。
+实测最大只有 829 —— **阈值是拍的**，于是这个自证**自称检查却永远返回绿**，
+正是它要防的那类「绿着坏掉」。
+
+修法：不比绝对值，比**同一个 base 上严格版与退化版的差分**。
+判据变成不变式而非魔法数 —— 退化后必然多剔到真实资产，所以「多剔量 > 0」
+就是充分条件。修完后 6/6 报红，多剔 57 个/条。
+
+**教训**：门禁自己也要被门禁验。写完自证要问「它在什么情况下会报红」，
+并真的让它报一次 —— 我这次就是靠「它该红却是绿的」发现阈值是拍的。
+
+## 八、其它实测细节
+
+- **`git add -A` 会漏掉「被 gitignore 但已入库」的文件**。iam 的
+  `anka-app/pnpm-lock.yaml` 正是这种，漏了它 `--frozen-lockfile` 直接失败。
+  必须 `git add -A -f`。
+- **`git archive` 而不是 `git bundle`**（沿用方案结论）。另外不落中间 tar 到磁盘 ——
+  边流边剔，54 个 base 各 23MB，没必要在工作区堆一遍。
+- **容器内 `git init` 单 commit**，历史深度实测 = 1：`test.sh` 需要 `git apply` 打
+  test_patch、`git checkout -- tests/` 还原被 agent 动过的测试；且不带历史顺带
+  消除「agent 翻 git log 找答案」这条泄漏路径。
+- **429MB 快照已加进 `.gitignore`**：它含私有仓库源码，且是可复现产物
+  （脚本 + mirror + `resolved.jsonl` 可重建），校验和记在 `snapshots.jsonl` 里。
+- **`bun test` 命令从 base 时点的 `package.json` 读**（§3.5）：62 条是 `bun test`，
+  3 条 monorepo base 是 `bun test --test-name-pattern '^(?!.*\[slow\])'`。
+  已写进 `snapshots.jsonl` 的 `test_cmd`，供 T3 生成 `test.sh` 时引用。
+- 镜像装了 `ripgrep`（实测 `/usr/bin/rg`，14.1.1）：`tests/tool/ripgrep.test.ts`
+  有 17 处引用 `hasRipgrep` / `ripGrep`，不装它们在容器内必败（会污染 P2P 名单）。
+  ⚠️ **这解释了本报告里两组不同的基线数**：§4 的对照表用的是**探针镜像**（未装
+  ripgrep，4549 pass / 55 fail），§1 的一致性用的是**正式产物**（已装，4577 / 27）。
+  差值主要就是那 13 个 ripgrep 用例。**比对基线时必须同镜像同条件** —— 跨镜像比数字
+  会把「工具缺失」误读成「剔除打断了测试」。
+
+## 九、交给下游的三件事
+
+1. **T3 采 P2P 必须用本 task 的剔除后快照**（§4.9 衔接①）。
+   `tasks/T####/environment/repo-snapshot.tar.gz` 即输入；
+   在 mirror 原始 commit 上采会采到已被剔除的测试 → **P2P 恒败 → 全部 reward=0**，
+   形态像「task 太难」。上面 §4 那 2 条断言 runner 落盘的测试是现成的例子。
+2. **`snapshots.jsonl` 的字段供 T3 回写 `meta.json` 的 `snapshot`**：
+   `tar_sha256` / `tar_bytes` / `n_files_stripped` / `stripped_top_dirs` /
+   `eval_framework_mode` / `test_cmd`。
+3. **T7 的 dataset card Limitations 要写两条**：单仓库（iam 因内网 registry 被挡）、
+   以及 stub / 保留 manifest 这两处残余泄漏面的处置与论证。
