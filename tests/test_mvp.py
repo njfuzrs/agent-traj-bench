@@ -19,7 +19,23 @@
           ⑧ 条件⑤写成 in ('none','low') 必须把候选池筛成 0（§3.1 陷阱）
           ⑨ 八条筛选链的顺序固定 —— funnel 的逐条剩余数是对账依据
   T3 格式 ⑩ 生成的 task 目录要能被 harbor 的 `Task.is_valid_dir()` 认（§3.8-B）
-  骨架    ⑪ 未实现的 T2/T3/T4/T5/T7 必须以非零码退出，不许静默产出空结果
+  骨架    ⑪ 尚未实现的 T5/T7 必须以非零码退出，不许静默产出空结果
+             （T2/T3/T4 已于 2026-09-08 实现，各归 ⑫-⑯ / ㉒-㉙ / ⑰-㉑ 管）
+  T2      ⑫-⑯ 反解 base+patch 的五条实测判定（⑫⑯ 方案里没有）
+  T4      ⑰-㉑ 快照剔除泄漏面 + 步骤④交叉验收
+  T3      ㉒-㉙ 判分链路的七条实测判定，其中四条是本轮实测纠正方案的写法：
+             ㉒ reward 文件名是 `reward.json`（单数）—— 方案写的复数 harbor 不读，
+                且**静默降级**成读 reward.txt，f2p/p2p 两键永远不进 result.json
+             ㉓㉔ junit XML 会**整份漏掉加载失败的文件**（root failures=0 却有文件没跑）
+                → 判分必须核对文件覆盖，XML 缺失/空名单一律判 0 且不抛异常
+             ㉕ `--3way` 前必须刷 index —— tar 解包后全库 stat-dirty（实测 1215/1215），
+                不刷则 100% 报 does not match index，而纯 apply 无此问题（两层都测不出）
+             ㉖ 测试保护按**路径**逐个还原，不按目录（4 条 task 的测试在 tests/ 之外；
+                而 clean -fd src/ 会删掉 agent 新建的源码）
+             ㉗ 每条退出路径都写 reward，先无条件覆盖为 0
+             ㉘ F2P 必须在 base 上是红的，全绿即 `is_f2p:false`（nop 也能满分）
+             ㉙ task.toml 要能被 harbor 的 TaskConfig 解析、题面不许为空
+                （`is_valid_dir()` 只查文件存在，空题面照样报 VALID）
 
 用法：
     python3 -m pytest scripts/mvp/tests/test_mvp.py -v
@@ -472,7 +488,7 @@ def test_task_dir_missing_test_script_is_invalid(tmp_path):
     [
         # T2 已在 2026-09-08 实现，从这张名单里移出（它现在归下面的 ⑫-⑯ 管）
         # T4 已在 2026-09-08 实现，归下面的 ⑰-㉑ 管
-        "t3-build-harbor-tasks.py",
+        # T3 已在 2026-09-08 实现，归下面的 ㉒-㉘ 管
         "t5-gate.sh",
         "t7-baseline.sh",
     ],
@@ -963,3 +979,298 @@ def test_t4_cross_verify_catches_patch_touching_stripped_path():
         assert "被剔除路径" in (res["cross_fail_reason"] or "")
     finally:
         t4.LEAK_PREFIXES = keep
+
+
+# ── ㉒-㉗ T3：harbor task 生成（2026-09-08 实现） ────────────────────
+
+
+def code_lines(script: str) -> str:
+    """剥掉 shell/python 的注释行**与 python docstring**，只留可执行部分。
+
+    生成的 `test.sh` 与 `score.py` 的注释与 docstring 里**大量在讲「不要写成 X」**
+    （`rewards.json`、`git clean -fd src/`…）。整文串查会命中这些解释文字，
+    让「禁止出现 X」的断言恒假 —— 第一版三条断言就是这么误报的。
+
+    ⚠️ 只剥 `#` 行还不够：`score.py` 的模块 docstring 是 `\"\"\"` 块，
+    里面整段在解释「harbor 没有 rewards.json 这个名字」。第二版又中了一次。
+    """
+    out: list[str] = []
+    in_doc = False
+    for ln in script.splitlines():
+        fence = ln.count('"""')
+        if in_doc:
+            if fence:
+                in_doc = False
+            continue
+        if ln.lstrip().startswith("#"):
+            continue
+        if fence == 1:  # docstring 起始（成对出现在同一行的不算）
+            in_doc = True
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def load_t3():
+    spec = importlib.util.spec_from_file_location("t3_build", MVP / "t3-build-harbor-tasks.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_t3_p2p():
+    spec = importlib.util.spec_from_file_location("t3_p2p", MVP / "t3-sample-p2p.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_t3_reward_file_is_singular_reward_json():
+    """㉒ reward 文件名必须是 `reward.json`（单数）—— 方案写的复数 harbor 不读。
+
+    核 harbor 源码 `models/trial/paths.py`：`reward_json_path = verifier_dir / "reward.json"`。
+    写成 `rewards.json` 的后果**不是报错而是静默降级** —— harbor 退回读 `reward.txt`
+    （单值），`f2p` / `p2p` 两个键永远不进 result.json，门禁退化成单值判定（§3.8-D）。
+    """
+    t3 = load_t3()
+    score = t3.score_py()
+    assert '"reward.json"' in score or "'reward.json'" in score
+    # 反向：不许出现复数名（那个名字 harbor 永远不会读）。
+    # ⚠️ 只查**可执行行**：两个脚本的注释里都在讲「不要写 rewards.json」这件事，
+    # 整文串查会命中解释文字本身（第一版就这么误报的）。
+    assert "rewards.json" not in code_lines(score)
+    test = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], [], [], "bun test")
+    assert "rewards.json" not in code_lines(test)
+
+
+def test_t3_score_py_requires_file_coverage_not_just_failures():
+    """㉓ 判分必须核对**文件覆盖**，不能只读 failures —— junit 会整份漏掉加载失败的文件。
+
+    实测形态：`bun test --reporter=junit good.test.ts loadfail.test.ts` 的 XML 根节点是
+    `tests="6" failures="0"`（看着全绿），日志却是 `6 pass / 1 fail / 1 error`。
+    加载失败的文件不生成 `<testsuite>` 节点，从 XML 里整个消失。
+    只读 failures 会把「测试根本没跑起来」判成满分 —— R1「绿着坏掉」的一个新形态。
+    """
+    src = t3 = load_t3().score_py()
+    assert "def side_score" in src
+    assert "missing" in src, "必须记录哪些文件没出现在 XML 里"
+    assert "no_tests" in src, "零用例的文件不构成回归保护，必须单独标记"
+    del t3
+
+
+def _run_side_score(tmp_path, xml_text: str | None, required: list[str]):
+    """在临时目录里跑 score.py 的 side_score 逻辑（改写 VERIFIER_DIR 后 exec）。"""
+    t3 = load_t3()
+    src = t3.score_py()
+    src = src.replace('VERIFIER_DIR = Path("/logs/verifier")', f'VERIFIER_DIR = Path(r"{tmp_path}")')
+    src = src.replace('F2P_FILES = json.loads(Path("/tests/f2p.json").read_text())', "F2P_FILES = []")
+    src = src.replace('P2P_FILES = json.loads(Path("/tests/p2p.json").read_text())', "P2P_FILES = []")
+    if xml_text is not None:
+        (tmp_path / "x.xml").write_text(xml_text, encoding="utf-8")
+    ns: dict = {}
+    exec(compile(src, "score.py", "exec"), ns)
+    return ns["side_score"]("x.xml", required)
+
+
+def test_t3_score_py_scores_zero_when_file_silently_missing_from_xml(tmp_path):
+    """㉓' 同上，行为验证：XML 全绿但少一个文件 → 必须判 0，不许给满分。
+
+    这是本轮实测抓到的真实形态（见 t3-sample-p2p.py docstring），
+    构造成单测钉住：XML 里只有 good，required 里还有 loadfail。
+    """
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<testsuites name="bun test" tests="6" failures="0">\n'
+        '  <testsuite name="good" file="tests/good.test.ts" tests="6" failures="0"/>\n'
+        "</testsuites>\n"
+    )
+    score, detail = _run_side_score(tmp_path, xml, ["tests/good.test.ts", "tests/loadfail.test.ts"])
+    assert score == 0.0, "加载失败的文件从 XML 消失，却给了满分 —— 判分是坏的"
+    assert detail["missing"] == ["tests/loadfail.test.ts"]
+
+
+def test_t3_score_py_zero_when_xml_missing_and_does_not_raise(tmp_path):
+    """㉔ XML 不存在 → 判 0 且**不抛异常**（规则1：每条路径都要写 reward）。
+
+    实测：只跑一个加载失败的文件时，bun **连 XML 都不写**，这条路径真实会走到。
+    抛异常的形态是 trial error，会被误读成基础设施坏了而不是 task 没过。
+    """
+    score, detail = _run_side_score(tmp_path, None, ["tests/x.test.ts"])
+    assert score == 0.0
+    assert detail["error"] == "xml_missing"
+
+
+def test_t3_score_py_empty_file_list_is_not_full_marks(tmp_path):
+    """㉔' 空名单必须判 0 —— 那是「没有判据」，不是「通过了」。
+
+    若空名单给满分，一条采不到 P2P 的 task 会拿着 p2p=1 混过 T5 的门禁。
+    """
+    xml = '<?xml version="1.0"?>\n<testsuites tests="0" failures="0"></testsuites>\n'
+    score, detail = _run_side_score(tmp_path, xml, [])
+    assert score == 0.0
+    assert detail["error"] == "empty_file_list"
+
+
+def test_t3_refreshes_git_index_before_3way_apply():
+    """㉕ `--3way` 前必须 `git update-index --refresh` —— 否则 100% 报 does not match index。
+
+    T4 的镜像用 `tar -xzf` 解包再 `git add -A` + commit，解出的文件 mtime 与 index
+    不一致：实测 `git diff-files | wc -l` = **1215**（快照里每个文件都 stat-dirty），
+    刷新后归 0。`--3way` 要查 index 做三方合并，stat-dirty 就拒绝动手；
+    纯 `git apply` 只碰工作区，所以 T2/T4 的 `apply --check` 全过、发现不了。
+
+    形态很危险：oracle 的 `solve.sh` 失败 → 代码没改 → `test.sh` 照样跑完给分，
+    看着像「参考解不对」而不是「patch 根本没打上」。
+    """
+    t3 = load_t3()
+    solve = t3.solve_sh()
+    assert "update-index" in solve, "solve.sh 缺 index 刷新，--3way 必报 does not match index"
+    assert solve.index("update-index") < solve.index("git apply"), "刷新必须在 apply 之前"
+    test = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], [], [], "bun test")
+    assert "update-index" in test, "test.sh 打 test_patch 前也要刷 index"
+    assert test.index("update-index") < test.index("git apply"), "刷新必须在 apply 之前"
+
+
+def test_t3_test_protection_is_per_path_not_per_directory():
+    """㉖ 测试保护必须按**路径**还原，不能 `git clean -fd tests/`。
+
+    两个理由，都是实测数据：
+      ① 65 条 task 里 **4 条的测试文件不在 `tests/` 下**（src/ 3 个 + packages/ 2 个）
+         —— 只还原 tests/ 会漏掉它们。
+      ② 而把范围扩到 `git clean -fd src/` 更糟：**会删掉 agent 新建的源码文件**，
+         即删掉它的解答本体，形态是「agent 明明写了代码却判 0」。
+    """
+    t3 = load_t3()
+    test = t3.test_sh(
+        "T0001",
+        ["src/ui/x.test.ts"],
+        ["tests/b.test.ts"],
+        restore=["tests/b.test.ts"],
+        remove=["src/ui/x.test.ts"],
+        test_cmd="bun test",
+    )
+    # 只查可执行行：注释里正在解释「为什么不能这么写」，整文串查会命中解释文字
+    body = code_lines(test)
+    assert "git clean -fd tests/" not in body, "按目录 clean 会漏掉 tests/ 之外的 11 个测试文件"
+    assert "git clean -fd src/" not in body, "clean src/ 会删掉 agent 新建的源码（它的解答本体）"
+    assert "git checkout -- 'tests/b.test.ts'" in test
+    assert "rm -f 'src/ui/x.test.ts'" in test
+
+
+def test_t3_test_sh_writes_reward_on_every_path():
+    """㉗ 规则1+2：每条退出路径都写 reward，且开头先无条件覆盖为 0。
+
+    「文件已存在就不写」的分支等于让 agent 自己往 reward 里写个 1。
+    apply 失败那条路径必须 `exit 0`（要 reward=0，不要 trial error）。
+    """
+    t3 = load_t3()
+    test = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], [], [], "bun test")
+    head = test.split("cd /repo")[0]
+    assert "echo 0 > /logs/verifier/reward.txt" in head, "必须先无条件覆盖为 0"
+    assert "reward.json" in head, "reward.json 也要先落一个 0，否则 harbor 可能读到 agent 写的"
+    assert "if [ ! -f" not in test, "不许有「文件已存在就不写」的分支"
+    # ⚠️ 按 "\nfi" 切，不能按 "fi" —— 后者会先命中 "/logs/verifier" 里的 fi，
+    # 把分支截断成 '" >> /logs/veri'，断言随即误报（第一版就中了这一枪）
+    apply_branch = test.split("TEST_PATCH_APPLY_FAILED")[1].split("\nfi")[0]
+    assert "exit 0" in apply_branch, "apply 失败要 reward=0 而不是 trial error"
+    assert '"f2p":0.0' in apply_branch and '"p2p":0.0' in apply_branch
+
+
+def test_t3_f2p_precheck_treats_green_at_base_as_not_f2p():
+    """㉘ F2P 自检的判据：不改代码时**必须红**，全绿即 `is_f2p=False`。
+
+    实测 T0001（`test_authoring`）在 base 上就 14 pass / 0 fail —— 它的新测试测的是
+    已有行为，于是 `nop`（空 patch）也能满分，oracle 与 nop 的分无法区分。
+    这条判据放在采 P2P 时做，因为那时容器本来就活着；留给 T5 要重建 50 个镜像（约 2.5h）。
+    """
+    p2p = load_t3_p2p()
+    # 纯函数部分：parse_green 的三条判据（出现 + 无失败 + 有用例）
+    assert callable(p2p.f2p_precheck)
+    assert p2p.P2P_MIN == 20 and p2p.P2P_MAX == 30, "口径②：20-30 个文件"
+    assert p2p.P2P_MARGIN > 0, "复跑要留余量，否则 flaky 踢掉几个就跌破下限"
+
+
+def test_t3_parse_green_requires_file_to_appear_in_xml(tmp_path):
+    """㉘' 采样侧同一条判据：加载失败的文件不在 XML 里，不许被当成绿。
+
+    采样侧误判为绿的后果是它进了 P2P 名单 → 容器里恒败 → reward 全 0，
+    形态像「task 太难」。与判分侧是同一个坑的两个面。
+    """
+    p2p = load_t3_p2p()
+    xml = tmp_path / "g.xml"
+    xml.write_text(
+        '<?xml version="1.0"?>\n<testsuites tests="6" failures="0">\n'
+        '  <testsuite file="tests/good.test.ts" tests="6" failures="0"/>\n'
+        '  <testsuite file="tests/empty.test.ts" tests="0" failures="0"/>\n'
+        "</testsuites>\n",
+        encoding="utf-8",
+    )
+    green, _ = p2p.parse_green(xml)
+    assert "tests/good.test.ts" in green
+    assert "tests/empty.test.ts" not in green, "零用例不构成回归保护"
+    assert "tests/loadfail.test.ts" not in green, "没出现在 XML 里的文件不许当绿"
+    # XML 不存在 → 空绿名单而不是异常
+    green2, summary2 = p2p.parse_green(tmp_path / "nope.xml")
+    assert green2 == {} and summary2.get("xml_missing") is True
+
+
+def test_t3_generated_task_toml_parses_as_harbor_config():
+    """㉙ 生成的 `task.toml` 必须能被 harbor 的 `TaskConfig` **解析**，不只是目录合法。
+
+    `Task.is_valid_dir()` 只查文件存在与否 —— 它对 `task.toml` 的**内容**一无所知。
+    实测过一次同源的教训：题面写空了、`is_valid_dir` 照样报 VALID（见 instruction_md）。
+    所以这里让 harbor 自己把 toml 喂进 pydantic，schema 不合会直接抛。
+
+    顺带钉住三个 timeout 都显式落到了配置里（对应 R2 双层超时互掩）。
+    """
+    if not HARBOR_PYTHON.exists():
+        pytest.skip(f"未找到 harbor 自带解释器: {HARBOR_PYTHON}")
+    task_dirs = sorted(p for p in c.MVP_TASKS.glob("T*") if (p / "task.toml").exists())
+    if not task_dirs:
+        pytest.skip("T3 还没生成任何 task（需要先跑 t3-sample-p2p.py + t3-build-harbor-tasks.py）")
+    proc = subprocess.run(
+        [
+            str(HARBOR_PYTHON),
+            "-c",
+            "import sys, tomllib, json\n"
+            "from pathlib import Path\n"
+            "from harbor.models.task.config import TaskConfig\n"
+            "out = []\n"
+            "for d in sys.argv[1:]:\n"
+            "    cfg = TaskConfig.model_validate(tomllib.loads((Path(d)/'task.toml').read_text()))\n"
+            "    out.append([cfg.schema_version, cfg.agent.timeout_sec,\n"
+            "                cfg.verifier.timeout_sec, cfg.environment.build_timeout_sec,\n"
+            "                sorted(cfg.metadata)])\n"
+            "print(json.dumps(out))\n",
+            *[str(p) for p in task_dirs],
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"harbor 解析 task.toml 失败：\n{proc.stdout}\n{proc.stderr[-1500:]}"
+    rows = json.loads(proc.stdout)
+    assert len(rows) == len(task_dirs)
+    for schema, agent_t, verifier_t, build_t, meta_keys in rows:
+        assert schema == "1.4"
+        # 三个 timeout 一个都不能是 None —— 只设一层时外层先杀会掩盖内层真实超时
+        assert agent_t and verifier_t and build_t
+        assert "base_commit" in meta_keys and "task_id" in meta_keys
+
+
+def test_t3_generated_tasks_have_nonempty_instruction():
+    """㉙' 已生成的 task 题面**不许为空** —— 空题面不会被任何格式校验抓到。
+
+    第一版就写空过 65 条：`instruction_clean` 只在 `candidates.jsonl` 里，
+    从 `resolved.jsonl` 取会得到 None，而 `is_valid_dir()` 仍报 VALID。
+    形态是「agent 拿到一道没题目的题，全批 reward=0，看着像 task 太难」。
+    """
+    task_dirs = sorted(p for p in c.MVP_TASKS.glob("T*") if (p / "instruction.md").exists())
+    if not task_dirs:
+        pytest.skip("T3 还没生成任何 task")
+    for d in task_dirs:
+        text = (d / "instruction.md").read_text(encoding="utf-8")
+        body = text.split("## 环境事实")[0].strip()
+        assert body, f"{d.name} 的题面是空的（只剩环境事实段）"
+        assert len(body) >= 10, f"{d.name} 的题面只有 {len(body)} 字，疑似截断：{body!r}"
