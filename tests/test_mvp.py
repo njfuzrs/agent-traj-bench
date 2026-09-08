@@ -23,7 +23,7 @@
              （T2/T3/T4 已于 2026-09-08 实现，各归 ⑫-⑯ / ㉒-㉙ / ⑰-㉑ 管）
   T2      ⑫-⑯ 反解 base+patch 的五条实测判定（⑫⑯ 方案里没有）
   T4      ⑰-㉑ 快照剔除泄漏面 + 步骤④交叉验收
-  T3      ㉒-㉙ 判分链路的七条实测判定，其中四条是本轮实测纠正方案的写法：
+  T3      ㉒-㉚ 判分链路的八条实测判定，其中四条是本轮实测纠正方案的写法：
              ㉒ reward 文件名是 `reward.json`（单数）—— 方案写的复数 harbor 不读，
                 且**静默降级**成读 reward.txt，f2p/p2p 两键永远不进 result.json
              ㉓㉔ junit XML 会**整份漏掉加载失败的文件**（root failures=0 却有文件没跑）
@@ -36,6 +36,10 @@
              ㉘ F2P 必须在 base 上是红的，全绿即 `is_f2p:false`（nop 也能满分）
              ㉙ task.toml 要能被 harbor 的 TaskConfig 解析、题面不许为空
                 （`is_valid_dir()` 只查文件存在，空题面照样报 VALID）
+             ㉚ 生成的 shell 要过 `bash -n`，且含引号/空格的路径不能破语法
+                （3 条 monorepo 的 test_cmd 自带带引号的正则）
+          ㉛-㉝ P2P **真实产物**的对账（没跑过采样就跳过）：不与自身 patch 重叠、
+                不含 T4 的两个 canary（含即证明采错了文件树）、名单不短于下限
 
 用法：
     python3 -m pytest scripts/mvp/tests/test_mvp.py -v
@@ -1274,3 +1278,93 @@ def test_t3_generated_tasks_have_nonempty_instruction():
         body = text.split("## 环境事实")[0].strip()
         assert body, f"{d.name} 的题面是空的（只剩环境事实段）"
         assert len(body) >= 10, f"{d.name} 的题面只有 {len(body)} 字，疑似截断：{body!r}"
+
+
+def test_t3_generated_shell_is_syntactically_valid_and_quote_safe():
+    """㉚ 生成的 `test.sh` / `solve.sh` 必须过 `bash -n`，且路径里的引号不能破语法。
+
+    两个真实风险点：
+      ① 3 条 monorepo base 的 `test_cmd` 自带**带引号的正则**
+         （`bun test --test-name-pattern '^(?!.*\\[slow\\])'`），它被原样插进脚本。
+      ② 测试路径来自仓库。虽然实测没有含单引号的路径，但生成器**不该假定**输入干净 ——
+         `sh_single_quote()` 就是为此存在的，这里注入一个含单引号的路径验证它。
+
+    语法错的形态是 `test.sh` 一进容器就崩 → reward 文件只剩开头那个 0 → 全批 0 分。
+    """
+    t3 = load_t3()
+    cases = [
+        ("bun test", ["tests/a.test.ts"]),
+        # monorepo 的真实命令，含单引号包裹的 negative-lookahead 正则
+        ("bun test --test-name-pattern '^(?!.*\\[slow\\])'", ["tests/b.test.ts"]),
+    ]
+    # 故意注入含单引号的路径：POSIX 转义没写对的话 bash -n 会直接报错
+    nasty = ["tests/it's-here.test.ts", 'tests/say-"hi".test.ts', "tests/a b.test.ts"]
+    for test_cmd, f2p in cases:
+        sh = t3.test_sh("T0001", f2p, nasty, restore=f2p + nasty, remove=nasty, test_cmd=test_cmd)
+        proc = subprocess.run(["bash", "-n"], input=sh, capture_output=True, text=True)
+        assert proc.returncode == 0, f"test.sh 语法错（cmd={test_cmd}）：{proc.stderr[:300]}"
+    proc = subprocess.run(["bash", "-n"], input=t3.solve_sh(), capture_output=True, text=True)
+    assert proc.returncode == 0, f"solve.sh 语法错：{proc.stderr[:300]}"
+    # score.py 必须是合法 python
+    compile(t3.score_py(), "score.py", "exec")
+
+
+# ── P2P 真实产物的对账（跑过 t3-sample-p2p.py 才有，没有就跳过） ─────
+
+
+def _p2p_rows():
+    path = c.MVP_META / "p2p.jsonl"
+    if not path.exists():
+        pytest.skip("还没跑 t3-sample-p2p.py（要起容器，几十分钟）")
+    rows = list(c.read_jsonl(path))
+    if not rows:
+        pytest.skip("p2p.jsonl 是空的")
+    return rows
+
+
+def test_t3_p2p_never_overlaps_the_tasks_own_patched_files():
+    """㉛ P2P 名单不许包含该 task 自己 patch 触及的文件。
+
+    重叠的后果：同一个文件既当 F2P（要求打完 patch 才过）又当 P2P（要求 base 上就过），
+    两个要求互相矛盾 —— 而矛盾会以「P2P 恒败」的形式出现，看着像 task 太难。
+    """
+    snaps = {r["task_id"]: r for r in c.read_jsonl(c.MVP_META / "snapshots.jsonl") if r.get("ok")}
+    resolved = {r["unit_id"]: r for r in c.read_jsonl(c.RESOLVED) if r.get("ok")}
+    n = 0
+    for rec in _p2p_rows():
+        for tid, p2p in (rec.get("p2p") or {}).items():
+            touched = set(resolved[snaps[tid]["unit_id"]]["files"])
+            overlap = touched & set(p2p)
+            assert not overlap, f"{tid} 的 P2P 与自己 patch 触及的文件重叠：{overlap}"
+            n += 1
+    assert n, "p2p.jsonl 里没有任何 task 的名单"
+
+
+def test_t3_p2p_excludes_the_t4_canary_files():
+    """㉜ T4 交接的两个 canary 不许进 P2P —— 它们在，就说明采样跑在了错的文件树上。
+
+    `tests/skill/{incident-rca,security-audit}.test.ts` 断言被剔除的 runner 落盘存在
+    （`t4-env.md` §9.2）。在剔除后的快照上采样会自然排除它们，所以它们出现即证明
+    **采到了未剔除的文件树** → P2P 恒败 → 全批 reward=0，形态像「task 太难」。
+    """
+    canary = {"tests/skill/incident-rca.test.ts", "tests/skill/security-audit.test.ts"}
+    for rec in _p2p_rows():
+        assert not rec.get("canary_leaked"), f"{rec['base_commit'][:8]} canary 泄漏"
+        for tid, p2p in (rec.get("p2p") or {}).items():
+            leak = canary & set(p2p)
+            assert not leak, f"{tid} 采到了被剔除的测试 {leak} —— 采样跑在了错的文件树上"
+
+
+def test_t3_p2p_lists_meet_the_size_floor():
+    """㉝ 达标 base 的每条 task 的 P2P 名单不少于下限（口径②：20-30 个文件）。
+
+    名单过短会让「防回归」这层保护形同虚设；空名单更糟 —— `score.py` 对空名单判 0
+    （见 ㉔'），但那时形态是「所有 task 的 p2p 都是 0」，容易被误读成判分坏了。
+    """
+    p2p_mod = load_t3_p2p()
+    for rec in _p2p_rows():
+        if not rec.get("ok"):
+            continue
+        for tid, lst in (rec.get("p2p") or {}).items():
+            assert len(lst) >= p2p_mod.P2P_MIN, f"{tid} 的 P2P 只有 {len(lst)} 个"
+            assert len(lst) == len(set(lst)), f"{tid} 的 P2P 名单有重复"
