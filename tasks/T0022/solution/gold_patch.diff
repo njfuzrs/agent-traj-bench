@@ -1,0 +1,1638 @@
+diff --git a/src/app.ts b/src/app.ts
+index ea1baf0..2e352bc 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -12,6 +12,7 @@ import type {
+ } from "./llm/types.ts";
+ import type { Config } from "./config/config.ts";
+ import type { Checker } from "./permission/types.ts";
++import { isBypassDisabledByPolicy, isModeDisabledByPolicy } from "./permission/mode-policy.ts";
+ import type { ProviderRegistry } from "./llm/registry.ts";
+ import type { MCPManager } from "./mcp/manager.ts";
+ import type { PlanModeManager } from "./plan/state.ts";
+@@ -210,8 +211,8 @@ export class App {
+   private sessionIdForCompact = "";
+   /** 当前生效的项目规则（CLAUDE.md）内存缓存，供运行时重建系统提示词复用 */
+   private currentProjectRules: ProjectRules | null = null;
+-  /** TUI 模式下的权限确认回调（由 TUI 注入），返回 "yes" | "no" | "always" */
+-  private tuiConfirmCallback: ((toolName: string, toolInput: unknown, desc: string, shadowedRules?: import("./ui/App.tsx").ShadowedRuleInfo[]) => Promise<"yes" | "no" | "always">) | null = null;
++  /** TUI 模式下的权限确认回调（由 TUI 注入），返回 "yes" | "no" | "always" | "always-persist" */
++  private tuiConfirmCallback: ((toolName: string, toolInput: unknown, desc: string, shadowedRules?: import("./ui/App.tsx").ShadowedRuleInfo[]) => Promise<"yes" | "no" | "always" | "always-persist">) | null = null;
+   /** TUI 状态更新回调（由 TUI 注入，用于同步 permissionMode 等状态） */
+   private tuiStateUpdater: ((patch: Record<string, unknown>) => void) | null = null;
+   /** 幂等保护：init() 只执行一次 */
+@@ -250,7 +251,10 @@ export class App {
+     // 键盘循环能否切到 always-allow(bypass)由「启动时是否开了 skip-perms」决定——
+     // 用启动瞬间的稳定快照,而非运行时 config.skipPermissions(cyclePermissionMode 会改写它,
+     // 用实时值会让 bypass 可用性随循环漂移)。见 cyclePermissionMode。
+-    this.bypassAvailableAtLaunch = opts.config.skipPermissions === true;
++    // P2-2：bypass 可用性额外受企业策略 killswitch 门控——即使启动开了 skip-perms，
++    // 若 managed settings 设 disableBypassPermissionsMode=disable，则 bypass 强制不可用。
++    this.bypassAvailableAtLaunch =
++      opts.config.skipPermissions === true && !isBypassDisabledByPolicy();
+     this.provider = opts.provider;
+     this.providerRegistry = opts.providerRegistry;
+     this.mcpManager = opts.mcpManager;
+@@ -2496,7 +2500,7 @@ export class App {
+   }
+ 
+   /** 设置 TUI 模式下的权限确认回调 */
+-  setTUIConfirmCallback(cb: (toolName: string, toolInput: unknown, desc: string, shadowedRules?: import("./ui/App.tsx").ShadowedRuleInfo[]) => Promise<"yes" | "no" | "always">): void {
++  setTUIConfirmCallback(cb: (toolName: string, toolInput: unknown, desc: string, shadowedRules?: import("./ui/App.tsx").ShadowedRuleInfo[]) => Promise<"yes" | "no" | "always" | "always-persist">): void {
+     this.tuiConfirmCallback = cb;
+   }
+ 
+@@ -2518,6 +2522,11 @@ export class App {
+         }
+         return true;
+       }
++      // P2-3：持久化档——把命令归一为规则写入 project settings，跨会话生效，并热更新当前 checker。
++      if (answer === "always-persist") {
++        await this.persistBashAllowRule(req, toolInput);
++        return true;
++      }
+       return answer === "yes";
+     }
+ 
+@@ -2525,6 +2534,57 @@ export class App {
+     return this.config.permissionMode === "always-allow";
+   }
+ 
++  /**
++   * P2-3：把 Bash 命令持久化为 project settings 的 allow 规则（跨会话生效）。
++   *
++   * 归一策略保守（对齐 CC「a 精确记住命令」）：默认用**精确匹配整条命令**生成
++   * `Bash(<command>)` 规则，不自动追加 `*`，避免一次 always 放行过宽。
++   * 写盘后热更新当前 checker（addSessionRule 立即生效 + persistRule 落盘下次会话生效）。
++   */
++  private async persistBashAllowRule(
++    req: import("./permission/types.ts").PermissionRequest | undefined,
++    toolInput: unknown,
++  ): Promise<void> {
++    const log = getLogger();
++    const command = (toolInput as { command?: string })?.command
++      ?? (req?.input as { command?: string } | undefined)?.command
++      ?? "";
++    if (!command.trim()) {
++      // 无命令可归一：退化为会话内记忆，至少本会话不再重复确认
++      if (req && this.permissionChecker?.rememberDecision) {
++        this.permissionChecker.rememberDecision(req, true);
++      }
++      return;
++    }
++
++    // 保守归一：精确匹配整条命令。matchShellRulePattern 对无通配符走精确全串匹配，
++    // 故 Bash(<command>) 能且仅能命中原命令本身。
++    const rule = `Bash(${command.trim()})`;
++
++    try {
++      // ① 热更新当前会话的 checker：立即生效，本轮之后同命令免确认
++      const checker = this.permissionChecker as any;
++      const loader = typeof checker?.getRuleLoader === "function" ? checker.getRuleLoader() : null;
++      if (loader && typeof checker?.refreshRulesFromLoader === "function") {
++        loader.addSessionRule("allow", rule);
++        checker.refreshRulesFromLoader();
++      } else if (req && this.permissionChecker?.rememberDecision) {
++        this.permissionChecker.rememberDecision(req, true);
++      }
++
++      // ② 持久化到 project settings：下次会话仍生效
++      const { persistRule } = await import("./permission/rule-persistence.ts");
++      await persistRule("project", "allow", rule, process.cwd());
++      this.statusNotifier?.("perm_persist", `已持久化允许规则: ${rule}`, 3000);
++      log.info("PERMISSION", `Bash always(持久) → 写入 project settings: ${rule}`);
++    } catch (err) {
++      log.warn("PERMISSION", `持久化允许规则失败(降级为会话内): ${err}`);
++      if (req && this.permissionChecker?.rememberDecision) {
++        this.permissionChecker.rememberDecision(req, true);
++      }
++    }
++  }
++
+   /**
+    * 收集指定工具的阴影规则并投影为 UI 展示结构。
+    * 阴影提示是增强信息，任何异常都返回 undefined，绝不阻断权限确认流程。
+@@ -2907,12 +2967,20 @@ export class App {
+     };
+     // 仅跳过 plan 档：plan 是独立状态机（见上），键盘只改字符串会造假 plan 态。
+     // auto 档已接线 ToolClassifier（cli.ts），可正常进入键盘循环。
++    // P2-2：企业策略禁用的模式（disabledModes / bypass killswitch）也跳过。
++    // 最多绕一整圈（模式数上限）防死循环；全被禁时保持当前模式不变。
+     let next = getNextPermissionMode(ctx);
+-    for (let i = 0; i < 2 && next === "plan"; i++) {
++    for (let i = 0; i < 8 && (next === "plan" || isModeDisabledByPolicy(next)); i++) {
++      if (next === this.config.permissionMode) break; // 绕回原点，无可切换的模式
+       next = getNextPermissionMode({ ...ctx, mode: next });
+     }
+ 
+     if (next === this.config.permissionMode) return; // 无变化不刷屏
++    // 兜底：绕圈后仍落在被禁模式（极端配置），拒绝切换
++    if (isModeDisabledByPolicy(next)) {
++      this.statusNotifier?.("perm_mode_switch", "该权限模式已被企业策略禁用", 2500);
++      return;
++    }
+ 
+     this.config.permissionMode = next;
+     // ⚠️ 关键：skipPermissions / yesMode 是「粘性」执行开关，checker 直接读它们做早退放行
+@@ -4080,9 +4148,9 @@ export class App {
+ 
+     // 设置 TUI 权限确认回调
+     this.setTUIConfirmCallback(async (toolName, toolInput, desc, shadowedRules) => {
+-      return new Promise<"yes" | "no" | "always">((resolve) => {
++      return new Promise<"yes" | "no" | "always" | "always-persist">((resolve) => {
+         log.info("TUI:PERM", `显示权限对话框: ${toolName} - ${desc}`);
+-        const wrappedResolve = (answer: "yes" | "no" | "always") => {
++        const wrappedResolve = (answer: "yes" | "no" | "always" | "always-persist") => {
+           log.info("TUI:PERM", `权限对话框响应: ${answer}`);
+           updateState({ permissionRequest: null });
+           resolve(answer);
+diff --git a/src/cli.ts b/src/cli.ts
+index 2240d4d..c64f453 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -117,6 +117,21 @@ export function extractResumeArg(argv: string[]): {
+   return { present, picker, value, rest };
+ }
+ 
++/**
++ * 归一 --allow-tool / --deny-tool 规则 flag（P2-1）。
++ * parseArgs multiple:true 给出 string[]（未传为 undefined）；每项再按逗号拆分并去空。
++ * 返回 undefined（未传）或去重后的规则数组。
++ */
++function normalizeRuleFlag(raw: unknown): string[] | undefined {
++  if (raw === undefined) return undefined;
++  const items = Array.isArray(raw) ? raw : [raw];
++  const rules = items
++    .flatMap((s) => String(s).split(","))
++    .map((s) => s.trim())
++    .filter(Boolean);
++  return rules.length > 0 ? Array.from(new Set(rules)) : undefined;
++}
++
+ /** 解析命令行参数 */
+ function parseCLIArgs(): CLIArgs {
+   let values: Record<string, any>;
+@@ -141,6 +156,9 @@ function parseCLIArgs(): CLIArgs {
+         // 缺口 C1 §5.3：预授权工具白名单（守护进程无头 job 注入；逗号分隔）
+         "allowed-tools": { type: "string" },
+         "disallowed-tools": { type: "string" },
++        // P2-1：CLI 权限规则（cliArg 源，规则语法如 "Bash(curl *)"；可多次传或逗号分隔）
++        "allow-tool": { type: "string", multiple: true },
++        "deny-tool": { type: "string", multiple: true },
+ 
+         // 会话配置
+         // 注意：resume（-r）不在此声明——它是可选值语义（`-r` 可不带值开选择器），
+@@ -235,6 +253,10 @@ function parseCLIArgs(): CLIArgs {
+     disallowedTools: values["disallowed-tools"]
+       ? String(values["disallowed-tools"]).split(",").map((s: string) => s.trim()).filter(Boolean)
+       : undefined,
++    // P2-1：--allow-tool / --deny-tool 为规则语法（cliArg 源）。multiple:true → string[]；
++    // 每项再按逗号拆分，兼容 `--deny-tool "Bash(curl *),Read(.env)"` 与多次传参两种写法。
++    cliAllowRules: normalizeRuleFlag(values["allow-tool"]),
++    cliDenyRules: normalizeRuleFlag(values["deny-tool"]),
+     continue: values.continue,
+     // resume 已在 extractResumeArg 预解析：带值走 config.resume，无值走 resumePicker 开选择器。
+     resume: resumeArg.value,
+@@ -559,6 +581,53 @@ export async function main(): Promise<void> {
+     const config = await loadConfig(cliArgs);
+     profileCheckpoint("config_load_end");
+ 
++    // P2-1 item5 + P2-2：实例化企业策略管理器，读 managed settings，
++    // 把功能开关（policy-limits）与模式管控（mode-policy: disabledModes / disableBypassPermissionsMode）注入全局。
++    try {
++      const { PolicyManager } = await import("./config/policy.ts");
++      const policyManager = new PolicyManager();
++      const policy = await policyManager.load();
++      if (policy) {
++        // 功能级开关
++        if (policy.policyLimits) {
++          const { setPolicyLimits } = await import("./config/policy-limits.ts");
++          setPolicyLimits(policy.policyLimits);
++        }
++        // 模式级管控（P2-2）
++        const { setModePolicy, isBypassDisabledByPolicy, isModeDisabledByPolicy } = await import("./permission/mode-policy.ts");
++        setModePolicy(policy.disabledModes, policy.disableBypassPermissionsMode);
++
++        // P2-2 fail-fast：策略禁用 bypass 时，若 CLI 显式传了 bypass 相关 flag/mode，明确报错退出
++        const cliWantsBypass =
++          cliArgs.skipPermissions === true ||
++          cliArgs.permissionMode === "dangerously-skip-permissions" ||
++          cliArgs.permissionMode === "always-allow";
++        if (isBypassDisabledByPolicy() && cliWantsBypass) {
++          console.error(
++            "错误: 企业策略（managed settings: disableBypassPermissionsMode=disable）已禁用 bypass 权限模式，" +
++            "--dangerously-skip-permissions / --permission-mode always-allow 不可用。",
++          );
++          process.exit(1);
++        }
++        // 通用 disabledModes fail-fast：CLI 显式请求了被策略禁用的模式 → 报错退出
++        if (cliArgs.permissionMode && isModeDisabledByPolicy(String(cliArgs.permissionMode))) {
++          console.error(
++            `错误: 企业策略已禁用权限模式 "${cliArgs.permissionMode}"（managed settings: disabledModes）。`,
++          );
++          process.exit(1);
++        }
++        // 降级：策略禁用 bypass 时，抹掉从其它来源（settings 文件等）渗入的 skip/bypass 态
++        if (isBypassDisabledByPolicy()) {
++          if (config.skipPermissions) config.skipPermissions = false;
++          if (config.permissionMode === "dangerously-skip-permissions" || config.permissionMode === "always-allow") {
++            config.permissionMode = "default";
++          }
++        }
++      }
++    } catch (err) {
++      getLogger().warn("POLICY", `企业策略加载跳过: ${err}`);
++    }
++
+     // Coordinator 模式：检查环境变量 SID_CODE_COORDINATOR_MODE=1
+     // 设为 coordinator 后主循环角色切换为"编排者"，注入编排工作流提示词
+     const { checkCoordinatorEnv } = await import("./coordinator/mode.ts");
+diff --git a/src/config/config.ts b/src/config/config.ts
+index dd3ae96..f1de11b 100644
+--- a/src/config/config.ts
++++ b/src/config/config.ts
+@@ -4,7 +4,6 @@
+  * 配置文件位置：~/.sid-code/settings.json + ~/.sid-code/app.json（唯一真相源）
+  */
+ 
+-import { parse as parseYAML } from "yaml";
+ import { join } from "path";
+ import { existsSync, mkdirSync } from "fs";
+ import { getLogger } from "../debug/logger.ts";
+@@ -163,6 +162,9 @@ export interface Config {
+   allowedTools: string[];
+   disallowedTools: string[];
+   yesMode: boolean;
++  /** P2-1：CLI 权限规则（cliArg 源，规则语法如 "Bash(curl *)"）。--allow-tool / --deny-tool。 */
++  cliAllowRules?: string[];
++  cliDenyRules?: string[];
+ 
+   // 目录白名单/黑名单
+   allowedDirectories: string[];
+@@ -1077,6 +1079,12 @@ export async function loadConfig(cliArgs: Partial<Config> = {}): Promise<Config>
+     }
+   }
+ 
++  // P2-4：CC 的 "manual" 是 sid "default" 的别名，归一到内部规范名
++  // （对齐 CC v2.1.200 default→Manual 改名；sid 内部仍用 default 作规范键）。
++  if (config.permissionMode === "manual") {
++    config.permissionMode = "default";
++  }
++
+   // skipPermissions / yesMode 同步到 permissionMode（状态栏显示用）
+   if (config.skipPermissions) {
+     config.permissionMode = "dangerously-skip-permissions";
+@@ -1200,50 +1208,20 @@ export async function ensureConfigDir(): Promise<string> {
+  */
+ export async function loadPermissionRules(): Promise<import("../permission/types.ts").PermissionRule> {
+   const log = getLogger();
+-  const { mergeRules } = await import("../permission/rules.ts");
+-
+-  const layers: string[] = [
+-    "/etc/sid-code/policy.yaml",
+-    join(getSidHome(), "settings.json"),
+-    join(process.cwd(), ".sid-code/permissions.yaml"),
+-    join(process.cwd(), ".sid-code/permissions.local.yaml"),
+-  ];
+-
+-  const allRules: import("../permission/types.ts").PermissionRule[] = [];
+ 
+-  for (const filePath of layers) {
+-    if (!existsSync(filePath)) continue;
+-
+-    try {
+-      const content = await Bun.file(filePath).text();
+-      // settings.json 为 JSON，其余层为 YAML
+-      const parsed = filePath.endsWith(".json")
+-        ? JSON.parse(content)
+-        : parseYAML(content);
+-      const permissions = parsed?.permissions || parsed?.permission_rules;
+-      if (!permissions) continue;
+-
+-      const rule: import("../permission/types.ts").PermissionRule = {
+-        allow: permissions.allow || [],
+-        deny: permissions.deny || [],
+-        ask: permissions.ask || [],
+-      };
++  // P2-1：两套加载器合一——以 RuleLoader 为唯一事实源。
++  // 本函数（历史 B 加载器）保留为薄封装，仅供 cli.ts 构造 checker 时提供**启动占位**规则；
++  // checker.initRules() 会再跑一次 RuleLoader.loadAll 并以其为准（并清除占位避免重复）。
++  // 这样企业策略/user/project/local 各源只有 RuleLoader 一处解析逻辑，消除双读隐患。
++  const { RuleLoader } = await import("../permission/rule-loader.ts");
++  const loader = new RuleLoader(process.cwd());
+ 
+-      // 同时提取目录白名单/黑名单（如果有）
+-      allRules.push(rule);
+-      log.debug("CONFIG", `加载权限规则: ${filePath}`, {
+-        allow: rule.allow?.length || 0,
+-        deny: rule.deny?.length || 0,
+-        ask: rule.ask?.length || 0,
+-      });
+-    } catch (err) {
+-      log.warn("CONFIG", `读取权限规则失败: ${filePath}`, err);
+-    }
+-  }
+-
+-  if (allRules.length === 0) {
++  try {
++    await loader.loadAll();
++  } catch (err) {
++    log.warn("CONFIG", `加载权限规则失败(RuleLoader.loadAll)`, err);
+     return { allow: [], deny: [], ask: [] };
+   }
+ 
+-  return mergeRules(...allRules);
++  return loader.toPermissionRule();
+ }
+diff --git a/src/config/paths.ts b/src/config/paths.ts
+index dd93f1e..671f4b1 100644
+--- a/src/config/paths.ts
++++ b/src/config/paths.ts
+@@ -67,6 +67,13 @@ export const sidPaths = {
+   settings: () => sidHomePath("settings.json"),
+   appConfig: () => sidHomePath("app.json"),
+   managedSettings: () => sidHomePath("managed-settings.json"),
++  /**
++   * 企业策略文件候选路径（P2-1，first-exists-wins，优先级从高到低）：
++   * 1. /etc/sid-code/managed-settings.json —— 系统级企业管控（对齐 CC 系统 managed 路径，最高）
++   * 2. ~/.sid-code/managed-settings.json    —— 用户级 MDM/回退（原 ManagedFileLoader 路径，兼容既有）
++   * 统一后废弃历史上冲突的 /etc/sid-code/policy.json 与 /etc/sid-code/policy.yaml 两个路径。
++   */
++  managedPolicyCandidates: (): string[] => ["/etc/sid-code/managed-settings.json", sidHomePath("managed-settings.json")],
+   globalClaudeMd: () => sidHomePath("CLAUDE.md"),
+   gitignore: () => sidHomePath(".gitignore"),
+   lspConfig: () => sidHomePath("lsp.json"),
+diff --git a/src/config/policy.ts b/src/config/policy.ts
+index 0f5d576..8ea0039 100644
+--- a/src/config/policy.ts
++++ b/src/config/policy.ts
+@@ -23,8 +23,15 @@ export interface PolicySettings {
+   policyLimits?: Record<string, { allowed: boolean }>;
+   /** 是否只允许企业策略中的规则 */
+   allowManagedPermissionRulesOnly?: boolean;
+-  /** 禁用的权限模式 */
++  /** 禁用的权限模式（通用：禁用任意模式，接进 cyclePermissionMode 与 CLI 校验） */
+   disabledModes?: string[];
++  /**
++   * 禁用 bypass（always-allow / dangerously-skip-permissions）模式（P2-2，对齐 CC
++   * utils/settings/types.ts:67 disableBypassPermissionsMode）。
++   * - "disable"：强制禁用 bypass，即使 CLI 传了 --dangerously-skip-permissions 也报错退出/降级；
++   * - "allow"（默认/缺省）：不限制。
++   */
++  disableBypassPermissionsMode?: "disable" | "allow";
+ }
+ 
+ /** 策略加载器接口（可扩展） */
+diff --git a/src/config/schema.ts b/src/config/schema.ts
+index 5aa9ee2..592211a 100644
+--- a/src/config/schema.ts
++++ b/src/config/schema.ts
+@@ -30,14 +30,18 @@ export interface ValidationResult {
+ /** 有效的 provider 值 */
+ const VALID_PROVIDERS = new Set(["anthropic", "openai", "ollama"]);
+ 
+-/** 有效的权限模式 */
++/** 有效的权限模式
++ *  - "manual"：CC 别名，等价 "default"（在 config.ts 归一层映射为 default）
++ *  - "auto"：分类器自动裁决模式，可经 --permission-mode auto 显式进入（需分类器可用） */
+ const VALID_PERMISSION_MODES = new Set([
+   "default",
++  "manual",
+   "always-allow",
+   "deny-write",
+   "acceptEdits",
+   "plan",
+   "dontAsk",
++  "auto",
+   "dangerously-skip-permissions",
+ ]);
+ 
+diff --git a/src/permission/checker.ts b/src/permission/checker.ts
+index 14553cd..aaadf2f 100644
+--- a/src/permission/checker.ts
++++ b/src/permission/checker.ts
+@@ -16,6 +16,7 @@ import type { Config } from "../config/config.ts";
+ import type { PlanModeManager } from "../plan/state.ts";
+ import type { Tool, PermissionResult, ToolUseContext } from "../tool/types.ts";
+ import { checkRules } from "./rules.ts";
++import type { PathRuleContext } from "./path-rule-matching.ts";
+ import { AuditLogger } from "./audit.ts";
+ import { getLogger } from "../debug/logger.ts";
+ import { splitCompoundCommand, hasSensitiveRedirection } from "./shell-parser.ts";
+@@ -33,6 +34,7 @@ import { getShadowedRulesForTool } from "./shadowed-rules.ts";
+ import type { SandboxManager } from "./sandbox.ts";
+ import { BashClassifier } from "./bash-classifier.ts";
+ import * as path from "node:path";
++import * as os from "node:os";
+ 
+ /** 危险命令模式（对标 Claude Code 15 种） */
+ interface DangerousPattern {
+@@ -129,12 +131,23 @@ const FILE_TOOLS = new Set(["read", "write", "edit"]);
+ /** 写操作工具 */
+ const WRITE_TOOLS = new Set(["write", "edit"]);
+ 
+-/** 只读工具（含低风险工具如 save_memory） */
+-const READ_ONLY_TOOLS = new Set(["read", "grep", "glob", "ls", "read_many", "web_fetch", "save_memory"]);
++/**
++ * 只读工具（含低风险工具如 save_memory）。
++ * 注意：web_fetch **不在**此列表（P1-2，对齐 CC 方案 A）——网络出站需人类把关，
++ * 默认走 ask 而非无条件放行；预授权代码类域名由 web_fetch 自身的 checkPermissions 免确认放行，
++ * domain 粒度授权由 WebFetch(domain:x) 规则控制。
++ */
++const READ_ONLY_TOOLS = new Set(["read", "grep", "glob", "ls", "read_many", "save_memory"]);
+ 
+ /** 会话记忆最大条目数 */
+ const MAX_SESSION_MEMORY = 1000;
+ 
++/**
++ * acceptEdits 模式下自动放行的文件系统命令（对齐 CC modeValidation.ts ACCEPT_EDITS_ALLOWED_COMMANDS）。
++ * 仅当命令的路径参数都在 cwd 内才自动放行；跨 cwd 的 mv/rm 等仍走确认（刻意的攻击面权衡）。
++ */
++const ACCEPT_EDITS_FS_COMMANDS = new Set(["mkdir", "touch", "rm", "rmdir", "mv", "cp", "sed"]);
++
+ /** Plan Mode 下额外允许的工具（在 READ_ONLY_TOOLS 基础上） */
+ const PLAN_MODE_EXTRA_TOOLS = new Set([
+   "enter_plan_mode",
+@@ -295,6 +308,63 @@ export class PermissionChecker implements Checker {
+     return this.config;
+   }
+ 
++  /**
++   * 构造路径规则解析上下文（P0-2）。
++   * 文件类工具（read/write/edit）的路径规则前缀（`//` `~/` `/` `./`）需据此归一化。
++   * workspaceRoot=项目根；cwd 优先用 bash 显式 cwd 参数（如有），否则工作区根。
++   */
++  private buildPathRuleContext(req?: PermissionRequest): PathRuleContext {
++    const inputCwd = (req?.input as { cwd?: string } | undefined)?.cwd;
++    return {
++      workspaceRoot: this.workspacePath,
++      homeDir: os.homedir(),
++      cwd: inputCwd || this.workspacePath,
++    };
++  }
++
++  /**
++   * P1-3：判断 bash 命令在 acceptEdits 模式下是否可自动放行。
++   *
++   * 对齐 CC modeValidation.ts + pathValidation.ts：复合命令拆分后，**每个**子命令的 baseCmd
++   * 都必须是文件系统命令（ACCEPT_EDITS_FS_COMMANDS），**且**其路径参数经校验都在 cwd 内。
++   * 任一子命令不满足 → 返回 false（落回 ask）。
++   *
++   * 注意：危险命令层（Step 2）在 acceptEdits（Step 11）之前，故 `rm -rf /` 等已先被拦，
++   * 本方法只处理「逃过危险检测的普通 fs 命令」，保持 bypass-immune 语义不破。
++   */
++  private canAutoAllowFsCommandInAcceptEdits(command: string): boolean {
++    const subCommands = splitCompoundCommand(command);
++    if (subCommands.length === 0) return false;
++
++    const cwd = this.workspacePath;
++    for (const sub of subCommands) {
++      const trimmed = sub.trim();
++      if (!trimmed) return false;
++      const tokens = trimmed.split(/\s+/);
++      const baseCmd = tokens[0];
++      // baseCmd 必须是白名单 fs 命令
++      if (!ACCEPT_EDITS_FS_COMMANDS.has(baseCmd)) return false;
++
++      // 路径参数（非 - 开头的 token，跳过 baseCmd 本身）都必须在 cwd 内
++      for (let i = 1; i < tokens.length; i++) {
++        const tok = tokens[i];
++        if (!tok || tok.startsWith("-")) continue; // 跳过选项标志
++        // sed 的脚本参数（如 's/a/b/'）不是路径——含 / 但非路径的表达式会被下方 resolve 兜住：
++        // 只要 resolve 后不在 cwd 内即 false，脚本表达式通常不在 cwd 内故不会误放行；
++        // 保守起见对 sed 的首个非选项参数（脚本）放宽：仅校验其余参数（文件）。
++        if (baseCmd === "sed" && i === 1 && !tok.includes("/")) {
++          // 形如 sed -i 'expr' file：expr 不含 / 时视为脚本，跳过
++          continue;
++        }
++        const resolved = path.isAbsolute(tok) ? tok : path.resolve(cwd, tok);
++        if (!this.pathValidator.isWithinWorkspace(resolved)) {
++          return false;
++        }
++      }
++    }
++    return true;
++  }
++
+   /**
+    * 获取与指定工具相关的阴影规则（供权限确认对话框展示不可达规则提示）。
+    * 对标 claude-code 的 "Unreachable Rules"：deny 遮蔽=blocked，ask 遮蔽=shadowed。
+@@ -363,32 +433,50 @@ export class PermissionChecker implements Checker {
+     if (!deny || deny.length === 0) return false;
+ 
+     const denyOnly = { deny, allow: [], ask: [] };
+-    const candidates = [absPath];
+-    try {
+-      const rel = path.relative(this.workspacePath, absPath);
+-      // 仅当相对路径落在工作区内（不以 .. 开头、非绝对）时才作为候选，
+-      // 避免把工作区外路径错误地按相对模式匹配。
+-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+-        candidates.push(rel);
+-      }
+-    } catch {
+-      /* path.relative 失败（跨盘等）：仅用绝对路径匹配 */
+-    }
+ 
+-    // 用 "read" 工具名匹配：隐藏语义 = "读不到的文件不该出现在列表里"，
+-    // 与 deny 规则里最常见的 Read(...) / *(...) 形态一致（matchRule 大小写不敏感、
+-    // 支持 * 通配符工具名）。deny 规则里的 file_path 走 minimatch(dot:true)。
+-    for (const fp of candidates) {
+-      const decision = checkRules(denyOnly, { toolName: "read", input: { file_path: fp } });
+-      if (decision && !decision.allowed) return true;
+-    }
+-    return false;
++    // P0-2：路径规则前缀（`//` `~/` `/` `./`）现由 matchPathRule 统一解析归一化，
++    // 不再需要旧的「绝对+工作区相对双候选」workaround——传绝对路径 + pathCtx，
++    // matchPathRule 会把规则里的相对/前缀模式 resolve 到同一坐标系后比对。
++    const decision = checkRules(
++      denyOnly,
++      { toolName: "read", input: { file_path: absPath } },
++      this.buildPathRuleContext(),
++    );
++    return !!(decision && !decision.allowed);
+   }
+ 
+-  /** 异步初始化：加载设置文件中的规则 */
++  /**
++   * 异步初始化：从所有来源加载权限规则（P2-1：单一事实源 = RuleLoader）。
++   *
++   * 加载顺序与优先级：
++   * - 构造器传入的 `rules`（来自 cli.ts loadPermissionRules，B 加载器）仅作**启动占位**，
++   *   让 initRules 之前的权限检查有兜底；此处 loadAll 读到真实文件后，以 RuleLoader（A）为准。
++   *   为避免 B 的占位 projectSettings 与 A 读到的 projectSettings 重复，先清占位再 loadAll。
++   * - cliArg（--allow-tool/--deny-tool）与 flagSettings 从 config 接线（P2-1 补齐的接线缺口）。
++   */
+   async initRules(): Promise<void> {
++    // 清除构造器 B 占位的 projectSettings，避免与 loadAll 读到的真实文件重复计数
++    this.ruleLoader.clearSource("projectSettings");
++
+     await this.ruleLoader.loadAll();
+-    // 同步到旧版 rules 字段（兼容）
++
++    // P2-1：接线 CLI 规则（cliArg 源）——此前 setCliArgRules 零调用者，--allow/deny-tool 从不生效
++    const cliAllow = (this.config as { cliAllowRules?: string[] }).cliAllowRules;
++    const cliDeny = (this.config as { cliDenyRules?: string[] }).cliDenyRules;
++    if ((cliAllow && cliAllow.length) || (cliDeny && cliDeny.length)) {
++      this.ruleLoader.setCliArgRules(cliAllow, cliDeny);
++    }
++
++    // 同步到旧版 rules 字段（兼容 checkRules 消费）
++    this.rules = this.ruleLoader.toPermissionRule();
++  }
++
++  /**
++   * 从 ruleLoader 重新同步旧版 rules 字段（P2-3）。
++   * 供运行时向 ruleLoader 增删规则（如 always-persist 的 addSessionRule）后，
++   * 让 checkRules 消费的 this.rules 立即反映最新合并结果。
++   */
++  refreshRulesFromLoader(): void {
+     this.rules = this.ruleLoader.toPermissionRule();
+   }
+ 
+@@ -503,7 +591,7 @@ export class PermissionChecker implements Checker {
+ 
+     // Step 5: ask 规则（工具级）
+     if (this.rules) {
+-      const askDecision = checkRules({ deny: [], allow: [], ask: this.rules.ask }, req);
++      const askDecision = checkRules({ deny: [], allow: [], ask: this.rules.ask }, req, this.buildPathRuleContext(req));
+       if (askDecision && !askDecision.allowed && askDecision.needsConfirmation) {
+         log.info("PERMISSION", `${req.toolName}(${resource.slice(0, 80)}) → 需确认(ask规则: ${askDecision.reason})`);
+         return { ...askDecision, decisionReason: { type: "rule", rule: askDecision.reason || "", behavior: "ask" } };
+@@ -592,6 +680,15 @@ export class PermissionChecker implements Checker {
+         log.info("PERMISSION", `${req.toolName}(${resource.slice(0, 80)}) → 允许(acceptEdits模式)`);
+         return { allowed: true, decisionReason: { type: "mode", mode: "acceptEdits" } };
+       }
++      // P1-3：cwd 内的文件系统 bash 命令（mkdir/touch/rm/rmdir/mv/cp/sed）也自动放行。
++      // 危险命令层（Step 2）已在前拦截 rm -rf / 等，跨 cwd 的 mv/rm 由 cwd 路径校验挡下。
++      if (req.toolName === "bash") {
++        const command = (req.input as { command?: string })?.command ?? "";
++        if (command && this.canAutoAllowFsCommandInAcceptEdits(command)) {
++          log.info("PERMISSION", `bash(${command.slice(0, 80)}) → 允许(acceptEdits模式+cwd内fs命令)`);
++          return { allowed: true, decisionReason: { type: "mode", mode: "acceptEdits" } };
++        }
++      }
+     }
+ 
+     // Step 12: 预授权工具放行
+@@ -1043,10 +1140,11 @@ export class PermissionChecker implements Checker {
+   private checkDenyRules(req: PermissionRequest): Decision | null {
+     if (!this.rules) return null;
+     const denyRules = { deny: this.rules.deny, allow: [], ask: [] };
++    const pathCtx = this.buildPathRuleContext(req);
+ 
+-    // 非 bash：保持原整条匹配语义
++    // 非 bash：保持原整条匹配语义（文件类工具走路径前缀解析）
+     if (req.toolName !== "bash") {
+-      return checkRules(denyRules, req);
++      return checkRules(denyRules, req, pathCtx);
+     }
+ 
+     const command = (req.input as { command?: string })?.command ?? "";
+@@ -1054,7 +1152,7 @@ export class PermissionChecker implements Checker {
+ 
+     // 单命令（无 &&/||/;/| 复合）：等价于原逻辑，直接整条匹配
+     if (subCommands.length <= 1) {
+-      return checkRules(denyRules, req);
++      return checkRules(denyRules, req, pathCtx);
+     }
+ 
+     // 复合命令：逐子命令校验，任一子命令命中 deny 即整体拒绝（some(deny)）
+@@ -1063,7 +1161,7 @@ export class PermissionChecker implements Checker {
+         ...req,
+         input: { ...(req.input as object), command: sub },
+       };
+-      const subDecision = checkRules(denyRules, subReq);
++      const subDecision = checkRules(denyRules, subReq, pathCtx);
+       if (subDecision && !subDecision.allowed) {
+         // 命中的 deny 规则针对的是子命令，reason 里带上原始命令上下文更可读
+         return subDecision;
+@@ -1091,10 +1189,11 @@ export class PermissionChecker implements Checker {
+   private checkAllowRules(req: PermissionRequest): Decision | null {
+     if (!this.rules) return null;
+     const allowRules = { deny: [], allow: this.rules.allow, ask: [] };
++    const pathCtx = this.buildPathRuleContext(req);
+ 
+-    // 非 bash：保持原整条匹配语义
++    // 非 bash：保持原整条匹配语义（文件类工具走路径前缀解析）
+     if (req.toolName !== "bash") {
+-      return checkRules(allowRules, req);
++      return checkRules(allowRules, req, pathCtx);
+     }
+ 
+     const command = (req.input as { command?: string })?.command ?? "";
+@@ -1102,7 +1201,7 @@ export class PermissionChecker implements Checker {
+ 
+     // 单命令（无 &&/||/;/| 复合）：等价于原逻辑，直接整条匹配
+     if (subCommands.length <= 1) {
+-      return checkRules(allowRules, req);
++      return checkRules(allowRules, req, pathCtx);
+     }
+ 
+     // 复合命令：逐子命令校验，全部命中 allow 才放行（every(allow)）
+@@ -1111,7 +1210,7 @@ export class PermissionChecker implements Checker {
+         ...req,
+         input: { ...(req.input as object), command: sub },
+       };
+-      const subDecision = checkRules(allowRules, subReq);
++      const subDecision = checkRules(allowRules, subReq, pathCtx);
+       if (!subDecision || !subDecision.allowed) {
+         // 任一子命令不在 allow 覆盖内 → 整体不放行，落到后续 ask
+         return null;
+@@ -1176,7 +1275,8 @@ export class PermissionChecker implements Checker {
+     // Plan Mode 专用工具放行
+     if (PLAN_MODE_EXTRA_TOOLS.has(req.toolName)) {
+       if (req.toolName === "sub_agent") {
+-        const subType = (req.input as any)?.type;
++        // 字段提取与 rules.ts extractMatchValue 对齐（subagent_type 优先，兼容旧 type）
++        const subType = (req.input as any)?.subagent_type || (req.input as any)?.type;
+         if (subType && subType !== "explore") {
+           log.info("PERMISSION", `${req.toolName}(type=${subType}) → 拒绝(plan模式只允许explore子代理)`);
+           return { allowed: false, reason: "计划模式下只允许 explore 类型的子代理" };
+diff --git a/src/permission/mode-policy.ts b/src/permission/mode-policy.ts
+new file mode 100644
+index 0000000..d1078cc
+--- /dev/null
++++ b/src/permission/mode-policy.ts
+@@ -0,0 +1,61 @@
++/**
++ * 权限模式的企业策略管控（P2-2）
++ *
++ * 承载两类来自 managed settings 的模式约束，供 app / cli / cyclePermissionMode 统一消费：
++ * - disabledModes：被禁用的权限模式列表（通用，禁用任意模式）
++ * - bypassDisabled：bypass（always-allow / dangerously-skip-permissions）是否被 killswitch 禁用
++ *
++ * 单例模式（对齐 policy-limits.ts），由 cli 启动加载 policy 后 setModePolicy 注入，
++ * 之后各处只读查询，无需层层透传 PolicyManager 实例。
++ */
++
++import { getLogger } from "../debug/logger.ts";
++
++/** bypass 类模式（受 disableBypassPermissionsMode killswitch 管控） */
++const BYPASS_MODES = new Set(["always-allow", "dangerously-skip-permissions"]);
++
++interface ModePolicyState {
++  /** 被企业策略禁用的模式集合 */
++  disabledModes: Set<string>;
++  /** bypass 是否被 killswitch 禁用 */
++  bypassDisabled: boolean;
++}
++
++let state: ModePolicyState = {
++  disabledModes: new Set(),
++  bypassDisabled: false,
++};
++
++/**
++ * 从加载后的 policy 注入模式管控（cli 启动时调用）。
++ * @param disabledModes managed settings 的 disabledModes
++ * @param disableBypass  managed settings 的 disableBypassPermissionsMode
++ */
++export function setModePolicy(disabledModes?: string[], disableBypass?: "disable" | "allow"): void {
++  state = {
++    disabledModes: new Set(disabledModes ?? []),
++    bypassDisabled: disableBypass === "disable",
++  };
++  const log = getLogger();
++  const disabled: string[] = [...state.disabledModes];
++  if (state.bypassDisabled) disabled.push("bypass(always-allow/dangerously-skip-permissions)");
++  if (disabled.length > 0) {
++    log.info("MODE_POLICY", `企业策略禁用权限模式: ${disabled.join(", ")}`);
++  }
++}
++
++/** 判断某模式是否被企业策略禁用（含 bypass killswitch 覆盖 bypass 类模式）。 */
++export function isModeDisabledByPolicy(mode: string): boolean {
++  if (state.bypassDisabled && BYPASS_MODES.has(mode)) return true;
++  return state.disabledModes.has(mode);
++}
++
++/** bypass 是否被 killswitch 禁用（供 bypassAvailableAtLaunch 门控）。 */
++export function isBypassDisabledByPolicy(): boolean {
++  return state.bypassDisabled;
++}
++
++/** 测试用：重置状态。 */
++export function __resetModePolicy(): void {
++  state = { disabledModes: new Set(), bypassDisabled: false };
++}
+diff --git a/src/permission/mode.ts b/src/permission/mode.ts
+index d2bfd0c..b258575 100644
+--- a/src/permission/mode.ts
++++ b/src/permission/mode.ts
+@@ -58,7 +58,7 @@ export function getNextPermissionMode(ctx: PermissionModeContext): PermissionMod
+ /** 模式显示名称 */
+ export function getModeName(mode: PermissionMode): string {
+   switch (mode) {
+-    case "default": return "默认";
++    case "default": return "Manual（手动）";
+     case "always-allow": return "全部允许";
+     case "deny-write": return "禁止写入";
+     case "acceptEdits": return "自动接受编辑";
+diff --git a/src/permission/path-rule-matching.ts b/src/permission/path-rule-matching.ts
+new file mode 100644
+index 0000000..b25852e
+--- /dev/null
++++ b/src/permission/path-rule-matching.ts
+@@ -0,0 +1,116 @@
++/**
++ * Read/Edit 文件路径权限规则匹配（对齐 claude-code §7.4 P0-2）
++ *
++ * 背景（缺口）：CC 定义 Read/Edit 路径规则四种前缀：
++ *   - `//path`      文件系统绝对路径，如 Read 规则匹配 /Users/alice 下递归
++ *   - `~/path`      主目录，如 Read 规则匹配 ~/Documents 下的 pdf
++ *   - `/path`       项目根相对，如 Edit 规则匹配 src 下任意深度 ts
++ *   - `path`/`./path` 当前目录相对，如 Read 规则匹配 .env
++ *
++ * 旧实现对这四种前缀一个都不解析，直接拿请求的绝对 file_path 丢给
++ * `minimatch(value, pattern, {dot:true})` → 前缀不归一导致整体不可靠
++ * （实测 `minimatch("/Users/x/.env", "./.env")` = false）。
++ *
++ * 本模块把四种前缀统一 resolve 成绝对 glob 模式，再与请求的绝对 file_path 比对。
++ */
++
++import path from "node:path";
++import os from "node:os";
++import { minimatch } from "minimatch";
++
++/** 路径规则解析上下文 */
++export interface PathRuleContext {
++  /** 项目根（settings 所在目录，不含 .sid-code/） */
++  workspaceRoot: string;
++  /** 主目录 */
++  homeDir?: string;
++  /** 当前工作目录（相对路径基准） */
++  cwd?: string;
++}
++
++/**
++ * 把路径规则模式按前缀 resolve 成归一化的**绝对** glob 模式。
++ *
++ * - `//abs`  → 去一个 `/`（文件系统绝对路径）
++ * - `~/x`    → join(homeDir, "x")
++ * - `/x`     → join(workspaceRoot, "x")（单前导斜杠 = 项目根相对）
++ * - `./x`/`x`→ join(cwd, "x")（当前目录相对）
++ *
++ * 注意：为保持 glob 语义（`**`/`*`），join 用 posix 风格拼接，
++ * 且不对含通配符的模式做 path.resolve（会破坏 `**`）。
++ */
++export function resolvePathRulePattern(pattern: string, ctx: PathRuleContext): string {
++  const homeDir = ctx.homeDir ?? os.homedir();
++  const cwd = ctx.cwd ?? process.cwd();
++  const workspaceRoot = ctx.workspaceRoot;
++
++  // 归一化基准目录为绝对路径 + posix 分隔符（glob 模式统一用 /）
++  const toPosixAbs = (p: string) => path.resolve(p).split(path.sep).join("/");
++
++  // 拼接基准目录与相对模式（不用 path.join，避免吞掉 ** 通配符语义）
++  const joinPosix = (base: string, rel: string) => {
++    const b = toPosixAbs(base).replace(/\/+$/, "");
++    const r = rel.replace(/^\/+/, "");
++    return r ? `${b}/${r}` : b;
++  };
++
++  // `//abs` → 文件系统绝对路径（去一个前导 /）
++  if (pattern.startsWith("//")) {
++    return pattern.slice(1);
++  }
++
++  // `~/x` → 主目录相对
++  if (pattern.startsWith("~/")) {
++    return joinPosix(homeDir, pattern.slice(2));
++  }
++  if (pattern === "~") {
++    return toPosixAbs(homeDir);
++  }
++
++  // `/x` → 项目根相对（单前导斜杠）
++  if (pattern.startsWith("/")) {
++    return joinPosix(workspaceRoot, pattern.slice(1));
++  }
++
++  // `./x` → 当前目录相对（去掉 ./ 前缀）
++  if (pattern.startsWith("./")) {
++    return joinPosix(cwd, pattern.slice(2));
++  }
++
++  // 裸 `x` → 当前目录相对
++  return joinPosix(cwd, pattern);
++}
++
++/**
++ * 用路径规则模式匹配请求的文件路径。
++ * 先按前缀 resolve 成绝对 glob，再用 minimatch（gitignore 语义，dot:true）比对绝对 file_path。
++ *
++ * @param pattern 规则括号内的路径模式（含四种前缀语义）
++ * @param filePath 请求的文件路径（应为绝对路径；相对则按 cwd 归一）
++ * @param ctx 解析上下文
++ */
++export function matchPathRule(pattern: string, filePath: string, ctx: PathRuleContext): boolean {
++  if (!filePath) return false;
++
++  // 请求路径归一为绝对 + posix
++  const cwd = ctx.cwd ?? process.cwd();
++  const absFile = (path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath))
++    .split(path.sep)
++    .join("/");
++
++  const resolvedPattern = resolvePathRulePattern(pattern, ctx);
++
++  // gitignore 风格：`Read(/src)` 也应匹配 `/src/**`（目录规则匹配目录内文件）。
++  // 若模式不以通配符结尾且请求路径在其目录下，补一次目录匹配。
++  if (minimatch(absFile, resolvedPattern, { dot: true })) {
++    return true;
++  }
++  // 目录前缀匹配：模式指向目录时，其下所有文件都算命中（对齐 CC 去 /** 后缀语义）
++  if (!resolvedPattern.includes("*")) {
++    const dirPrefix = resolvedPattern.replace(/\/+$/, "");
++    if (absFile === dirPrefix || absFile.startsWith(dirPrefix + "/")) {
++      return true;
++    }
++  }
++  return false;
++}
+diff --git a/src/permission/rule-loader.ts b/src/permission/rule-loader.ts
+index df0b47c..4ae4e9b 100644
+--- a/src/permission/rule-loader.ts
++++ b/src/permission/rule-loader.ts
+@@ -77,8 +77,11 @@ export class RuleLoader {
+   async loadAll(): Promise<void> {
+     const log = getLogger();
+ 
+-    // 并行加载各来源
++    // 并行加载各文件来源。
++    // P2-1：新增 policySettings（企业策略，最高优先级、可信源）。
++    // 顺序不影响优先级（getAllRules 按 RULE_SOURCE_PRIORITY 统一排序），仅影响 I/O 并发。
+     await Promise.all([
++      this.loadPolicyFile(),
+       this.loadSettingsFile("userSettings", sidPaths.settings()),
+       this.loadSettingsFile("projectSettings", join(this.workspacePath, ".sid-code", "settings.json")),
+       this.loadSettingsFile("localSettings", join(this.workspacePath, ".sid-code", "settings.local.json")),
+@@ -89,6 +92,60 @@ export class RuleLoader {
+     log.info("RULE_LOADER", `加载完成，共 ${total} 条规则`);
+   }
+ 
++  /**
++   * 加载企业策略文件（P2-1）。first-exists-wins 遍历候选路径，取第一个存在的。
++   *
++   * 与普通 settings 的关键差异：
++   * - policySettings 是**可信源**，其 allow 规则**不走** DANGEROUS_SELF_AUTHORIZATION_PATTERNS 剥离
++   *   （企业管理员有权自我授权，projectSettings 才是不可信源）。
++   * - 优先级最高（RULE_SOURCE_PRIORITY.policySettings=7），且 checkRules 打分中 deny=1000 恒压 allow，
++   *   故 policy 的 deny 不会被任何下层 allow 覆盖。
++   * - 0o600 权限校验：非 600 仅告警不阻塞（对齐原 ManagedFileLoader 语义）。
++   */
++  private async loadPolicyFile(): Promise<void> {
++    const log = getLogger();
++
++    for (const filePath of sidPaths.managedPolicyCandidates()) {
++      if (!existsSync(filePath)) continue;
++
++      // 权限校验：企业策略文件应为 600（仅所有者可写），防篡改
++      try {
++        const { statSync } = await import("fs");
++        const mode = statSync(filePath).mode & 0o777;
++        if (mode !== 0o600) {
++          log.warn("RULE_LOADER", `企业策略文件 ${filePath} 权限不安全 (${mode.toString(8)})，建议设为 600`);
++        }
++      } catch {
++        /* 权限检查失败不阻塞加载 */
++      }
++
++      try {
++        const content = await Bun.file(filePath).text();
++        const settings: SettingsFile = JSON.parse(content);
++        if (!settings.permissions) return; // 命中候选文件即停（first-exists-wins），即使无 permissions
++        // 可信源：不做 filterUntrustedProjectRules 剥离
++        const rules = this.parsePermissions(settings.permissions, "policySettings");
++        this.sources.set("policySettings", rules);
++        log.info("RULE_LOADER", `policySettings: ${filePath} → ${rules.length} 条规则（企业策略，最高优先级）`);
++      } catch (err: any) {
++        log.warn("RULE_LOADER", `读取企业策略文件 ${filePath} 失败: ${err.message}`);
++      }
++      return; // first-exists-wins：命中第一个存在的候选就停
++    }
++  }
++
++  /**
++   * 设置 SDK 内联规则（flagSettings，如 --settings CLI 内存来源）。P2-1 新增接线点。
++   */
++  setFlagRules(perms?: SettingsPermissions): void {
++    if (!perms) return;
++    const rules = this.parsePermissions(perms, "flagSettings");
++    if (rules.length > 0) {
++      this.sources.set("flagSettings", rules);
++      this.invalidateCache();
++    }
++  }
++
+   /**
+    * 从设置文件加载规则
+    */
+diff --git a/src/permission/rules.ts b/src/permission/rules.ts
+index 5e9bbc1..9dae099 100644
+--- a/src/permission/rules.ts
++++ b/src/permission/rules.ts
+@@ -10,6 +10,55 @@
+ 
+ import { minimatch } from "minimatch";
+ import type { PermissionRule, PermissionRequest, Decision } from "./types.ts";
++import { matchShellRulePattern } from "./shell-rule-matching.ts";
++import { matchPathRule, type PathRuleContext } from "./path-rule-matching.ts";
++
++/** 文件路径类工具（走 matchPathRule 做前缀解析） */
++const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
++
++/**
++ * 规则名归一：把 CC 风格的规则名映射到 sid 内部工具名。
++ * - Agent ↔ sub_agent
++ * - WebFetch ↔ web_fetch
++ * 大小写不敏感。
++ */
++const RULE_NAME_ALIASES: Record<string, string> = {
++  agent: "sub_agent",
++  webfetch: "web_fetch",
++};
++
++/** 把规则里的工具名归一到内部工具名（小写） */
++function normalizeRuleToolName(toolName: string): string {
++  const lower = toolName.toLowerCase();
++  return RULE_NAME_ALIASES[lower] ?? lower;
++}
++
++/**
++ * 从请求提取用于匹配的参数值。
++ * - bash：command
++ * - 文件类：file_path
++ * - sub_agent：subagent_type / type（供 Agent(type) 规则匹配）
++ * - web_fetch：domain:hostname（供 WebFetch(domain:x) 规则匹配）
++ * - 其它：pattern
++ */
++function extractMatchValue(req: PermissionRequest): string {
++  const input = req.input as any;
++  const tool = req.toolName.toLowerCase();
++
++  if (tool === "sub_agent") {
++    return input?.subagent_type || input?.type || "";
++  }
++  if (tool === "web_fetch") {
++    const url: string = input?.url || "";
++    if (!url) return "";
++    try {
++      return `domain:${new URL(url).hostname}`;
++    } catch {
++      return "";
++    }
++  }
++  return input?.file_path || input?.command || input?.pattern || "";
++}
+ 
+ /** 规则匹配结果（带分数） */
+ interface RuleMatch {
+@@ -22,33 +71,40 @@ interface RuleMatch {
+  * 匹配单条规则
+  * 规则格式：ToolName 或 ToolName(pattern)
+  * - "Read" 匹配所有 read 操作
+- * - "Read(src/**)" 只匹配 src 目录下的读取
+- * - "Bash(npm *)" 匹配 npm 开头的命令
++ * - "Read(src/**)" 只匹配 src 目录下的读取（路径前缀解析见 path-rule-matching）
++ * - "Bash(npm *)" 匹配 npm 开头的命令（走自研 matchWildcardPattern，`*` 跨 `/`）
+  * - "Bash(prefix:git )" 前缀匹配（git 开头的命令）
++ * - "Bash(*)" 匹配所有 bash 命令（含含路径命令）
+  * - "Edit(.env*)" 匹配 .env 开头的文件
++ * - "Agent" 匹配所有子代理；"Agent(explore)" 匹配 explore 类型子代理
++ * - "WebFetch(domain:github.com)" 匹配 github.com 的抓取
+  * - "mcp__myserver__*" 匹配 myserver 的所有 MCP 工具（通配符支持）
+  * - "mcp__myserver" 匹配 myserver 的所有 MCP 工具（服务器级匹配）
+  * - "mcp__*" 匹配所有 MCP 工具
++ *
++ * @param pathCtx 文件路径类工具（read/write/edit）的前缀解析上下文；不传则退化为 cwd/home 默认
+  */
+-export function matchRule(rule: string, req: PermissionRequest): boolean {
++export function matchRule(rule: string, req: PermissionRequest, pathCtx?: PathRuleContext): boolean {
+   const match = rule.match(/^([*\w]+)(?:\(([^)]+)\))?$/);
+   if (!match) return false;
+ 
+-  const [, toolName, pattern] = match;
++  const [, rawToolName, pattern] = match;
++
++  // 规则名归一：Agent→sub_agent、WebFetch→web_fetch，其它转小写
++  const toolName = normalizeRuleToolName(rawToolName);
++  const reqToolLower = req.toolName.toLowerCase();
+ 
+   // 通配符匹配（支持 mcp__* 和 mcp__server__* 格式）
+   if (toolName.includes("*")) {
+-    const wildcardMatched = minimatch(req.toolName.toLowerCase(), toolName.toLowerCase());
++    const wildcardMatched = minimatch(reqToolLower, toolName);
+     if (!wildcardMatched) return false;
+     // 通配符匹配成功，如果有参数模式则继续检查参数
+     if (!pattern) return true;
+   } else {
+     // MCP 服务器级匹配：规则 "mcp__server1" 匹配 "mcp__server1__tool1"
+-    const reqLower = req.toolName.toLowerCase();
+-    const ruleLower = toolName.toLowerCase();
+-    if (reqLower !== ruleLower) {
++    if (reqToolLower !== toolName) {
+       // 检查是否为 MCP 服务器级匹配
+-      if (ruleLower.startsWith("mcp__") && reqLower.startsWith(ruleLower + "__")) {
++      if (toolName.startsWith("mcp__") && reqToolLower.startsWith(toolName + "__")) {
+         // 服务器级匹配成功
+         if (!pattern) return true;
+       } else {
+@@ -60,20 +116,34 @@ export function matchRule(rule: string, req: PermissionRequest): boolean {
+     }
+   }
+ 
+-  // 提取关键参数（file_path 或 command）
+-  const input = req.input as any;
+-  const value = input?.file_path || input?.command || input?.pattern || "";
+-
++  // 提取用于匹配的参数值（按工具类型分流）
++  const value = extractMatchValue(req);
+   if (!value) return false;
+ 
+-  // prefix: 前缀匹配
++  // 按工具类型选择匹配器：
++  // - bash：自研 shell 通配符匹配（`*` 跨 `/`，尾部 ` *` 特判，dotAll）
++  // - 文件类（read/write/edit）：路径前缀解析 + gitignore 风格匹配
++  // - 其它（sub_agent 的 type、web_fetch 的 domain:、MCP、pattern）：shell 风格通配符
++  if (reqToolLower === "bash") {
++    return matchShellRulePattern(pattern, value);
++  }
++  if (FILE_PATH_TOOLS.has(reqToolLower)) {
++    // prefix: 兼容语法对文件路径仍走前缀匹配
++    if (pattern.startsWith("prefix:")) {
++      return value.startsWith(pattern.slice(7));
++    }
++    const ctx: PathRuleContext = pathCtx ?? { workspaceRoot: process.cwd() };
++    return matchPathRule(pattern, value, ctx);
++  }
++
++  // prefix: 前缀匹配（兼容既有语法）
+   if (pattern.startsWith("prefix:")) {
+-    const prefix = pattern.slice(7); // 去掉 "prefix:"
+-    return value.startsWith(prefix);
++    return value.startsWith(pattern.slice(7));
+   }
+ 
+-  // glob 匹配
+-  return minimatch(value, pattern, { dot: true });
++  // sub_agent 的 type、web_fetch 的 domain:、其它通配符：走 shell 风格通配符匹配
++  // （matchWildcardPattern 对无通配符退化为精确匹配，语义正确；支持 Agent(verify*)、domain:*.example.com）
++  return matchShellRulePattern(pattern, value);
+ }
+ 
+ /**
+@@ -82,9 +152,23 @@ export function matchRule(rule: string, req: PermissionRequest): boolean {
+  * - 基础分：deny=1000, ask=500, allow=0
+  * - 有参数（更具体）：+100
+  * 返回 null 表示不匹配
++ *
++ * P3-1（与 CC 纯 first-match 的差异说明，经审计确认无害，刻意保留）：
++ * CC 是纯 first-match（按规则出现顺序取第一条命中）。sid 用打分选最高分。二者在生产路径等价，原因：
++ * - checker 把 checkRules **分三次单层调用**（deny-only / ask-only / allow-only），
++ *   层级序 deny→ask→allow 已由 hasPermissionsInner 的步骤顺序强制保证；
++ * - 故 deny=1000/ask=500/allow=0 的基础分差在单层调用里根本不参与比较（同一次调用只有一种 behavior）；
++ * - +100 具体度加成只在**同类规则内**做 tiebreak（如同为 deny 时，带参规则优先于裸工具名），
++ *   这比 CC 的「谁先写谁赢」更符合直觉，且不改变 deny>ask>allow 的层级裁决。
++ * 结论：打分模型在此架构下与 first-match 结果一致，改纯 first-match 无收益且有回归风险，保留。
+  */
+-function scoreMatch(rule: string, req: PermissionRequest, type: "allow" | "deny" | "ask"): number | null {
+-  if (!matchRule(rule, req)) return null;
++function scoreMatch(
++  rule: string,
++  req: PermissionRequest,
++  type: "allow" | "deny" | "ask",
++  pathCtx?: PathRuleContext,
++): number | null {
++  if (!matchRule(rule, req, pathCtx)) return null;
+ 
+   let score = 0;
+   // 类型基础分
+@@ -101,20 +185,26 @@ function scoreMatch(rule: string, req: PermissionRequest, type: "allow" | "deny"
+  * 检查权限规则
+  * 收集所有匹配的规则，按分数排序选最高分（具体规则优先于通用规则）
+  * 返回 null 表示无匹配规则
++ *
++ * @param pathCtx 文件路径类工具的前缀解析上下文（workspaceRoot/homeDir/cwd）
+  */
+-export function checkRules(rules: PermissionRule, req: PermissionRequest): Decision | null {
++export function checkRules(
++  rules: PermissionRule,
++  req: PermissionRequest,
++  pathCtx?: PathRuleContext,
++): Decision | null {
+   const matches: RuleMatch[] = [];
+ 
+   for (const r of rules.deny || []) {
+-    const score = scoreMatch(r, req, "deny");
++    const score = scoreMatch(r, req, "deny", pathCtx);
+     if (score !== null) matches.push({ rule: r, type: "deny", score });
+   }
+   for (const r of rules.allow || []) {
+-    const score = scoreMatch(r, req, "allow");
++    const score = scoreMatch(r, req, "allow", pathCtx);
+     if (score !== null) matches.push({ rule: r, type: "allow", score });
+   }
+   for (const r of rules.ask || []) {
+-    const score = scoreMatch(r, req, "ask");
++    const score = scoreMatch(r, req, "ask", pathCtx);
+     if (score !== null) matches.push({ rule: r, type: "ask", score });
+   }
+ 
+diff --git a/src/permission/shell-rule-matching.ts b/src/permission/shell-rule-matching.ts
+new file mode 100644
+index 0000000..7008243
+--- /dev/null
++++ b/src/permission/shell-rule-matching.ts
+@@ -0,0 +1,147 @@
++/**
++ * Shell 工具（Bash）权限规则匹配
++ *
++ * 背景（对齐 claude-code §7 P0-1）：
++ * 旧实现对 Bash 参数模式用 minimatch（文件系统 glob 匹配器），`*` 按设计**不跨越 `/`**，
++ * 还带 brace/bracket/extglob 语义。而 shell 命令里路径极常见，导致规则大面积失配：
++ *   - Bash(*) 「所有命令」哨兵对任何含路径的命令失效（allow 侧静默漏放）
++ *   - 含 / 的用户自定义拦截规则（如匹配 secrets 目录）无声失效（deny 侧安全问题）
++ *
++ * 本模块移植 CC `shellRuleMatching.ts:matchWildcardPattern` 的自研正则匹配：
++ *   - 处理转义 `\*`（字面星号）、`\\`（字面反斜杠），用占位符暂存
++ *   - 转义正则元字符但**保留 `*`**
++ *   - 未转义 `*` → `.*`（跨 `/`、跨任意字符）
++ *   - 尾部 ` *`（空格+唯一通配符）特判：`git *` 同时匹配 `git add` 和裸 `git`
++ *   - dotAll `s` flag：`.` 匹配换行，使通配符能匹配含内嵌换行的命令（heredoc 场景）
++ *   - 支持 caseInsensitive
++ *
++ * 纯函数、无外部依赖，便于单测。
++ */
++
++// 空字节哨兵占位符（用于通配符转义）——模块级，使 RegExp 只编译一次而非每次权限检查都编译。
++const ESCAPED_STAR_PLACEHOLDER = "\x00ESCAPED_STAR\x00";
++const ESCAPED_BACKSLASH_PLACEHOLDER = "\x00ESCAPED_BACKSLASH\x00";
++const ESCAPED_STAR_PLACEHOLDER_RE = new RegExp(ESCAPED_STAR_PLACEHOLDER, "g");
++const ESCAPED_BACKSLASH_PLACEHOLDER_RE = new RegExp(ESCAPED_BACKSLASH_PLACEHOLDER, "g");
++
++/**
++ * 从 legacy `:*` 语法提取前缀（如 `"npm:*"` → `"npm"`）。
++ * 为向后兼容保留。返回 null 表示不是 `:*` 前缀语法。
++ */
++export function extractLegacyPrefix(rule: string): string | null {
++  const match = rule.match(/^(.+):\*$/);
++  return match?.[1] ?? null;
++}
++
++/**
++ * 判断模式是否含未转义通配符（非 legacy `:*` 语法）。
++ * 末尾 `:*` 视为 legacy 前缀语法，不算通配符。
++ * 星号「未转义」= 其前的反斜杠数为偶数（含 0）。
++ */
++export function hasWildcards(pattern: string): boolean {
++  if (pattern.endsWith(":*")) {
++    return false;
++  }
++  for (let i = 0; i < pattern.length; i++) {
++    if (pattern[i] === "*") {
++      let backslashCount = 0;
++      let j = i - 1;
++      while (j >= 0 && pattern[j] === "\\") {
++        backslashCount++;
++        j--;
++      }
++      if (backslashCount % 2 === 0) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
++/**
++ * 用通配符模式匹配命令。
++ * 通配符 `*` 匹配任意字符序列（跨 `/`、跨换行）。
++ * `\*` 匹配字面星号；`\\` 匹配字面反斜杠。
++ *
++ * @param pattern 权限规则模式（含通配符）
++ * @param command 待匹配命令
++ * @param caseInsensitive 是否大小写不敏感
++ */
++export function matchWildcardPattern(
++  pattern: string,
++  command: string,
++  caseInsensitive = false,
++): boolean {
++  const trimmedPattern = pattern.trim();
++
++  // 处理转义序列 \* 和 \\，用占位符暂存
++  let processed = "";
++  let i = 0;
++  while (i < trimmedPattern.length) {
++    const char = trimmedPattern[i];
++    if (char === "\\" && i + 1 < trimmedPattern.length) {
++      const nextChar = trimmedPattern[i + 1];
++      if (nextChar === "*") {
++        processed += ESCAPED_STAR_PLACEHOLDER;
++        i += 2;
++        continue;
++      } else if (nextChar === "\\") {
++        processed += ESCAPED_BACKSLASH_PLACEHOLDER;
++        i += 2;
++        continue;
++      }
++    }
++    processed += char;
++    i++;
++  }
++
++  // 转义正则元字符，但保留 *
++  const escaped = processed.replace(/[.+?^${}()|[\]\\'"]/g, "\\$&");
++
++  // 未转义 * → .*
++  const withWildcards = escaped.replace(/\*/g, ".*");
++
++  // 占位符还原为转义的正则字面量
++  let regexPattern = withWildcards
++    .replace(ESCAPED_STAR_PLACEHOLDER_RE, "\\*")
++    .replace(ESCAPED_BACKSLASH_PLACEHOLDER_RE, "\\\\");
++
++  // 尾部 ` *`（空格+唯一未转义通配符）特判：使尾随空格和参数可选，
++  // 让 `git *` 同时匹配 `git add` 和裸 `git`（对齐 `git:*` 前缀语义）。
++  // 多通配符模式（如 `* run *`）排除——否则末尾通配符可选会误匹配 `npm run`（无尾参）。
++  const unescapedStarCount = (processed.match(/\*/g) || []).length;
++  if (regexPattern.endsWith(" .*") && unescapedStarCount === 1) {
++    regexPattern = regexPattern.slice(0, -3) + "( .*)?";
++  }
++
++  // 全串匹配。dotAll `s` flag 使 `.` 匹配换行，让通配符能匹配含内嵌换行的命令。
++  const flags = "s" + (caseInsensitive ? "i" : "");
++  const regex = new RegExp(`^${regexPattern}$`, flags);
++
++  return regex.test(command);
++}
++
++/**
++ * 匹配 shell 命令参数模式（Bash 工具规则的参数部分）。
++ * 统一入口：兼容旧的 `prefix:` 扩展语法 + legacy `:*` 前缀 + 通配符 + 精确匹配。
++ *
++ * @param pattern 规则括号内的参数模式，如 `"npm *"`、`"prefix:git "`、`"git:*"`、`"ls -la"`
++ * @param command 待匹配的完整命令串（来自 input.command）
++ */
++export function matchShellRulePattern(pattern: string, command: string): boolean {
++  // 兼容既有 prefix: 扩展语法（sid 自有）
++  if (pattern.startsWith("prefix:")) {
++    return command.startsWith(pattern.slice(7));
++  }
++
++  // legacy `:*` 前缀语法（如 `git:*` 匹配 `git` 开头的命令，含裸 `git`）
++  const legacyPrefix = extractLegacyPrefix(pattern);
++  if (legacyPrefix !== null) {
++    // 前缀匹配：命令等于前缀，或以「前缀 + 空格」开头
++    return command === legacyPrefix || command.startsWith(legacyPrefix + " ");
++  }
++
++  // 通配符或精确匹配统一走 matchWildcardPattern
++  // （无通配符时正则退化为精确全串匹配，语义正确）
++  return matchWildcardPattern(pattern, command);
++}
+diff --git a/src/tool/web-fetch-preapproved.ts b/src/tool/web-fetch-preapproved.ts
+new file mode 100644
+index 0000000..8dfcb16
+--- /dev/null
++++ b/src/tool/web-fetch-preapproved.ts
+@@ -0,0 +1,163 @@
++/**
++ * WebFetch 预授权域名白名单（对齐 claude-code preapproved.ts）
++ *
++ * 出于法律与安全考虑，WebFetch 通常只允许访问用户以某种形式提供过的域名。
++ * 但对一批「代码相关」的公共文档域名开例外——这些域名的 GET 请求默认免确认。
++ *
++ * 安全警告：这些预授权域名**仅用于 WebFetch（只读 GET）**。沙箱网络限制**不继承**此列表，
++ * 因为对这些域名的任意网络访问（POST、上传等）可能导致数据外泄。
++ */
++
++/** 预授权主机集合（部分带路径前缀，如 github.com/anthropics 只放行该组织） */
++export const PREAPPROVED_HOSTS = new Set<string>([
++  // Anthropic
++  "platform.claude.com",
++  "code.claude.com",
++  "modelcontextprotocol.io",
++  "github.com/anthropics",
++  "agentskills.io",
++
++  // 主流编程语言
++  "docs.python.org",
++  "en.cppreference.com",
++  "docs.oracle.com",
++  "learn.microsoft.com",
++  "developer.mozilla.org",
++  "go.dev",
++  "pkg.go.dev",
++  "www.php.net",
++  "docs.swift.org",
++  "kotlinlang.org",
++  "ruby-doc.org",
++  "doc.rust-lang.org",
++  "www.typescriptlang.org",
++
++  // Web & JavaScript 框架/库
++  "react.dev",
++  "angular.io",
++  "vuejs.org",
++  "nextjs.org",
++  "expressjs.com",
++  "nodejs.org",
++  "bun.sh",
++  "jquery.com",
++  "getbootstrap.com",
++  "tailwindcss.com",
++  "d3js.org",
++  "threejs.org",
++  "redux.js.org",
++  "webpack.js.org",
++  "jestjs.io",
++  "reactrouter.com",
++
++  // Python 框架 & 库
++  "docs.djangoproject.com",
++  "flask.palletsprojects.com",
++  "fastapi.tiangolo.com",
++  "pandas.pydata.org",
++  "numpy.org",
++  "www.tensorflow.org",
++  "pytorch.org",
++  "scikit-learn.org",
++  "matplotlib.org",
++  "requests.readthedocs.io",
++  "jupyter.org",
++
++  // PHP 框架
++  "laravel.com",
++  "symfony.com",
++  "wordpress.org",
++
++  // Java 框架 & 库
++  "docs.spring.io",
++  "hibernate.org",
++  "tomcat.apache.org",
++  "gradle.org",
++  "maven.apache.org",
++
++  // .NET & C# 框架
++  "asp.net",
++  "dotnet.microsoft.com",
++  "nuget.org",
++  "blazor.net",
++
++  // 移动开发
++  "reactnative.dev",
++  "docs.flutter.dev",
++  "developer.apple.com",
++  "developer.android.com",
++
++  // 数据科学 & 机器学习
++  "keras.io",
++  "spark.apache.org",
++  "huggingface.co",
++  "www.kaggle.com",
++
++  // 数据库
++  "www.mongodb.com",
++  "redis.io",
++  "www.postgresql.org",
++  "dev.mysql.com",
++  "www.sqlite.org",
++  "graphql.org",
++  "prisma.io",
++
++  // 云 & DevOps
++  "docs.aws.amazon.com",
++  "cloud.google.com",
++  "kubernetes.io",
++  "www.docker.com",
++  "www.terraform.io",
++  "www.ansible.com",
++  "vercel.com/docs",
++  "docs.netlify.com",
++  "devcenter.heroku.com",
++
++  // 测试 & 监控
++  "cypress.io",
++  "selenium.dev",
++
++  // 游戏开发
++  "docs.unity.com",
++  "docs.unrealengine.com",
++
++  // 其它必备工具
++  "git-scm.com",
++  "nginx.org",
++  "httpd.apache.org",
++]);
++
++// 模块加载时拆分一次：纯主机名走 O(1) Set.has()，带路径前缀的走小型 per-host 列表。
++const { HOSTNAME_ONLY, PATH_PREFIXES } = (() => {
++  const hosts = new Set<string>();
++  const paths = new Map<string, string[]>();
++  for (const entry of PREAPPROVED_HOSTS) {
++    const slash = entry.indexOf("/");
++    if (slash === -1) {
++      hosts.add(entry);
++    } else {
++      const host = entry.slice(0, slash);
++      const p = entry.slice(slash);
++      const prefixes = paths.get(host);
++      if (prefixes) prefixes.push(p);
++      else paths.set(host, [p]);
++    }
++  }
++  return { HOSTNAME_ONLY: hosts, PATH_PREFIXES: paths };
++})();
++
++/**
++ * 判断 (hostname, pathname) 是否命中预授权白名单。
++ * 强制路径分段边界：`/anthropics` 不匹配 `/anthropics-evil/malware`，
++ * 只有精确相等或 `/` 后接的才算命中。
++ */
++export function isPreapprovedHost(hostname: string, pathname: string): boolean {
++  if (HOSTNAME_ONLY.has(hostname)) return true;
++  const prefixes = PATH_PREFIXES.get(hostname);
++  if (prefixes) {
++    for (const p of prefixes) {
++      if (pathname === p || pathname.startsWith(p + "/")) return true;
++    }
++  }
++  return false;
++}
+diff --git a/src/tool/web-fetch.ts b/src/tool/web-fetch.ts
+index ca6850b..612ee19 100644
+--- a/src/tool/web-fetch.ts
++++ b/src/tool/web-fetch.ts
+@@ -8,6 +8,7 @@ import type { LegacyTool as Tool, LegacyToolResult as ToolResult, PermissionResu
+ import { getLogger } from "../debug/logger.ts";
+ import { z } from "zod/v4";
+ import { lazySchema } from "../sdk/lazy-schema.ts";
++import { isPreapprovedHost } from "./web-fetch-preapproved.ts";
+ 
+ const FETCH_TIMEOUT_MS = 10000;
+ const MAX_CONTENT_LENGTH = 100000; // 从 50000 提升到 100000
+@@ -272,8 +273,26 @@ export class WebFetchTool implements Tool {
+     return true;
+   }
+ 
+-  /** 只读工具：无权限意见，交给权限系统决定 */
+-  async checkPermissions(_input: unknown, _context: ToolUseContext): Promise<PermissionResult> {
++  /**
++   * 权限检查（对齐 CC WebFetchTool.checkPermissions，方案 A）：
++   * - 预授权代码类域名（PREAPPROVED_HOSTS）→ 直接放行（免确认）
++   * - 其它 → passthrough：交给权限系统按 WebFetch(domain:x) 规则匹配，
++   *   无匹配规则时落到默认 ask（web_fetch 已从 checker READ_ONLY_TOOLS 移除，不再无条件放行）。
++   *
++   * 契约：网络出站需人类把关，默认 ask 而非默认放行。domain 粒度授权由用户规则控制。
++   */
++  async checkPermissions(input: unknown, _context: ToolUseContext): Promise<PermissionResult> {
++    const url: string = (input as { url?: string })?.url ?? "";
++    if (url) {
++      try {
++        const parsed = new URL(url);
++        if (isPreapprovedHost(parsed.hostname, parsed.pathname)) {
++          return { behavior: "allow", updatedInput: input };
++        }
++      } catch {
++        /* URL 解析失败：交给 passthrough / execute 阶段的 SSRF 校验处理 */
++      }
++    }
+     return { behavior: "passthrough" };
+   }
+ 
+diff --git a/src/ui/App.tsx b/src/ui/App.tsx
+index ab4bde8..88393b6 100644
+--- a/src/ui/App.tsx
++++ b/src/ui/App.tsx
+@@ -102,7 +102,7 @@ export interface PermissionRequestInfo {
+   toolName: string;
+   toolInput: unknown;
+   description: string;
+-  resolve: (answer: "yes" | "no" | "always") => void;
++  resolve: (answer: "yes" | "no" | "always" | "always-persist") => void;
+   /**
+    * 与该工具相关的不可达规则（对标 cc Unreachable Rules）。
+    * 每条含被阴影规则、覆盖它的规则、严重度(blocked/shadowed)。可选——无阴影时省略。
+diff --git a/src/ui/components/PermissionPrompt.tsx b/src/ui/components/PermissionPrompt.tsx
+index cba4a0c..4b4df65 100644
+--- a/src/ui/components/PermissionPrompt.tsx
++++ b/src/ui/components/PermissionPrompt.tsx
+@@ -25,7 +25,14 @@ export interface PermissionPromptRequest {
+   toolInput: unknown;
+   description?: string;
+   reason?: string;
+-  resolve: (result: "yes" | "no" | "always") => void;
++  /**
++   * 决策结果：
++   * - yes            允许本次
++   * - no             拒绝
++   * - always         本会话始终允许（sessionMemory）
++   * - always-persist 持久化到项目 settings（跨会话，P2-3；仅 Bash 工具提供此档）
++   */
++  resolve: (result: "yes" | "no" | "always" | "always-persist") => void;
+ }
+ 
+ /** 单个操作项：高亮按键 + 说明 */
+@@ -52,6 +59,8 @@ export function PermissionPrompt({ request }: { request: PermissionPromptRequest
+   // 危险时走标红 + 安全默认拒绝路径。其它工具维持常态确认。
+   const command: string = typeof input?.command === "string" ? input.command : "";
+   const isDangerous = command.length > 0 && isDestructiveCommand(command);
++  // P2-3：仅 Bash 工具提供「持久化到项目配置」档；危险命令不提供持久档（避免一键永久放行破坏性命令）。
++  const isBashTool = request.toolName === "bash" && !isDangerous;
+ 
+   const accentColor = isDangerous ? theme.status.error : theme.status.warning;
+   const title = isDangerous ? "危险操作 · 权限请求" : "权限请求";
+@@ -80,6 +89,14 @@ export function PermissionPrompt({ request }: { request: PermissionPromptRequest
+       request.resolve("no");
+       return true;
+     }
++    // P2-3：Bash 工具额外提供「A 持久化到项目配置」档（跨会话生效）。
++    // Shift+A 上报的 key.name 仍是 "a" 但带 shift 修饰；须先于裸 a 判定，否则被裸 a 截胡。
++    // 文件编辑类不提供持久档（对齐 CC「Edit always 仅会话」）。
++    if (isBashTool && lower === "a" && key.shift) {
++      resolvedRef.current = true;
++      request.resolve("always-persist");
++      return true;
++    }
+     if (lower === "a") {
+       resolvedRef.current = true;
+       request.resolve("always");
+@@ -129,7 +146,10 @@ export function PermissionPrompt({ request }: { request: PermissionPromptRequest
+       <Box marginTop={1} gap={2}>
+         <ActionKey keyLabel="y" desc="允许" color={theme.status.success} />
+         <ActionKey keyLabel="n" desc={isDangerous ? "拒绝（默认）" : "拒绝"} color={theme.status.error} />
+-        <ActionKey keyLabel="a" desc="始终允许" color={theme.ui.active} />
++        <ActionKey keyLabel="a" desc={isBashTool ? "本会话始终允许" : "始终允许"} color={theme.ui.active} />
++        {isBashTool && (
++          <ActionKey keyLabel="A" desc="持久化到项目配置" color={theme.ui.active} />
++        )}
+       </Box>
+     </Box>
+   );
+diff --git a/src/ui/hooks/useStatusLineData.ts b/src/ui/hooks/useStatusLineData.ts
+index 884bb48..d00e955 100644
+--- a/src/ui/hooks/useStatusLineData.ts
++++ b/src/ui/hooks/useStatusLineData.ts
+@@ -57,8 +57,18 @@ export function derivePermission(permissionMode: string): {
+         return theme.status.success;
+     }
+   })();
+-  const display =
+-    permissionMode === "dangerously-skip-permissions" ? "skip-perms" : permissionMode;
++  // P2-4：模式展示对齐 CC。default 展示为「⏸ Manual」（⏸ 徽章 = 手动逐条确认，
++  // 对齐 CC v2.1.200 default→Manual 改名 + PAUSE 徽章语义）。
++  const display = (() => {
++    switch (permissionMode) {
++      case "dangerously-skip-permissions":
++        return "skip-perms";
++      case "default":
++        return `${PAUSED_MARK} Manual`;
++      default:
++        return permissionMode;
++    }
++  })();
+   return { display, color, isDanger };
+ }
+ 

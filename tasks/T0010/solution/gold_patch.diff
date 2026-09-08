@@ -1,0 +1,27 @@
+diff --git a/bunfig.toml b/bunfig.toml
+index f36f5fd..37fa292 100644
+--- a/bunfig.toml
++++ b/bunfig.toml
+@@ -1 +1,6 @@
+ # Bun 配置文件
++
++[test]
++# 测试全局隔离兜底：把 SID_CONFIG_DIR 默认指向临时目录，避免测试写用户真实的 ~/.sid-code。
++# 理由与安全性见 tests/preload-isolate-sid-home.ts 的文件头注释。
++preload = ["./tests/preload-isolate-sid-home.ts"]
+diff --git a/src/telemetry/cache-telemetry.ts b/src/telemetry/cache-telemetry.ts
+index 830c55d..5e79b1b 100644
+--- a/src/telemetry/cache-telemetry.ts
++++ b/src/telemetry/cache-telemetry.ts
+@@ -177,6 +177,11 @@ export function summarizeCacheBreakHistory(
+       else if (change.includes("Beta headers")) bump("beta_headers");
+       else if (change.includes("消息数量骤减")) bump("compact");
+       else if (change.includes("TTL")) bump("ttl_expiry");
++      // P2-1 的两类前缀 hash 归因（cache-detection.ts:264-268）此前无对应分支，
++      // 全部落进 unknown —— 实测真实数据 500 条里 499 条如此，聚合等于失效。
++      // 这两类恰恰是最有价值的区分：服务端波动本地不可控，前缀断裂才是能优化的。
++      else if (change.includes("服务端缓存波动")) bump("server_fluctuation");
++      else if (change.includes("本地前缀 hash 变化")) bump("prefix_break");
+       else bump("unknown");
+     }
+   }

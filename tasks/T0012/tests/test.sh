@@ -1,0 +1,71 @@
+#!/bin/bash
+# T3 生成，勿手改。task=T0012
+# 规则1：每条代码路径都必须写 reward —— 绝不能有「文件已存在就不写」的分支，
+#        否则 agent 可以自己往 reward 文件里写个 1
+# 规则2：先无条件覆盖为 0，跑完再按结果改写
+mkdir -p /logs/verifier
+echo 0 > /logs/verifier/reward.txt
+printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error":"test_sh_did_not_finish"}\n' \
+  > /logs/verifier/reward.json
+
+cd /repo
+
+# ── 规则4：测试保护 ────────────────────────────────────────────────
+# ⚠️ 按**路径逐个**还原，不按目录 —— 65 条 task 里有 4 条的测试文件不在 tests/ 下
+# （src/ 3 个、packages/ 2 个），只还原 tests/ 会漏掉它们；
+# 而 `git clean -fd src/` 会删掉 agent 新建的源码，即删掉它的解答本体。
+# 名单由 T3 生成时字面写入。
+git checkout -- 'tests/query/backoff-abort.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/context-pressure.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/empty-param.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/false-compaction-banner.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/hook-modified-notice.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/human-input-gate.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/hypothesis-gaps.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/hypothesis-guide.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/hypothesis-ledger.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/message-queue-manager.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/negative-yield-defense-audit-fixes.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/output-stall.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/permission-reminder.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/queue-priority-drain.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/reactive-compact.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/reminder-inject-invariant.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/reminder-inject.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/reminder-throttle.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/repeated-readonly-guard.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/side-call-timeout.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/soft-turn-limit.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/sparse-content-index.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/stream-processor-abort-isolation.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/streaming-tool-executor.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/thinking-divergence.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/todo-realtime-integration.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/todo-reminder-scan.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/todo-reminder.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/token-budget-continuation.test.ts' 2>/dev/null || true
+git checkout -- 'tests/query/unanswered-end-turn.test.ts' 2>/dev/null || true
+rm -f 'tests/query/incremental-tool-settle.test.ts'
+
+# ── 规则3：test_patch 在 verifier 阶段应用，不在 agent 阶段 ────────
+# ⚠️ 先刷 index：tar 解包出来的文件全是 stat-dirty（实测 1215/1215），
+#    而 --3way 要查 index，不刷必报 `does not match index`（见 solve_sh docstring）
+git update-index -q --refresh || true
+if ! git apply --3way /tests/test_patch.diff 2>>/logs/verifier/apply.log; then
+  echo "TEST_PATCH_APPLY_FAILED" >> /logs/verifier/apply.log
+  printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error":"test_patch_apply_failed"}\n' \
+    > /logs/verifier/reward.json
+  echo 0 > /logs/verifier/reward.txt
+  exit 0    # 注意：exit 0 —— 要 reward=0，不要 trial error（§4 T3）
+fi
+
+# ── 规则5+6：名单字面写入，走 --reporter=junit 结构化输出 ──────────
+# ⚠️ 不许 grep 日志文本判分（R1 经典成因：格式一变就恒真/恒假且不报错）
+# ⚠️ test_cmd 取自 base 时点的 package.json（§3.5），不同 base 可能不同
+bun test --reporter=junit --reporter-outfile=/logs/verifier/f2p.xml 'tests/query/incremental-tool-settle.test.ts' \
+  > /logs/verifier/f2p.log 2>&1 || true
+bun test --reporter=junit --reporter-outfile=/logs/verifier/p2p.xml 'tests/query/hypothesis-gaps.test.ts' 'tests/query/hypothesis-ledger.test.ts' 'tests/query/hypothesis-guide.test.ts' 'tests/query/empty-param.test.ts' 'tests/query/repeated-readonly-guard.test.ts' 'tests/query/message-queue-manager.test.ts' 'tests/query/reminder-inject.test.ts' 'tests/query/context-pressure.test.ts' 'tests/query/output-stall.test.ts' 'tests/query/negative-yield-defense-audit-fixes.test.ts' 'tests/query/permission-reminder.test.ts' 'tests/query/token-budget-continuation.test.ts' 'tests/query/todo-reminder-scan.test.ts' 'tests/query/hook-modified-notice.test.ts' 'tests/query/thinking-divergence.test.ts' 'tests/query/todo-reminder.test.ts' 'tests/query/queue-priority-drain.test.ts' 'tests/query/reactive-compact.test.ts' 'tests/query/todo-realtime-integration.test.ts' 'tests/query/reminder-throttle.test.ts' 'tests/query/unanswered-end-turn.test.ts' 'tests/query/soft-turn-limit.test.ts' 'tests/query/reminder-inject-invariant.test.ts' 'tests/query/side-call-timeout.test.ts' 'tests/query/stream-processor-abort-isolation.test.ts' 'tests/query/backoff-abort.test.ts' 'tests/query/human-input-gate.test.ts' 'tests/query/streaming-tool-executor.test.ts' 'tests/query/false-compaction-banner.test.ts' 'tests/query/sparse-content-index.test.ts' \
+  > /logs/verifier/p2p.log 2>&1 || true
+
+# 规则7：score.py 写 reward / f2p / p2p 三个键（缺一个 T5 就退化成单值判定）
+python3 /tests/score.py

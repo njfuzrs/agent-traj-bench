@@ -1,0 +1,119 @@
+diff --git a/src/app.ts b/src/app.ts
+index e233115..368245a 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -597,12 +597,8 @@ export class App {
+   /** 写单个旋钮字段到用户 settings.json（value=undefined 表示删除该字段，回退 auto）。 */
+   private persistKnob(key: "effortLevel" | "thinkingEnabled", value: unknown): void {
+     try {
+-      const { getSettingsForSource, writeSettingsFile } = require("./config/settings/index.ts");
+-      const { settings } = getSettingsForSource("userSettings");
+-      const current: Record<string, unknown> = { ...(settings ?? {}) };
+-      if (value === undefined) delete current[key];
+-      else current[key] = value;
+-      writeSettingsFile("userSettings", current);
++      const { patchSettingsFile } = require("./config/settings/index.ts");
++      patchSettingsFile("userSettings", key, value);
+     } catch (e) {
+       getLogger().warn("KNOB", `持久化 ${key} 失败（不阻断）: ${(e as Error)?.message}`);
+     }
+diff --git a/src/config/settings/cache.ts b/src/config/settings/cache.ts
+index 3a7641c..4af5a0a 100644
+--- a/src/config/settings/cache.ts
++++ b/src/config/settings/cache.ts
+@@ -55,6 +55,11 @@ export function setCachedParsedFile(path: string, value: ParsedSettings): void {
+   parseFileCache.set(path, value);
+ }
+ 
++/** 失效单个文件的解析缓存（补丁写入后强制下次重新读盘） */
++export function clearCachedParsedFile(path: string): void {
++  parseFileCache.delete(path);
++}
++
+ /** 获取单来源缓存（undefined = 未缓存；null = 缓存了"该来源无设置"） */
+ export function getCachedSource(
+   source: SettingSource,
+diff --git a/src/config/settings/index.ts b/src/config/settings/index.ts
+index 82c83a1..3249ea9 100644
+--- a/src/config/settings/index.ts
++++ b/src/config/settings/index.ts
+@@ -43,6 +43,7 @@ export {
+   loadSettingsFromDisk,
+   setFlagSettings,
+   writeSettingsFile,
++  patchSettingsFile,
+   type SettingsWithErrors,
+ } from "./settings.ts";
+ 
+diff --git a/src/config/settings/settings.ts b/src/config/settings/settings.ts
+index 81ea03f..d5725e0 100644
+--- a/src/config/settings/settings.ts
++++ b/src/config/settings/settings.ts
+@@ -36,6 +36,7 @@ import {
+   setCachedSource,
+   getCachedParsedFile,
+   setCachedParsedFile,
++  clearCachedParsedFile,
+   type MergedSettings,
+ } from "./cache.ts";
+ 
+@@ -244,6 +245,59 @@ export function writeSettingsFile(
+   setSessionCache(null);
+ }
+ 
++/**
++ * 外科式补丁：只改文件里的单个顶层字段，其余原样保留。
++ *
++ * 与 writeSettingsFile 的关键区别：**不经过 Zod round-trip**。
++ * writeSettingsFile 的入参通常来自 getSettingsForSource() → parseSettingsFile() →
++ * SettingsSchema().safeParse()，而 ModelConfigSchema 无 .passthrough()，会 strip 掉
++ * availableModels[] 里的 api_key/base_url（及其它 schema 未声明的嵌套字段），再整体覆盖
++ * 写回就会永久丢失密钥——正是 `/effort -p` / `/think -p` 持久化后启动报“未设置
++ * OPENAI_API_KEY”的根因。
++ *
++ * 另一重风险：parseSettingsFile 读取时会 resolveEnvVars 把 "${DEEPSEEK_API_KEY}" 展开成
++ * 明文，若走 round-trip 写回会把明文密钥落盘。本函数直接读原始 JSON 文本、只改目标字段，
++ * 从根上规避这两类问题。
++ *
++ * @param source 目标来源（仅文件型来源有效；flagSettings 等内存来源直接忽略）
++ * @param key    要写入的顶层字段名
++ * @param value  字段值；传 undefined 表示删除该字段（回退默认，如 effort → auto）
++ */
++export function patchSettingsFile(
++  source: SettingSource,
++  key: string,
++  value: unknown,
++  workspacePath?: string,
++): void {
++  const path = getSettingsFilePath(source, workspacePath);
++  if (!path) return; // flagSettings 等内存来源无文件
++
++  // 读原始 JSON 文本（不展开 env 占位符、不做 Zod 校验），保留用户所有原始字段。
++  let raw: Record<string, unknown> = {};
++  if (existsSync(path)) {
++    try {
++      raw = JSON.parse(readFileSync(path, "utf-8"));
++    } catch (err) {
++      // 文件损坏时不要静默覆盖用户配置——直接抛出，让上层决定是否吞掉。
++      throw new Error(`settings 文件解析失败，已跳过补丁写入以免覆盖: ${err}`);
++    }
++  }
++
++  if (value === undefined) delete raw[key];
++  else raw[key] = value;
++
++  const dir = dirname(path);
++  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
++
++  markInternalWrite(path); // 抑制自身写入触发的变更通知
++  writeFileSync(path, JSON.stringify(raw, null, 2), { mode: 0o600 });
++
++  // 失效缓存，下次读取重新合并
++  clearCachedParsedFile(path);
++  setCachedSource(source, null);
++  setSessionCache(null);
++}
++
+ /**
+  * 核心加载函数：从所有来源加载、验证、合并（读取语义：数组拼接去重）。
+  * 不读缓存——总是重新合并（缓存逻辑在 getSettings 层）。

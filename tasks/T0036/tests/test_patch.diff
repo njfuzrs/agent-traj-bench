@@ -1,0 +1,244 @@
+diff --git a/tests/task/notification-truncate.test.ts b/tests/task/notification-truncate.test.ts
+new file mode 100644
+index 0000000..6d72696
+--- /dev/null
++++ b/tests/task/notification-truncate.test.ts
+@@ -0,0 +1,82 @@
++/**
++ * formatNotification 截断行为单测
++ *
++ * 验证问题修复：子代理结论此前被 slice(0, 2000) 截在半句，
++ * 现提高阈值并在超长时给出指向 output-file 的截断提示。
++ */
++
++import { describe, test, expect } from "bun:test";
++import {
++  formatNotification,
++  NOTIFICATION_OUTPUT_MAX_CHARS,
++  NOTIFICATION_ERROR_MAX_CHARS,
++} from "../../src/task/notification.ts";
++import type { AgentTaskResult } from "../../src/task/types.ts";
++
++const buildResult = (output: string): AgentTaskResult => ({
++  output,
++  totalToolUseCount: 1,
++  totalTokens: 100,
++  usage: { inputTokens: 80, outputTokens: 20 },
++});
++
++describe("formatNotification — 结果截断阈值", () => {
++  test("2000~16000 字符的结论被完整保留（不再被旧 2000 阈值截断）", () => {
++    const output = "结论正文。".repeat(600); // 远超旧 2000、仍 < 16000 字符
++    expect(output.length).toBeGreaterThan(2000);
++    expect(output.length).toBeLessThan(NOTIFICATION_OUTPUT_MAX_CHARS);
++
++    const xml = formatNotification({
++      taskId: "t1",
++      outputFile: "/tmp/t1.output",
++      status: "completed",
++      summary: "完成",
++      result: buildResult(output),
++    });
++    // 完整正文应原样出现，且无截断提示
++    expect(xml).toContain(output);
++    expect(xml).not.toContain("已截断");
++  });
++
++  test("超长结论被截断并提示指向 output-file（完整内容不丢失）", () => {
++    const output = "X".repeat(NOTIFICATION_OUTPUT_MAX_CHARS + 500);
++    const xml = formatNotification({
++      taskId: "t2",
++      outputFile: "/tmp/t2.output",
++      status: "completed",
++      summary: "完成",
++      result: buildResult(output),
++    });
++    expect(xml).toContain("已截断");
++    expect(xml).toContain("/tmp/t2.output"); // 指向完整内容
++    // 截断后保留的正文长度应为阈值（不含提示语）
++    expect(xml).toContain("X".repeat(NOTIFICATION_OUTPUT_MAX_CHARS));
++  });
++
++  test("error 走独立阈值，超长同样截断并提示", () => {
++    const error = "E".repeat(NOTIFICATION_ERROR_MAX_CHARS + 100);
++    const xml = formatNotification({
++      taskId: "t3",
++      outputFile: "/tmp/t3.output",
++      status: "failed",
++      summary: "失败",
++      error,
++    });
++    expect(xml).toContain("<error>");
++    expect(xml).toContain("已截断");
++  });
++
++  test("码点安全截断：多字节中文不被切坏", () => {
++    const output = "汉".repeat(NOTIFICATION_OUTPUT_MAX_CHARS + 50);
++    const xml = formatNotification({
++      taskId: "t4",
++      outputFile: "/tmp/t4.output",
++      status: "completed",
++      summary: "完成",
++      result: buildResult(output),
++    });
++    // 不应出现替换字符（U+FFFD）——切坏多字节会产生它
++    expect(xml).not.toContain("\uFFFD");
++    expect(xml).toContain("已截断");
++  });
++});
+diff --git a/tests/ui/history-adapter.test.ts b/tests/ui/history-adapter.test.ts
+index be0f719..bce92ae 100644
+--- a/tests/ui/history-adapter.test.ts
++++ b/tests/ui/history-adapter.test.ts
+@@ -461,3 +461,151 @@ describe("messagesToHistoryItems - 完整对话（合并模式）", () => {
+     }
+   });
+ });
++
++describe("后台任务通知（<task-notification>）→ task_notification 历史项", () => {
++  const buildNotification = (opts: {
++    taskId: string;
++    status: string;
++    summary: string;
++    result?: string;
++    error?: string;
++    outputFile?: string;
++  }): string => {
++    const lines = [
++      "<task-notification>",
++      `  <task-id>${opts.taskId}</task-id>`,
++    ];
++    if (opts.outputFile) lines.push(`  <output-file>${opts.outputFile}</output-file>`);
++    lines.push(`  <status>${opts.status}</status>`, `  <summary>${opts.summary}</summary>`);
++    if (opts.result !== undefined) lines.push(`  <result untrusted="true">${opts.result}</result>`);
++    if (opts.error !== undefined) lines.push(`  <error>${opts.error}</error>`);
++    lines.push("</task-notification>");
++    return lines.join("\n");
++  };
++
++  test("completed 通知 → task_notification 项，解析 summary/status/result/outputFile", () => {
++    const msgs: Message[] = [
++      {
++        role: "user",
++        content: [{
++          type: "text",
++          text: buildNotification({
++            taskId: "axcpyv1qa",
++            status: "completed",
++            summary: 'Agent "核查 oauth.ts" 执行完成',
++            result: "核查结论：全部 12 项均已落地。",
++            outputFile: "/tmp/axcpyv1qa.output",
++          }),
++        }],
++      },
++    ];
++    const items = messagesToHistoryItems(msgs);
++    expect(items).toHaveLength(1);
++    expect(items[0].type).toBe("task_notification");
++    if (items[0].type === "task_notification") {
++      expect(items[0].taskId).toBe("axcpyv1qa");
++      expect(items[0].status).toBe("completed");
++      expect(items[0].summary).toBe('Agent "核查 oauth.ts" 执行完成');
++      expect(items[0].result).toBe("核查结论：全部 12 项均已落地。");
++      expect(items[0].outputFile).toBe("/tmp/axcpyv1qa.output");
++    }
++  });
++
++  test("不再走 UserMessage 全量渲染（关键：解决折叠不统一）", () => {
++    const msgs: Message[] = [
++      {
++        role: "user",
++        content: [{
++          type: "text",
++          text: buildNotification({ taskId: "t1", status: "completed", summary: "完成", result: "x" }),
++        }],
++      },
++    ];
++    const items = messagesToHistoryItems(msgs);
++    // 不应产出 user 项（否则会走 UserMessage 全量渲染、不折叠）
++    expect(items.every(i => i.type !== "user")).toBe(true);
++    expect(items[0].type).toBe("task_notification");
++  });
++
++  test("failed 通知 → 取 <error> 作为 result，status=failed", () => {
++    const msgs: Message[] = [
++      {
++        role: "user",
++        content: [{
++          type: "text",
++          text: buildNotification({
++            taskId: "t2",
++            status: "failed",
++            summary: 'Agent "X" 执行失败',
++            error: "连接超时",
++          }),
++        }],
++      },
++    ];
++    const items = messagesToHistoryItems(msgs);
++    expect(items).toHaveLength(1);
++    if (items[0].type === "task_notification") {
++      expect(items[0].status).toBe("failed");
++      expect(items[0].result).toBe("连接超时");
++    }
++  });
++
++  test("缺省正文（killed 无 result/error）→ result 为 undefined，仅显示摘要", () => {
++    const msgs: Message[] = [
++      {
++        role: "user",
++        content: [{
++          type: "text",
++          text: buildNotification({ taskId: "t3", status: "killed", summary: 'Agent "X" 已被终止' }),
++        }],
++      },
++    ];
++    const items = messagesToHistoryItems(msgs);
++    expect(items).toHaveLength(1);
++    if (items[0].type === "task_notification") {
++      expect(items[0].status).toBe("killed");
++      expect(items[0].result).toBeUndefined();
++    }
++  });
++
++  test("批量后台任务同轮完成（多个连续通知块）→ 每块一个项", () => {
++    const text = [
++      buildNotification({ taskId: "t1", status: "completed", summary: "S1", result: "R1" }),
++      buildNotification({ taskId: "t2", status: "completed", summary: "S2", result: "R2" }),
++    ].join("\n");
++    const msgs: Message[] = [{ role: "user", content: [{ type: "text", text }] }];
++    const items = messagesToHistoryItems(msgs);
++    expect(items).toHaveLength(2);
++    expect(items.every(i => i.type === "task_notification")).toBe(true);
++    if (items[0].type === "task_notification" && items[1].type === "task_notification") {
++      expect(items[0].taskId).toBe("t1");
++      expect(items[1].taskId).toBe("t2");
++    }
++  });
++
++  test("含换行/表格的多行 result 被完整保留（不截断）", () => {
++    const longResult = "结论：\n| # | 条目 | 结论 |\n|---|------|------|\n| 1 | A | ✅ |\n| 2 | B | ✅ |";
++    const msgs: Message[] = [
++      {
++        role: "user",
++        content: [{
++          type: "text",
++          text: buildNotification({ taskId: "t4", status: "completed", summary: "完成", result: longResult }),
++        }],
++      },
++    ];
++    const items = messagesToHistoryItems(msgs);
++    if (items[0].type === "task_notification") {
++      expect(items[0].result).toBe(longResult);
++    }
++  });
++
++  test("真实用户消息不被误判为通知", () => {
++    const msgs: Message[] = [
++      { role: "user", content: [{ type: "text", text: "帮我看看 <task-notification> 这个标签怎么用" }] },
++    ];
++    const items = messagesToHistoryItems(msgs);
++    // 以普通文本开头（非 <task-notification> 起始），应走 user 项
++    expect(items[0].type).toBe("user");
++  });
++});

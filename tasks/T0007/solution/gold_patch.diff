@@ -1,0 +1,470 @@
+diff --git a/src/agent/tool.ts b/src/agent/tool.ts
+index aeb9492..4303c4c 100644
+--- a/src/agent/tool.ts
++++ b/src/agent/tool.ts
+@@ -43,7 +43,10 @@ const subAgentSchema = lazySchema(() => {
+     model: z
+       .string()
+       .optional()
+-      .describe("覆盖子代理使用的模型（省略时按子代理类型的默认模型）。用于给重任务派更强模型、给轻任务派更省模型。"),
++      .describe(
++        "覆盖子代理使用的模型（省略时按子代理类型的默认模型）。用于给重任务派更强模型、给轻任务派更省模型。"
++        + "必须是当前配置里可用的完整模型名（区分大小写），不要凭印象缩写或臆造名字；不确定就省略该参数。",
++      ),
+     cwd: z
+       .string()
+       .optional()
+@@ -388,6 +391,28 @@ ${typeLines}
+       return { output: `错误: 无效的子代理类型 "${params.type}"，可选: ${validTypes.join(", ")}`, isError: true };
+     }
+ 
++    // model 白名单校验（与上面 type 校验同一范式：非法值当场退回可选清单，不透传给网关）。
++    //
++    // 背景（2026-08-01 生产事故）：模型臆造了不存在的模型名 "deepseek"（用户实配的是
++    // ali-deepseek-v4-pro / ali-deepseek-v4-flash）。此前 model 只有 z.string() 无任何
++    // 校验，臆造名直穿到网关 → 503 model_not_found，且连带污染两处内部状态：
++    // AGENT_LOOP 把这个不存在的名字"跨路径拉黑"，SESSION 用兜底价给它估算成本。
++    //
++    // fail-open 原则：清单为空（用户没配 availableModels）时一律放行——宁可让请求
++    // 到网关去失败，也不能因为本地无从判断就误拦用户合法配置的模型。
++    if (params.model?.trim()) {
++      const requested = params.model.trim();
++      const known = this.providerRegistry.getKnownModelNames();
++      if (known.length > 0 && !known.includes(requested)) {
++        return {
++          output:
++            `错误: 模型 "${requested}" 不在可用模型列表中，可选: ${known.join(", ")}。\n`
++            + `请改用列表中的准确名称（区分大小写），或省略 model 参数以使用该子代理类型的默认模型。`,
++          isError: true,
++        };
++      }
++    }
++
+     // P2-1：agent 定义声明的 background / isolation 作为默认值，显式工具参数优先覆盖。
+     // （frontmatter 里声明 background: true 的 coordinator/审计类 agent 默认后台跑；
+     //  声明 isolation: worktree 的写类 agent 默认隔离，无需每次调用方显式传。）
+diff --git a/src/llm/openai-responses-request.ts b/src/llm/openai-responses-request.ts
+index 9eb87c0..cdda2f3 100644
+--- a/src/llm/openai-responses-request.ts
++++ b/src/llm/openai-responses-request.ts
+@@ -176,6 +176,28 @@ function makeNullable(schema: unknown): unknown {
+  *
+  * 用运行时自检而非按工具名硬编码豁免：未来任何新增的 `z.any()`/`z.unknown()` 字段工具
+  * 都会被自动识别并降级，不会再次踩坑。
++ *
++ * ## 第二类不兼容：动态 key 字典（record 模式）
++ *
++ * 除「无约束任意值」外，OpenAI strict 还**不接受描述动态 key 的关键字**：
++ * `propertyNames`、`patternProperties`，以及 `additionalProperties` 为 schema 对象
++ * （而非 `false`）的写法。原因同样是 strict 的本质是约束解码——它要求 key 集合是
++ * 编译期已知的有限集，而字典的 key 是运行时才知道的。
++ *
++ * 背景（2026-08-01 生产事故）：`task_create` / `task_update` 的 `metadata` 字段是
++ * `z.record(z.string(), z.unknown())`，转 JSON Schema 后带 `propertyNames`，被
++ * OpenAI 直接 400：
++ *
++ *   `Invalid schema for function 'task_create': In context=('properties','metadata'),
++ *    'propertyNames' is not permitted.`
++ *
++ * 注意这是**整个请求 400**——该轮所有工具定义（实测 137 个）全部发不出去，不只是
++ * task_create 不可用。实测一次会话中复发 8 次。
++ *
++ * 本函数原先只递归 `properties` / `items`，对 record 类型的这三个关键字**完全不检查**，
++ * 所以漏了过去。讽刺的是 `toStrictJsonSchema` 顶部注释早就写明「不处理 record/字典模式…
++ * 一旦出现，应在 registry.ts 层面不给该工具打 strict:true」——预判到了，但没接线。
++ * 现在补上：识别到就整体降级为非 strict，与 `z.unknown()` 走同一条兜底路径。
+  */
+ function hasStrictIncompatibleNode(schema: unknown): boolean {
+   if (schema === null || typeof schema !== "object") return false;
+@@ -194,6 +216,19 @@ function hasStrictIncompatibleNode(schema: unknown): boolean {
+     return true;
+   }
+ 
++  // 「动态 key 字典」节点：strict 模式不允许描述运行时 key 的关键字。
++  // propertyNames / patternProperties 一出现即不兼容；additionalProperties 只允许
++  // 显式 false（"禁止额外字段"是 strict 的硬性要求），为 schema 对象则是字典语义。
++  if (node.propertyNames !== undefined || node.patternProperties !== undefined) {
++    return true;
++  }
++  if (
++    node.additionalProperties !== undefined
++    && node.additionalProperties !== false
++  ) {
++    return true;
++  }
++
+   // 递归下钻各类子节点
+   for (const key of combinators) {
+     if (Array.isArray(node[key]) && (node[key] as unknown[]).some(hasStrictIncompatibleNode)) {
+diff --git a/src/llm/openai.ts b/src/llm/openai.ts
+index 390b447..1ef8b75 100644
+--- a/src/llm/openai.ts
++++ b/src/llm/openai.ts
+@@ -1099,7 +1099,22 @@ export class OpenAIProvider implements Provider {
+ 
+   /**
+    * 判断当前 baseURL 是否为官方 OpenAI 端点。
+-   * 仅 api.openai.com 走 Responses API，兼容端点（DeepSeek/Kimi/GLM/Grok 等）永不触发。
++   *
++   * ⚠️ 这只是 shouldUseResponsesAPI 的**优先级 3**（启发式兜底前的守门），
++   * **不是**"只有官方端点才走 Responses API"的总闸门——优先级 2 的 catalog
++   * `protocolKind: "openai-responses"` 声明在它**之前**短路返回 true。
++   *
++   * 也就是说：注册在 model-registry 里声明了 openai-responses 的模型（如 gpt-5.6 族），
++   * 即便跑在企业网关（uniapi 等兼容端点）上也会走 Responses API。这是**有意的**——
++   * 声明式配置的权威性高于端点启发式，否则同一模型换个网关就静默降级到
++   * Chat Completions，丢掉 reasoning.effort 等 Responses 专有能力。
++   *
++   * 前提是网关自身实现了 `/responses`。实测 uniapi 网关支持（返回标准 OpenAI 形状的
++   * 响应与错误体）。若某网关不支持，用 `SID_CODE_OPENAI_PROTOCOL=chat`（优先级 1）
++   * 强制降级，不要改这里的判断。
++   *
++   * 本方法真正的作用域：**未注册**的模型名（优先级 4 的 `/^gpt-5\./` 启发式）——
++   * 只有官方端点才允许靠模型名猜协议，兼容端点上的未注册模型一律走 Chat Completions。
+    */
+   private isOfficialOpenAIEndpoint(): boolean {
+     try {
+diff --git a/src/llm/registry.ts b/src/llm/registry.ts
+index 61676f5..8590e7a 100644
+--- a/src/llm/registry.ts
++++ b/src/llm/registry.ts
+@@ -44,6 +44,37 @@ export class ProviderRegistry {
+     this.availability = new ModelAvailabilityService();
+   }
+ 
++  /**
++   * 已知可用的模型名清单（去重、保序），用于「模型名白名单校验」。
++   *
++   * 来源：availableModels 配置 + 主模型 + 降级模型 + subAgentModels 里已配置的值。
++   * 后三者也纳入，是因为它们即便没写进 availableModels 也一定是用户有意指定的
++   * 合法目标（顶层字段会回填连接信息），不能被判成非法。
++   *
++   * 背景（2026-08-01 生产事故）：`sub_agent` 的 `model` 参数只有 `z.string()`，
++   * 无任何校验。模型臆造了一个不存在的名字 `"deepseek"`（用户配的实际是
++   * `ali-deepseek-v4-pro` / `ali-deepseek-v4-flash`）并直接透传给网关，得到
++   * `503 model_not_found`。连带两个次生污染：`AGENT_LOOP` 把这个根本不存在的
++   * 模型名"跨路径拉黑"，`SESSION` 又用兜底价给它估了成本。
++   *
++   * 返回空数组表示「无从判断」（用户没配 availableModels），调用方必须 fail-open
++   * 放行——绝不能因为清单为空就把所有模型都判为非法。
++   */
++  getKnownModelNames(): string[] {
++    const names: string[] = [];
++    const push = (n: string | undefined) => {
++      const v = n?.trim();
++      if (v && !names.includes(v)) names.push(v);
++    };
++
++    for (const m of this.config.availableModels ?? []) push(m.name);
++    push(this.config.model);
++    push(this.config.fallbackModel);
++    for (const v of Object.values(this.subAgentModels)) push(v);
++
++    return names;
++  }
++
+   /** 获取当前主 Provider（根据 config.provider + config.baseURL） */
+   getProvider(): Provider {
+     return this.getProviderFor(
+diff --git a/src/tool/grep.ts b/src/tool/grep.ts
+index 240347c..d40e807 100644
+--- a/src/tool/grep.ts
++++ b/src/tool/grep.ts
+@@ -20,7 +20,16 @@ const MAX_OUTPUT_LENGTH = 30000;
+ const grepSchema = lazySchema(() =>
+   z.object({
+     pattern: z.string().describe("要搜索的正则表达式模式"),
+-    path: z.string().optional().describe("要搜索的文件或目录路径，默认为当前目录"),
++    // ⚠️ 描述必须明确"单个路径"：同 schema 里 glob 的描述写着"多个模式用空格分隔"，
++    // 实测模型会把这个语感带到 path 上，用空格拼 3 个绝对路径塞进来（2026-08-01 会话），
++    // 得到"路径不存在 '<拼接串>'"。要搜多处应发多次调用，或指向共同父目录 + glob 收窄。
++    path: z
++      .string()
++      .optional()
++      .describe(
++        "要搜索的**单个**文件或目录路径，默认为当前目录。不支持传多个路径（不要用空格/逗号拼接）——"
++        + "要搜多个位置请分多次调用，或传它们的共同父目录并用 glob/type 收窄范围。",
++      ),
+     output_mode: z
+       .enum(["files_with_matches", "content", "count"])
+       .optional()
+diff --git a/src/tool/input-validator.ts b/src/tool/input-validator.ts
+index 2c158a1..d9518bf 100644
+--- a/src/tool/input-validator.ts
++++ b/src/tool/input-validator.ts
+@@ -12,6 +12,7 @@
+  */
+ 
+ import type { LegacyTool } from "./types.ts";
++import { normalizeStrictNulls } from "./nullish-normalize.ts";
+ 
+ /** 校验结果 */
+ export type ToolInputValidation =
+@@ -62,7 +63,15 @@ export function validateToolInput(tool: LegacyTool, input: unknown): ToolInputVa
+     return { ok: true, data: input };
+   }
+ 
+-  const result = schema.safeParse(input);
++  // strict 契约回填：OpenAI strict 模式要求 optional 字段进 required 并用 null 表达
++  // "未提供"（见 openai-responses-request.ts toStrictJsonSchema），模型遵约传 null
++  // 后会被原始 zod schema 的 `.optional()` 拒绝——sid-code 让模型传 null 又拒绝它。
++  // 这里在校验前把这类 null 翻译回 zod 的"未提供"表示法。
++  // 只处理「optional 且未显式 nullable」的字段，`.nullable()` 的业务 null 不受影响；
++  // 同时拦下 `z.coerce.*` 把 null 静默转成 0 的污染（详见 nullish-normalize.ts）。
++  const normalized = normalizeStrictNulls(schema, input);
++
++  const result = schema.safeParse(normalized);
+   if (result.success) {
+     return { ok: true, data: result.data };
+   }
+diff --git a/src/tool/nullish-normalize.ts b/src/tool/nullish-normalize.ts
+new file mode 100644
+index 0000000..e6dee09
+--- /dev/null
++++ b/src/tool/nullish-normalize.ts
+@@ -0,0 +1,245 @@
++/**
++ * strict 契约回填：把「optional 字段收到的 null」归一成 undefined
++ *
++ * ## 为什么需要这一层
++ *
++ * OpenAI strict 模式（Constrained Decoding）不允许「可选 key」——所有字段必须进
++ * `required`，可选语义只能靠**类型可空**表达。因此 `openai-responses-request.ts` 的
++ * `toStrictJsonSchema()` 会把 zod `.optional()` 字段改造成 `type: ["string","null"]`
++ * 并塞进 required。发给模型的契约因此变成：
++ *
++ *   > pages 必填，不想提供就传 null
++ *
++ * 模型照做，传了 `pages: null`。但工具层校验用的是**原始 zod schema**
++ * （`z.string().optional()`），而 zod 的 `.optional()` 只接受 `undefined`、**不接受
++ * `null`** → `validateToolInput` 报「期望 string，实际收到 null」。
++ *
++ * 也就是说：**sid-code 让模型传 null，又拒绝模型传的 null**。模型没有任何办法自救——
++ * 它遵守 wire 契约就被拒，不遵守（省略字段）则违反 strict 的 required。实测 40 个带
++ * zodSchema 的内置工具里 **23 个**中招（read/edit/bash/grep/glob/ls/web_search 等
++ * 全部高频工具），是 2026-08-01 gpt-5.6-luna 会话里刷屏的「参数校验失败」的唯一根因。
++ *
++ * ## 为什么修在这里，而不是把工具的 zod 改成 .nullish()
++ *
++ * 改 zod 要动 23 个工具的几十个字段，漏一个就复发，且**后续任何人新增 `.optional()`
++ * 字段都会再次踩坑**——把一个协议层的形态差异摊派给每个工具作者，是治标。
++ *
++ * 本模块把它收敛成协议边界上的一次归一：既然 wire 契约里的 null 语义就是
++ * 「未提供」（`makeNullable` 的注释原话），那就在校验前把它翻译回 zod 的
++ * 「未提供」表示法 `undefined`。工具作者继续正常写 `.optional()`，无需知道
++ * OpenAI strict 的存在。
++ *
++ * ## 为什么不能简单地"把所有 null 都删掉"
++ *
++ * 两个必须区分的场景：
++ *
++ * 1. **作者显式声明可空**（`.nullable()` / `.nullish()`）——null 是有意义的业务值，
++ *    不能吞掉。本模块只处理「optional 且未显式 nullable」的字段。
++ *
++ * 2. **`z.coerce.*` 字段**——这类 schema 会把 null **静默强制转换**掉：
++ *    `z.coerce.number().optional().safeParse(null)` 不报错，而是返回 `0`。
++ *    这比报错更危险：`grep` 的 `head_limit` 语义是「0 表示无限制」
++ *    （见 `grep.ts:34`），模型传 null 会被悄悄解释成「不限制输出条数」，
++ *    `context`/`max_matches_per_file` 同理被污染成 0。**无任何报错、无日志**，
++ *    只是行为不对。实测 `grep` 一次调用 4 个 coerce 字段全被污染成 0。
++ *
++ *    正因为 coerce 会吞 null，用「safeParse(null) 是否成功」来判断字段能否接受 null
++ *    是错的——必须走 schema 结构内省（见 `acceptsNullExplicitly`）。
++ *
++ * ## 递归深度必须与 toStrictJsonSchema 对齐
++ *
++ * `toStrictJsonSchema` 是**递归**改造的（嵌套 object 的 optional 字段同样被转
++ * nullable），所以本模块也必须递归，否则嵌套一层的 optional 字段（如
++ * `hypothesis_register.supporting_evidence[].source`）仍会复发同样的错误。
++ * 两者的递归范围保持一一对应：object 的 properties、array 的 items、tuple 的 items。
++ *
++ * union / record 分支刻意不下钻：union 无法确定模型意图走哪个分支，record 的
++ * value 是无约束任意值——这两类在 strict 模式下本就会被
++ * `hasStrictIncompatibleNode` 判定为不兼容并整体降级为非 strict（不改造 schema、
++ * 不产生"传 null"的契约），因此不存在需要归一的 null。
++ */
++
++/** zod v4 内部 `_zod.def` 的鸭子类型视图，只取本模块需要的字段 */
++interface ZodDefLike {
++  type?: string;
++  innerType?: ZodSchemaLike;
++  element?: ZodSchemaLike;
++  items?: ZodSchemaLike[];
++  shape?: Record<string, ZodSchemaLike>;
++  getter?: () => ZodSchemaLike;
++}
++
++/** zod schema 的鸭子类型视图（不绑定具体 zod 版本导出，避免 v3/v4 类型不兼容） */
++interface ZodSchemaLike {
++  def?: ZodDefLike;
++  _zod?: { def?: ZodDefLike };
++}
++
++/** 取 schema 的 def（兼容 `.def` 与 `._zod.def` 两种访问路径） */
++function getDef(schema: unknown): ZodDefLike | undefined {
++  if (schema === null || typeof schema !== "object") return undefined;
++  const s = schema as ZodSchemaLike;
++  return s.def ?? s._zod?.def;
++}
++
++/** 递归展开上限——防御 `z.lazy` 自引用导致的无限下钻 */
++const MAX_UNWRAP_DEPTH = 32;
++
++/**
++ * 剥掉 optional / default / lazy 等包装层，返回：
++ * - `inner`: 最内层的实际 schema（用于继续递归 object/array）
++ * - `isOptional`: 是否存在 optional 包装（即 wire 层会被 makeNullable 处理）
++ * - `explicitlyNullable`: 是否存在 nullable 包装（作者有意允许 null，必须保留）
++ */
++function unwrap(schema: unknown): {
++  inner: unknown;
++  isOptional: boolean;
++  explicitlyNullable: boolean;
++} {
++  let current: unknown = schema;
++  let isOptional = false;
++  let explicitlyNullable = false;
++
++  for (let depth = 0; depth < MAX_UNWRAP_DEPTH; depth++) {
++    const def = getDef(current);
++    if (!def) break;
++
++    switch (def.type) {
++      case "optional":
++        isOptional = true;
++        current = def.innerType;
++        continue;
++      case "nullable":
++        // 作者显式 `.nullable()`：null 是合法业务值，绝不归一
++        explicitlyNullable = true;
++        current = def.innerType;
++        continue;
++      case "default":
++      case "prefault":
++      case "catch":
++      case "readonly":
++      case "nonoptional":
++        // 透明包装层：不改变可选/可空性，继续下钻找真实类型
++        current = def.innerType;
++        continue;
++      case "lazy": {
++        // z.lazy：调 getter 拿真实 schema（失败则停在当前层，按不可归一处理）
++        if (typeof def.getter !== "function") return { inner: current, isOptional, explicitlyNullable };
++        try {
++          current = def.getter();
++        } catch {
++          return { inner: current, isOptional, explicitlyNullable };
++        }
++        continue;
++      }
++      default:
++        return { inner: current, isOptional, explicitlyNullable };
++    }
++  }
++
++  return { inner: current, isOptional, explicitlyNullable };
++}
++
++/**
++ * 该字段是否「显式接受 null」。
++ *
++ * 只认 schema 结构上的 `.nullable()` 包装，**不用 `safeParse(null)` 试探**——
++ * `z.coerce.*` 会把 null 静默转成 0/""/false，试探法会把这类字段误判为
++ * "能接受 null"，从而放过一个会污染业务语义的值（见模块顶部注释场景 2）。
++ */
++function acceptsNullExplicitly(schema: unknown): boolean {
++  return unwrap(schema).explicitlyNullable;
++}
++
++/**
++ * 把 input 里「optional 且未显式 nullable」字段上的 null 归一成 undefined。
++ *
++ * 纯函数：不修改传入的 input，有改动时返回浅拷贝（无改动则原样返回同一引用，
++ * 便于调用方判断是否发生归一）。任何非预期结构一律原样返回，保证这一层
++ * 永不成为新的失败源。
++ *
++ * @param schema 工具的原始 zod schema（`tool.zodSchema`）
++ * @param input 模型给出的原始入参
++ */
++export function normalizeStrictNulls(schema: unknown, input: unknown): unknown {
++  return normalizeValue(schema, input, 0);
++}
++
++/** 递归深度上限——与 unwrap 同理，防御异常嵌套 */
++const MAX_RECURSE_DEPTH = 16;
++
++function normalizeValue(schema: unknown, value: unknown, depth: number): unknown {
++  if (depth > MAX_RECURSE_DEPTH) return value;
++
++  const { inner } = unwrap(schema);
++  const def = getDef(inner);
++  if (!def) return value;
++
++  // ── object：逐字段归一 ──
++  if (def.type === "object" && def.shape && typeof def.shape === "object") {
++    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
++    const obj = value as Record<string, unknown>;
++    const shape = def.shape;
++    let changed = false;
++    const result: Record<string, unknown> = {};
++
++    for (const [key, raw] of Object.entries(obj)) {
++      const fieldSchema = shape[key];
++      // schema 里没有这个 key（未识别字段）→ 原样保留，交给 zod 自己报
++      // unrecognized_keys，本层不代替它做裁剪。
++      if (fieldSchema === undefined) {
++        result[key] = raw;
++        continue;
++      }
++
++      if (raw === null) {
++        const { isOptional } = unwrap(fieldSchema);
++        // 仅当「字段可选」且「作者未显式允许 null」时，才把 null 当作
++        // wire 契约里的"未提供"翻译回 undefined。
++        if (isOptional && !acceptsNullExplicitly(fieldSchema)) {
++          // 直接跳过该 key（而非写 undefined）：语义等价于"未提供"，
++          // 且避免 `hasOwnProperty` 为 true 干扰下游对"字段是否出现"的判断。
++          changed = true;
++          continue;
++        }
++        result[key] = raw;
++        continue;
++      }
++
++      const normalized = normalizeValue(fieldSchema, raw, depth + 1);
++      if (normalized !== raw) changed = true;
++      result[key] = normalized;
++    }
++
++    return changed ? result : value;
++  }
++
++  // ── array：对每个元素递归（元素 schema 统一） ──
++  if (def.type === "array" && def.element !== undefined) {
++    if (!Array.isArray(value)) return value;
++    let changed = false;
++    const result = value.map((item) => {
++      const normalized = normalizeValue(def.element, item, depth + 1);
++      if (normalized !== item) changed = true;
++      return normalized;
++    });
++    return changed ? result : value;
++  }
++
++  // ── tuple：按位置对应各自的 schema ──
++  if (def.type === "tuple" && Array.isArray(def.items)) {
++    if (!Array.isArray(value)) return value;
++    let changed = false;
++    const result = value.map((item, i) => {
++      const itemSchema = def.items?.[i];
++      if (itemSchema === undefined) return item;
++      const normalized = normalizeValue(itemSchema, item, depth + 1);
++      if (normalized !== item) changed = true;
++      return normalized;
++    });
++    return changed ? result : value;
++  }
++
++  // union / record / 标量：不下钻（见模块顶部「递归深度必须与 toStrictJsonSchema 对齐」）
++  return value;
++}

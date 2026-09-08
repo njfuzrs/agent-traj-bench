@@ -1,0 +1,702 @@
+diff --git a/src/config/paths.ts b/src/config/paths.ts
+index 120c1fd..a7234d2 100644
+--- a/src/config/paths.ts
++++ b/src/config/paths.ts
+@@ -117,6 +117,9 @@ export const sidPaths = {
+   // ── IDE ──
+   ideLockDir: () => sidHomePath("ide"),
+ 
++  // ── 持久 Shell 会话：shell 环境快照 ──
++  shellSnapshots: () => sidHomePath("shell-snapshots"),
++
+   // ── 清理水位线 ──
+   lastCleanup: () => sidHomePath(".last-cleanup"),
+ } as const;
+diff --git a/src/state/bootstrap.ts b/src/state/bootstrap.ts
+index 16a13be..3bc37ce 100644
+--- a/src/state/bootstrap.ts
++++ b/src/state/bootstrap.ts
+@@ -60,6 +60,11 @@ const STATE: BootstrapState = {
+ 
+ // ═══ Getter ═══
+ export function getSessionId(): string { return STATE.sessionId; }
++/**
++ * @deprecated cwd 全局状态已收敛到 `bootstrap/state.ts`（持久 Shell 会话 P0-2）。
++ * bash 工具写回、path-utils 读取的均为那一套。本套 cwd 无任何引用，保留仅为兼容，
++ * 切勿在新代码中读写本套 cwd，否则与 `bootstrap/state.ts` 漂移。
++ */
+ export function getCwd(): string { return STATE.cwd; }
+ export function getOriginalCwd(): string { return STATE.originalCwd; }
+ export function getTotalCostUSD(): number { return STATE.totalCostUSD; }
+@@ -80,6 +85,9 @@ export function getTurnMetrics() {
+ 
+ // ═══ Setter ═══
+ export function setSessionId(id: string): void { STATE.sessionId = id; }
++/**
++ * @deprecated 见 getCwd 的弃用说明。cwd 真相源为 `bootstrap/state.ts`，本套勿写。
++ */
+ export function setCwd(cwd: string): void { STATE.cwd = cwd; }
+ export function setMainLoopModelOverride(model: string | null): void {
+   STATE.mainLoopModelOverride = model;
+diff --git a/src/task/shell-task.ts b/src/task/shell-task.ts
+index b74a5fa..d7b9dcd 100644
+--- a/src/task/shell-task.ts
++++ b/src/task/shell-task.ts
+@@ -37,10 +37,18 @@ export function spawnShellTask(opts: {
+   toolUseId?: string;
+   agentId?: string;
+   signal?: AbortSignal;
++  /**
++   * 用于展示/通知的原始命令（持久 Shell 会话场景：command 已被包成
++   * `source 快照 && eval '原命令'`，displayCommand 保留干净的原命令用于描述）。
++   * 不传则回退 command。
++   */
++  displayCommand?: string;
+ }): LocalShellTaskState {
+   const taskId = generateTaskId("local_shell");
+   const output = initTaskOutput(taskId);
+   const { shell, args } = getPlatformShell();
++  // 展示用命令（干净），与实际执行命令（可能含快照前缀）分离
++  const display = opts.displayCommand ?? opts.command;
+ 
+   const outFd = openSync(output.filePath, "w");
+   const child = spawn(shell, [...args, opts.command], {
+@@ -56,13 +64,13 @@ export function spawnShellTask(opts: {
+     id: taskId,
+     type: "local_shell",
+     status: "running",
+-    description: opts.command.slice(0, 100),
++    description: display.slice(0, 100),
+     toolUseId: opts.toolUseId,
+     startTime: Date.now(),
+     outputFile: output.filePath,
+     outputOffset: 0,
+     notified: false,
+-    command: opts.command,
++    command: display,
+     interrupted: false,
+     isBackgrounded: true,
+     agentId: opts.agentId,
+@@ -89,7 +97,7 @@ export function spawnShellTask(opts: {
+         toolUseId: opts.toolUseId,
+         outputFile: output.filePath,
+         status: code === 0 ? "completed" : "failed",
+-        summary: `命令 "${opts.command.slice(0, 60)}" ${
++        summary: `命令 "${display.slice(0, 60)}" ${
+           code === 0 ? "执行成功" : `失败 (exit code: ${code})`
+         }`,
+       }),
+diff --git a/src/tool/bash.ts b/src/tool/bash.ts
+index 8025368..bb9bcc0 100644
+--- a/src/tool/bash.ts
++++ b/src/tool/bash.ts
+@@ -1,16 +1,26 @@
+ /**
+  * Bash 工具 - 执行 shell 命令
+  * 对标 Claude Code：description 参数、输出截断、AbortSignal 集成、跨平台适配
++ *
++ * 持久 Shell 会话（P0-2）：
++ * - 会话启动时（构造期）创建 shell 环境快照，抓取用户 aliases/functions/options/PATH
++ * - 每条命令前 `source` 快照 + `eval` 命令（使 alias 生效）
++ * - 命令末尾 `pwd -P` 写回全局 cwd 状态，实现 cd 跨命令、跨工具持久化
++ * See: docs/bugfixes/todo/p0-2/持久Shell会话-补齐分析.md
+  */
+ 
+ import type { LegacyTool as Tool, LegacyToolResult as ToolResult, PermissionResult, ToolUseContext } from "./types.ts";
+ import { spawn } from "bun";
+-import { platform } from "os";
++import { platform, tmpdir } from "os";
++import { join } from "path";
++import { readFileSync, unlinkSync, existsSync } from "fs";
+ import { getLogger } from "../debug/logger.ts";
+ import type { Config } from "../config/config.ts";
+ import { isReadOnlyCommand, isDestructiveCommand } from "./bash/read-only-validation.ts";
+ import { normalizeToolPath } from "./path-utils.ts";
+ import { registerCleanup } from "../utils/graceful-shutdown.ts";
++import { getCwd, setCwd, getOriginalCwd } from "../bootstrap/state.ts";
++import { createAndSaveSnapshot, escapeForShell } from "./bash/shell-snapshot.ts";
+ 
+ /** Bash 输出截断阈值（对标 Claude Code 30000 字符） */
+ const MAX_OUTPUT_LENGTH = 30000;
+@@ -21,6 +31,9 @@ const BACKGROUND_DELAY_MS = 200;
+ /** 后台进程 PID 跟踪 */
+ const backgroundPids = new Set<number>();
+ 
++/** cwd 临时文件计数器（与 pid 组合保证并发命令的临时文件名唯一） */
++let cwdFileCounter = 0;
++
+ /**
+  * 杀掉所有残留后台进程并清空跟踪表(LEAK-3)。
+  * 退出时由 graceful-shutdown 调用,避免 backgroundPids 无界增长 + 孤儿进程残留。
+@@ -45,13 +58,19 @@ export function setBashToolConfig(config: Config): void {
+   globalConfig = config;
+ }
+ 
+-/** 获取平台 shell 配置 */
+-function getPlatformShell(): { shell: string; args: string[] } {
++/**
++ * 获取平台 shell 配置。
++ * @param opts.login 是否登录模式（加 -l）。无快照时回退登录模式以重新 source 用户配置（对标 claude-code getSpawnArgs）。
++ *                   Windows（powershell）无登录概念，忽略此参数。
++ */
++function getPlatformShell(opts?: { login?: boolean }): { shell: string; args: string[] } {
+   if (platform() === "win32") {
+     return { shell: "powershell.exe", args: ["-NoProfile", "-Command"] };
+   }
+   const userShell = process.env.SHELL || "/bin/bash";
+-  return { shell: userShell, args: ["-c"] };
++  // -c 后跟 -l：bash/zsh 将命令字符串作为首个操作数，-l 触发登录模式重新 source 配置
++  const args = opts?.login ? ["-c", "-l"] : ["-c"];
++  return { shell: userShell, args };
+ }
+ 
+ /** 截断超长输出 */
+@@ -89,6 +108,28 @@ function isBinaryOutput(data: string): boolean {
+ }
+ 
+ export class BashTool implements Tool {
++  /** shell 环境快照文件路径（构造期异步创建；undefined 表示无快照，降级登录模式） */
++  private snapshotFilePath: string | undefined;
++  /** 快照创建完成的 Promise（永不 reject，失败时 snapshotFilePath 为 undefined） */
++  private snapshotReady: Promise<void>;
++
++  constructor() {
++    // 构造期异步触发快照创建（BashTool 单例，cli.ts 仅 new 一次，构造期建快照成立）。
++    // 不阻塞构造；execute 首次会 await snapshotReady 确保从第一条命令起就用上快照。
++    this.snapshotReady = this.initSnapshot();
++  }
++
++  /** 异步创建 shell 快照（Windows 跳过，失败降级 undefined，永不抛出） */
++  private async initSnapshot(): Promise<void> {
++    if (platform() === "win32") return;
++    try {
++      const { shell } = getPlatformShell();
++      this.snapshotFilePath = await createAndSaveSnapshot(shell);
++    } catch {
++      this.snapshotFilePath = undefined;
++    }
++  }
++
+   name(): string {
+     return "bash";
+   }
+@@ -104,7 +145,10 @@ export class BashTool implements Tool {
+ - 设置合理的 timeout，默认 2 分钟，最长 10 分钟
+ - 输出超过 30000 字符会被自动截断
+ - 长时间运行的进程（如 dev server）可设置 is_background=true 后台运行
+-- 后台进程会返回 PID，可用于后续管理`;
++- 后台进程会返回 PID，可用于后续管理
++- 每条命令在独立 shell 进程中执行。cd 后的目录变更会被自动追踪并对所有工具（read/edit/glob 等）生效，无需每次重复传 cwd；
++  但 export、source venv/bin/activate 等动态环境变更不会跨命令保留——需要它们的操作必须写在同一条命令里。
++  例：\`cd src\` 后下一条 \`ls\` 会列 src 目录（可拆两条）；但 \`source venv/bin/activate && python foo.py\` 必须写为一条`;
+   }
+ 
+   inputSchema(): Record<string, unknown> {
+@@ -167,6 +211,71 @@ export class BashTool implements Tool {
+     return isReadOnlyCommand(command);
+   }
+ 
++  /**
++   * 解析命令的工作目录。
++   * 优先级：显式 params.cwd > 全局 cwd（getCwd()）> 原始启动目录（兜底）。
++   * 若目标目录已被删除（如 rm -rf 之后），回退到原始启动目录，对标 claude-code Shell.ts:222-238。
++   */
++  private resolveCwd(rawCwd: string | undefined): string {
++    let cwd = rawCwd ? normalizeToolPath(rawCwd) : getCwd();
++    if (!existsSync(cwd)) {
++      cwd = getOriginalCwd();
++    }
++    return cwd;
++  }
++
++  /**
++   * 构造实际 spawn 的命令字符串（前台/后台三处路径共用，避免只改前台导致后台丢快照）。
++   * - 有快照：`source <快照> 2>/dev/null || true && eval <命令>`（eval 触发二次解析使 alias 生效）
++   * - 无快照：原样命令（spawn 时由 getPlatformShell({login:true}) 加 -l 重新 source 配置）
++   * - trackCwd：命令末尾追加 `pwd -P >| <临时文件>`（>| 绕过 noclobber），仅前台、非 Windows
++   * @returns commandString 拼接后命令；cwdFile 追踪文件路径（undefined 表示不追踪 cwd）
++   */
++  private buildCommand(
++    rawCommand: string,
++    opts: { trackCwd: boolean },
++  ): { commandString: string; cwdFile: string | undefined } {
++    const isWin = platform() === "win32";
++    const parts: string[] = [];
++    let cwdFile: string | undefined;
++
++    if (this.snapshotFilePath && !isWin) {
++      parts.push(`source ${escapeForShell(this.snapshotFilePath)} 2>/dev/null || true`);
++      parts.push(`eval ${escapeForShell(rawCommand)}`);
++    } else {
++      parts.push(rawCommand);
++    }
++
++    // CWD 追踪仅对前台命令、非 Windows 生效（powershell 无 POSIX pwd -P 语义）
++    if (opts.trackCwd && !isWin) {
++      cwdFile = join(tmpdir(), `sid-code-cwd-${process.pid}-${++cwdFileCounter}`);
++      parts.push(`pwd -P >| ${escapeForShell(cwdFile)}`);
++    }
++
++    return { commandString: parts.join(" && "), cwdFile };
++  }
++
++  /**
++   * 命令成功完成后读取 cwd 临时文件并写回全局 cwd 状态；无论成功与否都清理临时文件。
++   * @param success 命令是否成功（exitCode===0 且未被取消）。仅成功时才写回，失败时 pwd -P 未执行。
++   */
++  private applyCwdTracking(cwdFile: string | undefined, success: boolean): void {
++    if (!cwdFile) return;
++    try {
++      if (success) {
++        // 裸 readFileSync 需自行 NFC 归一化（normalizeToolPath 内部已做，但此处直读文件）
++        const newCwd = readFileSync(cwdFile, "utf8").trim().normalize("NFC");
++        if (newCwd && newCwd !== getCwd() && existsSync(newCwd)) {
++          setCwd(newCwd);
++        }
++      }
++    } catch {
++      /* 文件不存在或读取失败（命令失败时 pwd 未执行），忽略 */
++    } finally {
++      try { unlinkSync(cwdFile); } catch { /* 忽略 */ }
++    }
++  }
++
+   async execute(input: unknown, signal?: AbortSignal): Promise<ToolResult> {
+     const log = getLogger();
+     const params = input as {
+@@ -182,6 +291,9 @@ export class BashTool implements Tool {
+       return { output: "错误: 缺少 command 参数", isError: true };
+     }
+ 
++    // 确保快照创建完成（首条命令可能赶在快照就绪前；snapshotReady 永不 reject）
++    await this.snapshotReady;
++
+     log.info("TOOL", `▶ 执行: ${params.command.slice(0, 200)}${params.command.length > 200 ? "..." : ""}`);
+ 
+     // Task 系统后台模式（新）
+@@ -196,8 +308,16 @@ export class BashTool implements Tool {
+ 
+     // 超时限制：最短 1 秒，最长 10 分钟
+     const timeout = Math.min(Math.max(params.timeout || 120000, 1000), 600000);
+-    const cwd = normalizeToolPath(params.cwd || process.cwd());
+-    const { shell, args } = getPlatformShell();
++    const cwd = this.resolveCwd(params.cwd);
++    const { shell, args } = getPlatformShell({ login: !this.snapshotFilePath });
++
++    // CWD 追踪范围（缺口 5 并发竞态处理）：只读命令不含 cd，跳过写回。
++    // 只读命令可并发执行（isConcurrencySafe），跳过 cwd 写回既零损失又消除两条并发
++    // bash 互相覆盖全局 cwd 的竞态。非只读命令视为串行，正常追踪 cwd。
++    const trackCwd = !isReadOnlyCommand(params.command);
++
++    // 前台命令：拼接快照注入 + cwd 追踪
++    const { commandString, cwdFile } = this.buildCommand(params.command, { trackCwd });
+ 
+     // 准备环境变量（如果启用了清理）
+     let env = process.env;
+@@ -209,7 +329,7 @@ export class BashTool implements Tool {
+ 
+     try {
+       const proc = spawn({
+-        cmd: [shell, ...args, params.command],
++        cmd: [shell, ...args, commandString],
+         cwd,
+         env,
+         stdout: "pipe",
+@@ -250,6 +370,12 @@ export class BashTool implements Tool {
+ 
+         const exitCode = await proc.exited;
+ 
++        // CWD 追踪写回：仅前台、未取消、未后台化、退出码 0 时写回全局 cwd。
++        // backgrounded 为 true 时跳过写回（命令已转后台，可能尚未执行 pwd -P）。
++        if (!backgrounded) {
++          this.applyCwdTracking(cwdFile, !killed && exitCode === 0);
++        }
++
+         // 合并输出
+         let output = "";
+         if (stdout) output += stdout;
+@@ -312,6 +438,8 @@ export class BashTool implements Tool {
+         if (pid) backgroundPids.add(pid);
+         clearTimeout(timeoutId);
+         signal?.removeEventListener("abort", abortHandler);
++        // 命令转后台，cwd 临时文件不再读取，直接清理（pwd -P 可能稍后才执行，留孤儿可接受）
++        if (cwdFile) { try { unlinkSync(cwdFile); } catch { /* 忽略 */ } }
+         log.info("BASH", `命令超时（${timeout / 1000}秒），PID ${pid} 自动转为后台运行`);
+         return {
+           output: `命令执行超过 ${timeout / 1000} 秒，已自动转为后台运行。PID: ${pid}\n可使用 \`kill ${pid}\` 终止进程。`,
+@@ -321,18 +449,23 @@ export class BashTool implements Tool {
+ 
+       return raceResult.result;
+     } catch (err: any) {
++      // 异常路径也清理 cwd 临时文件，避免泄漏
++      if (cwdFile) { try { unlinkSync(cwdFile); } catch { /* 忽略 */ } }
+       return { output: `执行命令失败: ${err.message}`, isError: true };
+     }
+   }
+ 
+-  /** 后台执行命令 */
++  /** 后台执行命令（不追踪 cwd：命令未完成，pwd -P 行不应触发写回） */
+   private async executeBackground(params: {
+     command: string;
+     cwd?: string;
+   }): Promise<ToolResult> {
+     const log = getLogger();
+-    const cwd = normalizeToolPath(params.cwd || process.cwd());
+-    const { shell, args } = getPlatformShell();
++    await this.snapshotReady;
++    const cwd = this.resolveCwd(params.cwd);
++    const { shell, args } = getPlatformShell({ login: !this.snapshotFilePath });
++    // 后台命令：注入快照但不追踪 cwd
++    const { commandString } = this.buildCommand(params.command, { trackCwd: false });
+ 
+     // 准备环境变量（如果启用了清理）
+     let env = process.env;
+@@ -344,7 +477,7 @@ export class BashTool implements Tool {
+ 
+     try {
+       const proc = spawn({
+-        cmd: [shell, ...args, params.command],
++        cmd: [shell, ...args, commandString],
+         cwd,
+         env,
+         stdout: "pipe",
+@@ -382,16 +515,20 @@ export class BashTool implements Tool {
+     }
+   }
+ 
+-  /** Task 系统后台执行（新模式） */
+-  private executeWithTaskSystem(params: {
++  /** Task 系统后台执行（新模式，不追踪 cwd） */
++  private async executeWithTaskSystem(params: {
+     command: string;
+     cwd?: string;
+-  }, signal?: AbortSignal): ToolResult {
++  }, signal?: AbortSignal): Promise<ToolResult> {
+     const { spawnShellTask } = require("../task/index.ts");
+-    const cwd = normalizeToolPath(params.cwd || process.cwd());
++    await this.snapshotReady;
++    const cwd = this.resolveCwd(params.cwd);
++    // 后台任务：注入快照但不追踪 cwd
++    const { commandString } = this.buildCommand(params.command, { trackCwd: false });
+ 
+     const taskState = spawnShellTask({
+-      command: params.command,
++      command: commandString,
++      displayCommand: params.command,
+       cwd,
+       signal,
+     });
+diff --git a/src/tool/bash/shell-snapshot.ts b/src/tool/bash/shell-snapshot.ts
+new file mode 100644
+index 0000000..99ffc2a
+--- /dev/null
++++ b/src/tool/bash/shell-snapshot.ts
+@@ -0,0 +1,243 @@
++/**
++ * 持久 Shell 会话 — Shell 环境快照
++ *
++ * 对标 claude-code 的 ShellSnapshot.ts。核心思路：
++ *   不维护长生命周期 shell 进程，而是在会话启动时跑一次登录 shell，
++ *   把用户 .zshrc/.bashrc 里的 aliases / functions / options / PATH 抓出来
++ *   存成一个快照 .sh 文件。之后每次执行 bash 命令前先 `source` 这个快照，
++ *   把用户 shell 环境重新注入当前子进程，看起来就像同一个 shell 一直在跑。
++ *
++ * 与 cwd 追踪（bash.ts 内）组合，实现"跨命令保留 cwd + aliases/functions 可用"。
++ *
++ * 设计要点：
++ * - Windows 不支持（powershell 无法 source POSIX 脚本），调用方需自行跳过。
++ * - 快照创建失败不阻断 bash 工具，降级为无快照 + 登录 shell 模式。
++ * - 快照文件写入 ~/.sid-code/shell-snapshots/，会话退出时清理。
++ *
++ * See: docs/bugfixes/todo/p0-2/持久Shell会话-补齐分析.md
++ */
++
++import { execFile } from "child_process";
++import { mkdirSync, unlinkSync, existsSync } from "fs";
++import { homedir, platform } from "os";
++import { join } from "path";
++import { sidPaths } from "../../config/paths.ts";
++import { registerCleanup } from "../../utils/graceful-shutdown.ts";
++import { getLogger } from "../../debug/logger.ts";
++
++/** 快照创建超时（对标 claude-code 的 10 秒） */
++const SNAPSHOT_CREATION_TIMEOUT_MS = 10_000;
++
++/** execFile 输出缓冲上限（1MB，对标 claude-code） */
++const SNAPSHOT_MAX_BUFFER = 1024 * 1024;
++
++/**
++ * POSIX 单引号转义：把字符串包成可安全放进 shell 单引号的形式。
++ *
++ * 规则：用单引号包裹整体，内部每个 `'` 替换为 `'\''`
++ *   （闭合单引号 → 转义单引号 → 重新开单引号）。
++ * 这是 POSIX 通用做法，对 `$`、空格、`;`、反引号等一切特殊字符都安全，
++ * 不依赖任何正则猜测。命令本身含单引号是最常见的破点，必须用它兜住。
++ *
++ * 例：  it's a "test"   →   'it'\''s a "test"'
++ */
++export function escapeForShell(s: string): string {
++  return `'${s.replace(/'/g, "'\\''")}'`;
++}
++
++/**
++ * 根据 shell 路径确定用户配置文件（对标 claude-code getConfigFile）。
++ *   zsh  → ~/.zshrc
++ *   bash → ~/.bashrc
++ *   其它 → ~/.profile
++ */
++function getConfigFile(shellPath: string): string {
++  const fileName = shellPath.includes("zsh")
++    ? ".zshrc"
++    : shellPath.includes("bash")
++      ? ".bashrc"
++      : ".profile";
++  return join(homedir(), fileName);
++}
++
++/**
++ * 生成"抓取用户 aliases/functions/options"的 shell 脚本片段（对标 getUserSnapshotContent）。
++ *
++ * zsh 用 typeset / setopt，bash 用 declare / shopt。
++ * 抓取结果统一追加到 $SNAPSHOT_FILE。
++ */
++function getUserSnapshotContent(shellPath: string): string {
++  const isZsh = shellPath.includes("zsh");
++
++  // 函数抓取：zsh 用 `typeset +f` 列名再 `typeset -f` 取体；bash 用 `declare -f`。
++  // 过滤补全函数（单下划线前缀 _xxx，但保留 __xxx），避免污染。
++  const functionsBlock = isZsh
++    ? `
++# ── Functions (zsh) ──
++echo "# Functions" >> "$SNAPSHOT_FILE"
++typeset +f 2>/dev/null | grep -vE '^_[^_]' | while IFS= read -r func; do
++  typeset -f -- "$func" >> "$SNAPSHOT_FILE" 2>/dev/null
++done`
++    : `
++# ── Functions (bash) ──
++echo "# Functions" >> "$SNAPSHOT_FILE"
++declare -F 2>/dev/null | sed 's/^declare -f //' | grep -vE '^_[^_]' | while IFS= read -r func; do
++  declare -f -- "$func" >> "$SNAPSHOT_FILE" 2>/dev/null
++done`;
++
++  // 选项抓取：zsh setopt / bash shopt
++  const optionsBlock = isZsh
++    ? `
++# ── Shell Options (zsh) ──
++echo "# Shell Options" >> "$SNAPSHOT_FILE"
++setopt 2>/dev/null | sed 's/^/setopt /' | head -n 1000 >> "$SNAPSHOT_FILE"`
++    : `
++# ── Shell Options (bash) ──
++echo "# Shell Options" >> "$SNAPSHOT_FILE"
++shopt -p 2>/dev/null | head -n 1000 >> "$SNAPSHOT_FILE"`;
++
++  // 别名抓取：先 unalias -a（避免函数体内冻结别名），再写当前别名定义。
++  // 注意：unalias 写在函数抓取之后、别名写入之前，对标 claude-code。
++  const aliasesBlock = `
++# ── Aliases ──
++echo "# Aliases" >> "$SNAPSHOT_FILE"
++alias 2>/dev/null | sed 's/^alias //' | sed 's/^/alias -- /' | head -n 1000 >> "$SNAPSHOT_FILE"`;
++
++  return `${functionsBlock}
++${optionsBlock}
++${aliasesBlock}`;
++}
++
++/**
++ * 生成"sid-code 自身注入"的 shell 脚本片段（对标 getClaudeCodeSnapshotContent，精简版）。
++ *
++ * MVP 只固化 PATH（保证后续命令与当前进程 PATH 一致）。
++ * 不做 rg/find/grep shadow（sid 的 grep/glob 是独立工具，不依赖 shell 命令）。
++ */
++function getSidCodeSnapshotContent(): string {
++  // PATH 用单引号转义，防止路径含空格/特殊字符破坏脚本
++  const currentPath = process.env.PATH || "";
++  return `
++# ── sid-code injected ──
++export PATH=${escapeForShell(currentPath)}`;
++}
++
++/**
++ * 组装完整快照脚本（对标 getSnapshotScript）。
++ *
++ * 流程：
++ *   1. source 用户配置文件（< /dev/null 防止交互式提示卡住）
++ *   2. 创建/清空快照文件（>| 强制覆盖，绕过 noclobber）
++ *   3. 写入 unalias -a（清除别名，避免函数体冻结）
++ *   4. 抓取用户 functions/options/aliases
++ *   5. 写入 sid-code 注入部分（PATH）
++ */
++function getSnapshotScript(shellPath: string, snapshotFile: string): string {
++  const configFile = getConfigFile(shellPath);
++  const quotedSnapshot = escapeForShell(snapshotFile);
++  const quotedConfig = escapeForShell(configFile);
++
++  return `
++SNAPSHOT_FILE=${quotedSnapshot}
++# source 用户配置（容错：配置可能不存在或报错，不阻断快照）
++[ -f ${quotedConfig} ] && source ${quotedConfig} < /dev/null 2>/dev/null || true
++
++# 初始化快照文件（>| 强制覆盖，绕过 noclobber）
++echo "# sid-code shell snapshot" >| "$SNAPSHOT_FILE"
++echo "unalias -a 2>/dev/null || true" >> "$SNAPSHOT_FILE"
++${getUserSnapshotContent(shellPath)}
++${getSidCodeSnapshotContent()}
++`;
++}
++
++/** 当前会话的快照文件路径（用于 cleanup） */
++let activeSnapshotPath: string | undefined;
++
++/**
++ * 创建并保存 shell 快照。
++ *
++ * @param shellPath 用户 shell 路径（如 /bin/zsh）
++ * @returns 快照文件绝对路径；失败或 Windows 返回 undefined（调用方降级处理）
++ */
++export async function createAndSaveSnapshot(
++  shellPath: string,
++): Promise<string | undefined> {
++  const log = getLogger();
++
++  // Windows 不支持（powershell 无法 source POSIX 脚本）
++  if (platform() === "win32") {
++    log.debug("BASH", "Windows 平台跳过 shell 快照创建");
++    return undefined;
++  }
++
++  try {
++    const snapshotDir = sidPaths.shellSnapshots();
++    mkdirSync(snapshotDir, { recursive: true });
++
++    // 文件名带 shell 类型 + pid（不用 Date.now/Math.random，保持确定性可测试）
++    const shellName = shellPath.includes("zsh")
++      ? "zsh"
++      : shellPath.includes("bash")
++        ? "bash"
++        : "sh";
++    const snapshotFile = join(
++      snapshotDir,
++      `snapshot-${shellName}-${process.pid}.sh`,
++    );
++
++    const script = getSnapshotScript(shellPath, snapshotFile);
++
++    await new Promise<void>((resolve, reject) => {
++      execFile(
++        shellPath,
++        ["-c", "-l", script],
++        {
++          env: {
++            ...process.env,
++            SHELL: shellPath,
++            GIT_EDITOR: "true",
++            SID_CODE: "1",
++          },
++          timeout: SNAPSHOT_CREATION_TIMEOUT_MS,
++          maxBuffer: SNAPSHOT_MAX_BUFFER,
++        },
++        (error) => {
++          if (error) {
++            reject(error);
++          } else {
++            resolve();
++          }
++        },
++      );
++    });
++
++    // 验证文件确实生成
++    if (!existsSync(snapshotFile)) {
++      log.debug("BASH", "快照脚本执行完成但未生成文件，降级为无快照");
++      return undefined;
++    }
++
++    activeSnapshotPath = snapshotFile;
++    // 注册会话退出时清理
++    registerCleanup(() => {
++      cleanupSnapshot();
++    });
++
++    log.debug("BASH", `shell 快照已创建: ${snapshotFile}`);
++    return snapshotFile;
++  } catch (err: any) {
++    log.debug("BASH", `创建 shell 快照失败，降级为无快照: ${err?.message || err}`);
++    return undefined;
++  }
++}
++
++/** 清理当前会话的快照文件（会话退出时调用） */
++export function cleanupSnapshot(): void {
++  if (!activeSnapshotPath) return;
++  try {
++    unlinkSync(activeSnapshotPath);
++  } catch {
++    /* 文件可能已不存在，忽略 */
++  }
++  activeSnapshotPath = undefined;
++}
+diff --git a/src/tool/glob.ts b/src/tool/glob.ts
+index b40e303..c84724a 100644
+--- a/src/tool/glob.ts
++++ b/src/tool/glob.ts
+@@ -73,7 +73,8 @@ export class GlobTool implements Tool {
+     log.info("TOOL", `▶ 匹配 "${params.pattern}" in ${params.path || "."}`);
+ 
+     try {
+-      const cwd = normalizeToolPath(params.path || process.cwd());
++      // 默认基于全局 cwd（"." 交给 normalizeToolPath 用 getCwd() 解析），跟随 bash 的 cd
++      const cwd = normalizeToolPath(params.path || ".");
+       const ignore = params.ignore || ["node_modules/**", ".git/**", "dist/**"];
+ 
+       const files = await glob(params.pattern, {
+diff --git a/src/tool/path-utils.ts b/src/tool/path-utils.ts
+index 0dad8dd..9e0ed96 100644
+--- a/src/tool/path-utils.ts
++++ b/src/tool/path-utils.ts
+@@ -12,15 +12,21 @@
+ import { homedir } from "os";
+ import { resolve, normalize, dirname, basename } from "path";
+ import { readdirSync, statSync } from "fs";
++import { getCwd } from "../bootstrap/state.ts";
+ 
+ /**
+  * 预处理工具路径：~ 展开 → resolve → NFC 归一化 → null byte 检查
+  * @param raw 原始路径（可能含 ~、相对路径、冗余 ..、NFD 编码）
+- * @param cwd 当前工作目录（默认 process.cwd()）
++ * @param cwd 当前工作目录（默认读全局 cwd 状态 getCwd()）
+  * @returns 规范化后的绝对路径
+  * @throws 如果路径含 null byte
++ *
++ * 持久 Shell 会话（P0-2）：默认 cwd 从 process.cwd() 改为 getCwd()。
++ * bash 工具 cd 后写回全局 cwd（bootstrap/state.ts），此处读全局 cwd，
++ * 使 read/edit/write/glob/grep/ls/read-many 全部跟随 bash 的 cd。
++ * getCwd() 初值即 process.cwd()，bash 未改 cwd 前行为与改造前一致。
+  */
+-export function normalizeToolPath(raw: string, cwd: string = process.cwd()): string {
++export function normalizeToolPath(raw: string, cwd: string = getCwd()): string {
+   // null byte 安全检查
+   if (raw.includes("\0")) {
+     throw new Error("路径包含非法字符 (null byte)");
+@@ -77,7 +83,7 @@ export function levenshteinDistance(a: string, b: string): number {
+  */
+ export function formatPathNotFoundError(
+   filePath: string,
+-  cwd: string = process.cwd(),
++  cwd: string = getCwd(),
+   maxSiblings = 3,
+ ): string {
+   const parentDir = dirname(filePath);
+diff --git a/src/tool/read-many.ts b/src/tool/read-many.ts
+index 8082d79..a172647 100644
+--- a/src/tool/read-many.ts
++++ b/src/tool/read-many.ts
+@@ -99,7 +99,8 @@ export class ReadManyTool implements Tool {
+       return { output: "错误: 缺少 pattern 参数", isError: true };
+     }
+ 
+-    const searchPath = normalizeToolPath(params.path || process.cwd());
++    // 默认基于全局 cwd（"." 交给 normalizeToolPath 用 getCwd() 解析），跟随 bash 的 cd
++    const searchPath = normalizeToolPath(params.path || ".");
+     const excludePatterns = [...DEFAULT_EXCLUDES, ...(params.exclude || [])];
+ 
+     log.info("TOOL", `▶ 批量读取 ${params.pattern.join(", ")} in ${searchPath}`);

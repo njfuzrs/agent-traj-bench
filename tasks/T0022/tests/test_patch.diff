@@ -1,0 +1,486 @@
+diff --git a/tests/config/schema.test.ts b/tests/config/schema.test.ts
+index 476d9b8..8982409 100644
+--- a/tests/config/schema.test.ts
++++ b/tests/config/schema.test.ts
+@@ -90,6 +90,13 @@ describe("Config Validation", () => {
+     expect(result.errors.some(e => e.path === "permissionMode")).toBe(true);
+   });
+ 
++  test("P2-4: manual / auto 是合法权限模式", () => {
++    for (const mode of ["manual", "auto"]) {
++      const result = validateConfig({ ...baseConfig, permissionMode: mode });
++      expect(result.errors.some(e => e.path === "permissionMode")).toBe(false);
++    }
++  });
++
+   test("empty model name fails validation", () => {
+     const config = { ...baseConfig, model: "" };
+     const result = validateConfig(config);
+diff --git a/tests/permission/mode-policy.test.ts b/tests/permission/mode-policy.test.ts
+new file mode 100644
+index 0000000..8d91139
+--- /dev/null
++++ b/tests/permission/mode-policy.test.ts
+@@ -0,0 +1,53 @@
++/**
++ * 权限模式企业策略管控测试（P2-2：disableBypassPermissionsMode + disabledModes）
++ */
++
++import { describe, test, expect, afterEach } from "bun:test";
++import {
++  setModePolicy,
++  isModeDisabledByPolicy,
++  isBypassDisabledByPolicy,
++  __resetModePolicy,
++} from "../../src/permission/mode-policy.ts";
++
++afterEach(() => __resetModePolicy());
++
++describe("mode-policy - disableBypassPermissionsMode", () => {
++  test("disable 时 bypass 类模式被禁用", () => {
++    setModePolicy(undefined, "disable");
++    expect(isBypassDisabledByPolicy()).toBe(true);
++    expect(isModeDisabledByPolicy("always-allow")).toBe(true);
++    expect(isModeDisabledByPolicy("dangerously-skip-permissions")).toBe(true);
++    // 非 bypass 模式不受影响
++    expect(isModeDisabledByPolicy("acceptEdits")).toBe(false);
++    expect(isModeDisabledByPolicy("default")).toBe(false);
++  });
++
++  test("allow / 缺省时 bypass 可用", () => {
++    setModePolicy(undefined, "allow");
++    expect(isBypassDisabledByPolicy()).toBe(false);
++    expect(isModeDisabledByPolicy("always-allow")).toBe(false);
++  });
++
++  test("未设置策略时默认不禁用任何模式", () => {
++    expect(isBypassDisabledByPolicy()).toBe(false);
++    expect(isModeDisabledByPolicy("always-allow")).toBe(false);
++    expect(isModeDisabledByPolicy("acceptEdits")).toBe(false);
++  });
++});
++
++describe("mode-policy - disabledModes（通用）", () => {
++  test("禁用任意模式", () => {
++    setModePolicy(["acceptEdits", "auto"], undefined);
++    expect(isModeDisabledByPolicy("acceptEdits")).toBe(true);
++    expect(isModeDisabledByPolicy("auto")).toBe(true);
++    expect(isModeDisabledByPolicy("default")).toBe(false);
++  });
++
++  test("disabledModes 与 bypass killswitch 叠加生效", () => {
++    setModePolicy(["auto"], "disable");
++    expect(isModeDisabledByPolicy("auto")).toBe(true);
++    expect(isModeDisabledByPolicy("always-allow")).toBe(true);
++    expect(isModeDisabledByPolicy("acceptEdits")).toBe(false);
++  });
++});
+diff --git a/tests/permission/mode.test.ts b/tests/permission/mode.test.ts
+index 3e9b5e6..54ed4c7 100644
+--- a/tests/permission/mode.test.ts
++++ b/tests/permission/mode.test.ts
+@@ -99,7 +99,7 @@ describe("键盘循环跳过 plan + auto 的逻辑", () => {
+ 
+ describe("getModeName", () => {
+   it("各模式均有中文名称", () => {
+-    expect(getModeName("default")).toBe("默认");
++    expect(getModeName("default")).toBe("Manual（手动）");
+     expect(getModeName("always-allow")).toBe("全部允许");
+     expect(getModeName("auto")).toBe("自动模式");
+     expect(getModeName("acceptEdits")).toBe("自动接受编辑");
+diff --git a/tests/permission/path-rule-matching.test.ts b/tests/permission/path-rule-matching.test.ts
+new file mode 100644
+index 0000000..21804f5
+--- /dev/null
++++ b/tests/permission/path-rule-matching.test.ts
+@@ -0,0 +1,106 @@
++/**
++ * 路径规则匹配测试（P0-2：四种 gitignore 风格前缀）
++ */
++
++import { describe, test, expect } from "bun:test";
++import path from "node:path";
++import os from "node:os";
++import {
++  resolvePathRulePattern,
++  matchPathRule,
++  type PathRuleContext,
++} from "../../src/permission/path-rule-matching.ts";
++
++const WS = "/Users/tester/project";
++const HOME = "/Users/tester";
++const CWD = "/Users/tester/project/src";
++const ctx: PathRuleContext = { workspaceRoot: WS, homeDir: HOME, cwd: CWD };
++
++describe("resolvePathRulePattern - 四种前缀", () => {
++  test("// → 文件系统绝对路径（去一个 /）", () => {
++    expect(resolvePathRulePattern("//etc/passwd", ctx)).toBe("/etc/passwd");
++    expect(resolvePathRulePattern("//Users/alice/**", ctx)).toBe("/Users/alice/**");
++  });
++
++  test("~/ → 主目录相对", () => {
++    expect(resolvePathRulePattern("~/Documents/*.pdf", ctx)).toBe(`${HOME}/Documents/*.pdf`);
++  });
++
++  test("/ → 项目根相对（单前导斜杠）", () => {
++    expect(resolvePathRulePattern("/src/index.ts", ctx)).toBe(`${WS}/src/index.ts`);
++  });
++
++  test("./ → 当前目录相对", () => {
++    expect(resolvePathRulePattern("./.env", ctx)).toBe(`${CWD}/.env`);
++  });
++
++  test("裸 path → 当前目录相对", () => {
++    expect(resolvePathRulePattern("foo.txt", ctx)).toBe(`${CWD}/foo.txt`);
++  });
++
++  test("** 通配符不被吞", () => {
++    expect(resolvePathRulePattern("/src/**/*.ts", ctx)).toBe(`${WS}/src/**/*.ts`);
++  });
++});
++
++describe("matchPathRule - 验收标准", () => {
++  test("Read(./.env) 匹配 cwd 下 .env 的绝对路径", () => {
++    expect(matchPathRule("./.env", `${CWD}/.env`, ctx)).toBe(true);
++  });
++
++  test("Read(*.env) 裸模式匹配 cwd 下 .env", () => {
++    expect(matchPathRule("*.env", `${CWD}/.env`, ctx)).toBe(true);
++  });
++
++  test("Read(~/Documents/*.pdf) 匹配 home 下 pdf", () => {
++    expect(matchPathRule("~/Documents/*.pdf", `${HOME}/Documents/report.pdf`, ctx)).toBe(true);
++    expect(matchPathRule("~/Documents/*.pdf", `${HOME}/Documents/report.txt`, ctx)).toBe(false);
++  });
++
++  test("Edit(/src/**/*.ts) 匹配项目根 src 下任意深度 ts", () => {
++    expect(matchPathRule("/src/**/*.ts", `${WS}/src/a/b/c.ts`, ctx)).toBe(true);
++    expect(matchPathRule("/src/**/*.ts", `${WS}/src/index.ts`, ctx)).toBe(true);
++    expect(matchPathRule("/src/**/*.ts", `${WS}/lib/x.ts`, ctx)).toBe(false);
++  });
++
++  test("Read(//etc/**) 匹配 /etc/passwd", () => {
++    expect(matchPathRule("//etc/**", "/etc/passwd", ctx)).toBe(true);
++  });
++
++  test("* 单层不跨 /；** 递归", () => {
++    expect(matchPathRule("/src/*.ts", `${WS}/src/index.ts`, ctx)).toBe(true);
++    expect(matchPathRule("/src/*.ts", `${WS}/src/a/b.ts`, ctx)).toBe(false);
++    expect(matchPathRule("/src/**", `${WS}/src/a/b.ts`, ctx)).toBe(true);
++  });
++
++  test("dot:true 使隐藏文件可匹配", () => {
++    expect(matchPathRule("/**", `${WS}/.env`, ctx)).toBe(true);
++  });
++
++  test("deny 侧：Read(//Users/*/.ssh/**) 拦截读 ~/.ssh/id_rsa", () => {
++    expect(matchPathRule("//Users/*/.ssh/**", "/Users/tester/.ssh/id_rsa", ctx)).toBe(true);
++  });
++
++  test("目录前缀匹配：无通配符模式指向目录时匹配其下文件", () => {
++    expect(matchPathRule("/src", `${WS}/src/deep/file.ts`, ctx)).toBe(true);
++    expect(matchPathRule("/src", `${WS}/lib/file.ts`, ctx)).toBe(false);
++  });
++
++  test("相对 file_path 按 cwd 归一", () => {
++    expect(matchPathRule("./.env", ".env", ctx)).toBe(true);
++  });
++
++  test("空 file_path 不匹配", () => {
++    expect(matchPathRule("*.env", "", ctx)).toBe(false);
++  });
++});
++
++describe("matchPathRule - 默认上下文（不传 home/cwd）", () => {
++  test("退化到 os.homedir / process.cwd", () => {
++    const realCtx: PathRuleContext = { workspaceRoot: process.cwd() };
++    const abs = path.join(process.cwd(), ".env");
++    expect(matchPathRule("./.env", abs, realCtx)).toBe(true);
++    // 确认 home 默认可用
++    expect(resolvePathRulePattern("~/x", realCtx)).toBe(`${os.homedir()}/x`);
++  });
++});
+diff --git a/tests/permission/rule-loader.test.ts b/tests/permission/rule-loader.test.ts
+index 118fbfe..e1bfbc7 100644
+--- a/tests/permission/rule-loader.test.ts
++++ b/tests/permission/rule-loader.test.ts
+@@ -109,3 +109,57 @@ describe("RuleLoader - projectSettings 危险自我授权过滤", () => {
+     expect(allowRules.length).toBe(5);
+   });
+ });
++
++describe("RuleLoader - P2-1 cliArg / flag / policy 三源接线", () => {
++  test("setCliArgRules 填充 cliArg 源（此前零调用者）", () => {
++    const loader = new RuleLoader("/tmp/test-ws");
++    loader.setCliArgRules(["Bash(npm *)"], ["Bash(curl *)"]);
++    const rules = loader.getRulesBySource("cliArg");
++    expect(rules.find(r => r.behavior === "allow")?.rawRule).toBe("Bash(npm *)");
++    expect(rules.find(r => r.behavior === "deny")?.rawRule).toBe("Bash(curl *)");
++  });
++
++  test("setFlagRules 填充 flagSettings 源", () => {
++    const loader = new RuleLoader("/tmp/test-ws");
++    loader.setFlagRules({ deny: ["Read(.env)"], allow: [], ask: [] });
++    const rules = loader.getRulesBySource("flagSettings");
++    expect(rules.find(r => r.behavior === "deny")?.rawRule).toBe("Read(.env)");
++  });
++
++  test("policySettings 优先级最高（getAllRules 排序置顶）", () => {
++    const loader = new RuleLoader("/tmp/test-ws");
++    // 手动注入各源模拟（policy 走内部私有加载，这里用 importFromPermissionRule 验证排序）
++    loader.importFromPermissionRule({ allow: ["Bash(ls)"], deny: [], ask: [] }, "userSettings");
++    loader.setCliArgRules(["Bash(pwd)"], undefined);
++    // 通过 setFlagRules 模拟高优先级源
++    loader.setFlagRules({ allow: ["Bash(whoami)"], deny: [], ask: [] });
++    const all = loader.getAllRules();
++    // flagSettings(6) 应排在 cliArg(2) / userSettings(3) 之前
++    const flagIdx = all.findIndex(r => r.source === "flagSettings");
++    const userIdx = all.findIndex(r => r.source === "userSettings");
++    const cliIdx = all.findIndex(r => r.source === "cliArg");
++    expect(flagIdx).toBeLessThan(userIdx);
++    expect(flagIdx).toBeLessThan(cliIdx);
++  });
++
++  test("policy allow 规则不被危险自我授权过滤（可信源）", async () => {
++    // 用真实临时 policy 文件验证：写 Bash(*) 到 policy，应保留（企业可自我授权）
++    const os = await import("os");
++    const fs = await import("fs");
++    const path = await import("path");
++    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sid-policy-"));
++    const policyFile = path.join(dir, "managed-settings.json");
++    fs.writeFileSync(policyFile, JSON.stringify({ permissions: { deny: ["Bash(curl *)"], allow: ["Bash(*)"] } }), { mode: 0o600 });
++
++    // 直接测 parsePermissions 对 policySettings 的行为：不走 filter
++    // （loadPolicyFile 是私有方法，这里通过公有 importFromPermissionRule 以非 projectSettings 源验证不过滤语义）
++    const loader = new RuleLoader(dir);
++    loader.importFromPermissionRule({ allow: ["Bash(*)"], deny: ["Bash(curl *)"], ask: [] }, "policySettings");
++    const rules = loader.getRulesBySource("policySettings");
++    const allowRules = rules.filter(r => r.behavior === "allow").map(r => r.rawRule);
++    // 企业策略是可信源，Bash(*) 应保留（对比 projectSettings 会被剔除）
++    expect(allowRules).toContain("Bash(*)");
++
++    fs.rmSync(dir, { recursive: true, force: true });
++  });
++});
+diff --git a/tests/permission/rule-persistence.test.ts b/tests/permission/rule-persistence.test.ts
+new file mode 100644
+index 0000000..6e6de2f
+--- /dev/null
++++ b/tests/permission/rule-persistence.test.ts
+@@ -0,0 +1,66 @@
++/**
++ * 规则持久化测试（P2-3：Bash「始终允许」持久档落盘 + 归一规则可命中原命令）
++ */
++
++import { describe, test, expect, afterEach } from "bun:test";
++import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs";
++import { tmpdir } from "os";
++import { join } from "path";
++import { persistRule, removePersistedRule } from "../../src/permission/rule-persistence.ts";
++import { matchRule } from "../../src/permission/rules.ts";
++
++const dirs: string[] = [];
++function tmpWs(): string {
++  const d = mkdtempSync(join(tmpdir(), "sid-persist-"));
++  dirs.push(d);
++  return d;
++}
++afterEach(() => {
++  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
++});
++
++describe("persistRule - project settings 落盘", () => {
++  test("写入 project settings.json 且结构正确", async () => {
++    const ws = tmpWs();
++    await persistRule("project", "allow", "Bash(git status)", ws);
++    const file = join(ws, ".sid-code", "settings.json");
++    expect(existsSync(file)).toBe(true);
++    const parsed = JSON.parse(readFileSync(file, "utf-8"));
++    expect(parsed.permissions.allow).toContain("Bash(git status)");
++  });
++
++  test("重复写入不产生重复项", async () => {
++    const ws = tmpWs();
++    await persistRule("project", "allow", "Bash(ls)", ws);
++    await persistRule("project", "allow", "Bash(ls)", ws);
++    const parsed = JSON.parse(readFileSync(join(ws, ".sid-code", "settings.json"), "utf-8"));
++    expect(parsed.permissions.allow.filter((r: string) => r === "Bash(ls)").length).toBe(1);
++  });
++
++  test("removePersistedRule 移除已写入规则", async () => {
++    const ws = tmpWs();
++    await persistRule("project", "allow", "Bash(pwd)", ws);
++    const removed = await removePersistedRule("project", "allow", "Bash(pwd)", ws);
++    expect(removed).toBe(true);
++    const parsed = JSON.parse(readFileSync(join(ws, ".sid-code", "settings.json"), "utf-8"));
++    expect(parsed.permissions.allow).not.toContain("Bash(pwd)");
++  });
++});
++
++describe("P2-3 归一规则可命中原命令（对齐 P0-1 新 matcher）", () => {
++  test("Bash(<command>) 精确命中原命令", () => {
++    // app.persistBashAllowRule 用精确整条命令生成规则
++    expect(matchRule("Bash(git status)", { toolName: "bash", input: { command: "git status" } })).toBe(true);
++  });
++
++  test("精确规则不误放行其它命令（保守归一，不自动加 *）", () => {
++    expect(matchRule("Bash(git status)", { toolName: "bash", input: { command: "git status --short" } })).toBe(false);
++    expect(matchRule("Bash(git status)", { toolName: "bash", input: { command: "git push" } })).toBe(false);
++  });
++
++  test("含路径的命令也能精确命中（P0-1 修复后 minimatch 失配问题不复现）", () => {
++    expect(
++      matchRule("Bash(cat src/config/app.ts)", { toolName: "bash", input: { command: "cat src/config/app.ts" } }),
++    ).toBe(true);
++  });
++});
+diff --git a/tests/permission/shell-rule-matching.test.ts b/tests/permission/shell-rule-matching.test.ts
+new file mode 100644
+index 0000000..1733f09
+--- /dev/null
++++ b/tests/permission/shell-rule-matching.test.ts
+@@ -0,0 +1,127 @@
++/**
++ * Shell 规则匹配测试（P0-1：对齐 CC matchWildcardPattern）
++ * 覆盖方案文档给出的全部实测用例。
++ */
++
++import { describe, test, expect } from "bun:test";
++import {
++  matchWildcardPattern,
++  matchShellRulePattern,
++  hasWildcards,
++  extractLegacyPrefix,
++} from "../../src/permission/shell-rule-matching.ts";
++
++describe("matchWildcardPattern - 方案文档实测用例（修复后应全部正确）", () => {
++  test("Bash(*) 哨兵：* 匹配任意命令（含含路径命令）", () => {
++    // 旧 minimatch 下这些全 false（* 不跨 /），这是 P0-1 的核心 bug
++    expect(matchWildcardPattern("*", "ls /tmp")).toBe(true);
++    expect(matchWildcardPattern("*", "cat src/foo.txt")).toBe(true);
++    expect(matchWildcardPattern("*", "git push origin/main")).toBe(true);
++  });
++
++  test("cat * 匹配含路径参数", () => {
++    expect(matchWildcardPattern("cat *", "cat src/foo.txt")).toBe(true);
++  });
++
++  test("git * 匹配含 / 的命令", () => {
++    expect(matchWildcardPattern("git *", "git push origin/main")).toBe(true);
++  });
++
++  test("npm run * 匹配 npm run build", () => {
++    expect(matchWildcardPattern("npm run *", "npm run build")).toBe(true);
++  });
++
++  test("ls * 匹配 ls -la（尾部空格+*特判）", () => {
++    expect(matchWildcardPattern("ls *", "ls -la")).toBe(true);
++  });
++
++  test("ls * 不匹配 lsof（尾部 ( .*)? 要求空格边界）", () => {
++    // "ls *" → "ls( .*)?"：匹配 "ls" 或 "ls <args>"，不匹配 "lsof"
++    expect(matchWildcardPattern("ls *", "lsof")).toBe(false);
++  });
++});
++
++describe("matchWildcardPattern - 尾部 ' *' 特判", () => {
++  test("git * 同时匹配 git add 和裸 git", () => {
++    expect(matchWildcardPattern("git *", "git add")).toBe(true);
++    expect(matchWildcardPattern("git *", "git")).toBe(true);
++  });
++
++  test("多通配符 * run * 不做尾部优化，不误匹配 npm run", () => {
++    expect(matchWildcardPattern("* run *", "npm run build")).toBe(true);
++    expect(matchWildcardPattern("* run *", "npm run")).toBe(false);
++  });
++});
++
++describe("matchWildcardPattern - 转义", () => {
++  test("\\* 只匹配字面星号", () => {
++    expect(matchWildcardPattern("echo \\*", "echo *")).toBe(true);
++    expect(matchWildcardPattern("echo \\*", "echo foo")).toBe(false);
++  });
++
++  test("正则元字符被转义（. 不当通配符）", () => {
++    expect(matchWildcardPattern("a.b", "a.b")).toBe(true);
++    expect(matchWildcardPattern("a.b", "axb")).toBe(false);
++  });
++});
++
++describe("matchWildcardPattern - dotAll（换行）", () => {
++  test("* 匹配含内嵌换行的命令", () => {
++    expect(matchWildcardPattern("cat *", "cat <<EOF\nline\nEOF")).toBe(true);
++  });
++});
++
++describe("matchWildcardPattern - caseInsensitive", () => {
++  test("大小写不敏感", () => {
++    expect(matchWildcardPattern("LS *", "ls -la", true)).toBe(true);
++    expect(matchWildcardPattern("LS *", "ls -la", false)).toBe(false);
++  });
++});
++
++describe("hasWildcards", () => {
++  test("含未转义 * → true", () => {
++    expect(hasWildcards("git *")).toBe(true);
++    expect(hasWildcards("*")).toBe(true);
++  });
++  test("末尾 :* legacy 前缀 → false", () => {
++    expect(hasWildcards("npm:*")).toBe(false);
++  });
++  test("转义的 \\* → false", () => {
++    expect(hasWildcards("echo \\*")).toBe(false);
++  });
++  test("无 * → false", () => {
++    expect(hasWildcards("ls -la")).toBe(false);
++  });
++});
++
++describe("extractLegacyPrefix", () => {
++  test("npm:* → npm", () => {
++    expect(extractLegacyPrefix("npm:*")).toBe("npm");
++  });
++  test("非 :* → null", () => {
++    expect(extractLegacyPrefix("git *")).toBeNull();
++  });
++});
++
++describe("matchShellRulePattern - 统一入口", () => {
++  test("prefix: 前缀语法", () => {
++    expect(matchShellRulePattern("prefix:git ", "git push")).toBe(true);
++    expect(matchShellRulePattern("prefix:git ", "npm test")).toBe(false);
++  });
++
++  test("legacy :* 前缀（含裸命令）", () => {
++    expect(matchShellRulePattern("git:*", "git push origin/main")).toBe(true);
++    expect(matchShellRulePattern("git:*", "git")).toBe(true);
++    expect(matchShellRulePattern("git:*", "github")).toBe(false);
++  });
++
++  test("通配符走 matchWildcardPattern", () => {
++    expect(matchShellRulePattern("*", "ls /tmp")).toBe(true);
++    expect(matchShellRulePattern("git *", "git commit -m x")).toBe(true);
++  });
++
++  test("无通配符退化为精确匹配", () => {
++    expect(matchShellRulePattern("ls", "ls")).toBe(true);
++    expect(matchShellRulePattern("ls", "ls -la")).toBe(false);
++  });
++});
+diff --git a/tests/ui/status-line-data.test.ts b/tests/ui/status-line-data.test.ts
+index 04ec803..6c7cbf4 100644
+--- a/tests/ui/status-line-data.test.ts
++++ b/tests/ui/status-line-data.test.ts
+@@ -46,10 +46,11 @@ describe("LY1 — derivePermission", () => {
+   test("deny-write 也是危险态", () => {
+     expect(derivePermission("deny-write").isDanger).toBe(true);
+   });
+-  test("默认 → success 色，非危险态", () => {
++  test("默认 → success 色，非危险态，展示 ⏸ Manual 徽章（P2-4）", () => {
+     const r = derivePermission("default");
+     expect(r.color).toBe(theme.status.success);
+     expect(r.isDanger).toBe(false);
++    expect(r.display).toBe("⏸ Manual");
+   });
+   test("plan → 非危险态", () => {
+     expect(derivePermission("plan").isDanger).toBe(false);

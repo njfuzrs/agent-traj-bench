@@ -1,0 +1,1 @@
+["tests/config/schema.test.ts", "tests/permission/mode-policy.test.ts", "tests/permission/mode.test.ts", "tests/permission/path-rule-matching.test.ts", "tests/permission/rule-loader.test.ts", "tests/permission/rule-persistence.test.ts", "tests/permission/shell-rule-matching.test.ts", "tests/ui/status-line-data.test.ts"]

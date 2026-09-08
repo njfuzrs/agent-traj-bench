@@ -1,0 +1,18 @@
+schema_version = "1.4"
+
+[metadata]
+task_id = "T0040"
+source_unit_id = "a6cb5ed8-1889-4720-9caf-2a106f5010ce#01"
+repo = "person/sid-code"
+base_commit = "bc1ea8222777c25df2df6158b275c2cbd20efaf6"
+difficulty_band = "M"
+category = "bug_fix"
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+build_timeout_sec = 1800.0

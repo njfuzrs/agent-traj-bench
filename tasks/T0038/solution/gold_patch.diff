@@ -1,0 +1,343 @@
+diff --git a/src/app.ts b/src/app.ts
+index e0d6d2d..e498aad 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -811,11 +811,7 @@ export class App {
+       abortCurrentRequest: (reason) => {
+         try { this.abortController?.abort(reason ?? "turn-timeout"); } catch { /* ignore */ }
+       },
+-      getPlanModeReminder: async () => {
+-        if (!this.planManager?.isPlanning()) return null;
+-        const { buildPlanModeReminder } = await import("./plan/prompt.ts");
+-        return buildPlanModeReminder(this.planManager.nextReminderIsFull());
+-      },
++      getPlanModeReminder: () => this.buildPlanModeReminderIfActive(),
+       // 缺口 C：把运行时可变的 permission mode 暴露给 queryLoop，每轮取最新值。
+       // config.permissionMode 会被 enter_plan_mode / CLAUDE.md 规则 / 斜杠命令运行时改写，
+       // 而 mode 指南只进有缓存的 system prompt——靠这里走每轮 reminder 通道补上时机缺失。
+@@ -1697,6 +1693,9 @@ export class App {
+         log.info("TUI:CMD", "清空消息历史，重置上下文");
+         this.ctxMgr.clear();
+         this.sessionState.resetCounters();
++        // /clear 后模型对"已播报过的延迟工具/权限提醒"完全失忆，去重键必须一并归零，
++        // 否则新一轮对话永远不再播报延迟工具列表（详见 resetReminderDedupKeys 注释）。
++        this.sessionState.resetReminderDedupKeys();
+         clearPromptCache();
+         this.quotaManager?.resetAlertLevel();
+         this.fallback.reset();
+@@ -3621,12 +3620,7 @@ export class App {
+         this.requestUserConfirmation(desc, permReq, toolName, toolInput, signal),
+       handlePlanModeTransitions: (toolBlocks, resultMap) =>
+         this.handlePlanModeTransitions(toolBlocks, resultMap),
+-      getPlanModeReminder: async () => {
+-        if (!this.planManager?.isPlanning()) return null;
+-        const { buildPlanModeReminder } = await import("./plan/prompt.ts");
+-        // 节流：每 N 轮发完整提醒，中间轮次发简短提醒，省 token
+-        return buildPlanModeReminder(this.planManager.nextReminderIsFull());
+-      },
++      getPlanModeReminder: () => this.buildPlanModeReminderIfActive(),
+       discoverJitContext: (toolBlocks) => this.discoverJitContext(toolBlocks),
+       // G5 接线：长跑工具的中间进度。
+       // - bash/shell 工具的 output 事件（执行中的 stdout/stderr 尾部）→ 路由到执行中的工具卡片，
+@@ -3788,6 +3782,40 @@ export class App {
+     return followup.length > 0 ? { followup } : {};
+   }
+ 
++  /**
++   * 构造 plan mode 每轮提醒（两处 queryLoop deps 共用同一个门控，避免漂移）。
++   *
++   * ⚠️ 门控为什么是「isPlanning() **或** config.permissionMode === "plan"」：
++   *
++   * plan 约束此前有两条通道（system 附件 + 本 reminder），2026-07-30 删掉附件通道后
++   * 本函数成为**唯一**通道，门控的任何漏洞就直接等于"模型收不到任何 plan 约束"。
++   *
++   * 原门控只判 `planManager.isPlanning()`，漏了一整条进入路径：
++   *   - `enter_plan_mode` 工具 → planManager.enter() → isPlanning()=true ✅
++   *   - `--permission-mode plan` / config.permissionMode / agent frontmatter
++   *     → 只写 config.permissionMode="plan"，**没有任何代码调 planManager.enter()**
++   *     → isPlanning()=false ❌
++   * 而 loop.ts 的 permission reminder 通道又用 `mode !== "plan"` 把 plan 排除
++   * （避免与本函数重复），两边都不管 → 以 plan 模式启动的会话约束条数为 0。
++   * 实测确认（PlanModeManager 新建实例 isPlanning() 恒为 false）。
++   *
++   * 权限层不受影响（PermissionChecker 读 config.permissionMode 硬拦写操作），
++   * 但 plan 是**行为模式**——"先规划再执行、先出方案等审批"无法用权限规则表达，
++   * 只能靠模型读到约束后自觉，故这条缺失是真实的行为回归，不是纯文案问题。
++   *
++   * 节流沿用 planManager.nextReminderIsFull()（每 N 轮完整版、其余精简版）；
++   * planManager 缺失时（无头/精简装配）退化为恒发完整版——宁可多几个 token，
++   * 也不能让唯一的约束通道静默失声。
++   */
++  private async buildPlanModeReminderIfActive(): Promise<string | null> {
++    const inPlanMode = this.planManager?.isPlanning() === true
++      || this.config.permissionMode === "plan";
++    if (!inPlanMode) return null;
++    const { buildPlanModeReminder } = await import("./plan/prompt.ts");
++    // 节流：每 N 轮发完整提醒，中间轮次发简短提醒，省 token
++    return buildPlanModeReminder(this.planManager?.nextReminderIsFull() ?? true);
++  }
++
+   /** 激活 Plan Mode：切换权限模式（不重建 system prompt，对标 Claude Code） */
+   private async activatePlanMode(): Promise<void> {
+     const log = getLogger();
+@@ -6163,6 +6191,8 @@ export class App {
+             log.info("TUI:CMD", "清空消息历史，重置上下文");
+             this.ctxMgr.clear();
+             this.sessionState.resetCounters();
++            // 同上：reminder 跨轮去重键必须随 /clear 归零（详见 resetReminderDedupKeys 注释）。
++            this.sessionState.resetReminderDedupKeys();
+             clearPromptCache();
+             this.quotaManager?.resetAlertLevel();
+             this.fallback.reset();
+diff --git a/src/config/attachments.ts b/src/config/attachments.ts
+index f91d783..d1d38bc 100644
+--- a/src/config/attachments.ts
++++ b/src/config/attachments.ts
+@@ -150,21 +150,12 @@ export const PERMISSION_MODE_DESCRIPTIONS: Record<string, string> = {
+ 分类器判断安全的操作自动批准，不安全的操作仍需用户确认。
+ 行为与默认模式类似，但安全操作无需逐个确认（分类器可用时）。`,
+ 
+-  plan: `# 权限模式: 计划模式已激活
+-你当前处于计划模式。用户希望你先制定方案再执行。
+-你**绝对不能**进行任何编辑（计划文件除外）、运行任何非只读工具、或对系统做出任何变更。
+-此约束覆盖你收到的所有其他指令。
+-
+-允许的操作：
+-- 使用 read、grep、glob 探索代码库
+-- 使用 sub_agent (explore 类型) 并行搜索
+-- 使用 write/edit 编辑计划文件（仅限计划文件）
+-- 调用 exit_plan_mode 提交计划
+-
+-禁止的操作：
+-- 编辑任何非计划文件
+-- 运行 bash 命令
+-- 执行任何写入操作`,
++  // plan 键已删除（2026-07-30，重复注入根因修复 P0）。
++  // 唯一消费方 buildPermissionModeReminder 被 loop.ts 的 `mode !== "plan"` 排除，
++  // 永远取不到本键；system 附件通道也已删除。plan 的约束文案现在只有一处事实源：
++  // src/plan/prompt.ts 的 buildPlanModeReminder（full 档已并入本键原有的
++  // 「此约束覆盖你收到的所有其他指令」+ 允许/禁止清单）。
++  // 保留本键会让两份 plan 文案继续独立漂移（此前实测已漂移）。
+ 
+   "dangerously-skip-permissions": `# 权限模式: 跳过权限（危险）
+ 所有工具调用自动批准，包括危险命令。请极其谨慎。`,
+@@ -322,19 +313,12 @@ export function generateGitStatusAttachment(workingDir: string): Attachment | nu
+   }
+ }
+ 
+-/**
+- * 生成权限模式附件
+- * 根据当前权限模式注入对应的行为指南
+- */
+-export function generatePermissionModeAttachment(mode: string): Attachment {
+-  const description = PERMISSION_MODE_DESCRIPTIONS[mode] || PERMISSION_MODE_DESCRIPTIONS.default;
+-  return {
+-    type: "permissionMode",
+-    label: `权限模式 (${mode})`,
+-    content: description,
+-    priority: PRIORITY.MODE_REMINDER,
+-  };
+-}
++// generatePermissionModeAttachment 已删除（2026-07-30，重复注入根因修复 P0）。
++// 权限模式文案曾同时走 system 附件（本函数）与 user reminder（permission-reminder.ts），
++// 同一份文案同轮出现两次。现只保留 reminder 通道，本函数无调用方故删除。
++// PERMISSION_MODE_DESCRIPTIONS 保留（reminder 通道 import 它）。
++// 决策依据见 src/config/system-prompt.ts 附件收集段的注释与
++// docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md §7.1。
+ 
+ /**
+  * 缺口 D：生成 deny 规则约束附件（前置告知模型哪些操作必被拒绝）。
+diff --git a/src/config/system-prompt.ts b/src/config/system-prompt.ts
+index 3cbe3e3..ea57551 100644
+--- a/src/config/system-prompt.ts
++++ b/src/config/system-prompt.ts
+@@ -27,7 +27,6 @@ import {
+   PRIORITY,
+   generateClaudeMdAttachment,
+   generateGitStatusAttachment,
+-  generatePermissionModeAttachment,
+   generateDiagnosticsAttachment,
+   generateDateAttachment,
+   generateTodoListAttachment,
+@@ -393,10 +392,27 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
+     ));
+   }
+ 
+-  // 权限模式提示词
+-  if (ctx.permissionMode && ctx.permissionMode !== "default") {
+-    attachments.push(generatePermissionModeAttachment(ctx.permissionMode));
+-  }
++  // 权限模式提示词：**已移除**（2026-07-30，重复注入根因修复 P0）。
++  //
++  // 原先这里 push generatePermissionModeAttachment(mode)，与 user 侧 reminder 通道
++  // （permission-reminder.ts / plan/prompt.ts buildPlanModeReminder）构成**双通道**，
++  // 同一份 mode 文案同轮出现两次。改为**只保留 reminder 通道**，理由三条：
++  //   ① 多 provider：附件落动态区，OpenAI 族被 prependSystemMessage 搬回 user 消息
++  //      （见文件末尾 DYNAMIC_BOUNDARY 不变量注释）→ "放 system 不占 user turn"不成立，
++  //      删附件才是真的删掉。
++  //   ② 无需新触发点：reminder 每轮 pull 当前 mode 并判定，切换当轮即可见；而保留附件
++  //      则必须补"mode 切换即重建 system prompt"的 push 触发点（4 处），每次切换击穿
++  //      全量静态前缀（本项目实测 3.7 万字符），CC 实测这类路径占 10.2% cache_creation。
++  //   ③ 权限的强制点在 PermissionChecker（代码硬拦），文案只是告知——模型看不到文案
++  //      也不会多获得一个字节的权限。deny 规则另有 generateDenyRulesAttachment 常驻
++  //      system prompt（配置态稳定、不随运行时 mode 变化，那条才该在 system prompt）。
++  //
++  // plan mode 是唯一例外（**行为模式**，"先规划再执行"无法用权限规则表达、只能靠模型
++  // 自觉），故删附件前已把它独有的强约束语义（「此约束覆盖你收到的所有其他指令」+
++  // 允许/禁止清单）并入 buildPlanModeReminder 的 full 档。详见 plan/prompt.ts 注释。
++  //
++  // ctx.permissionMode 字段保留：generateCacheKey 仍纳入它（多一次无害 miss 优于漏判）。
++  // 完整决策见 docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md §7.1。
+ 
+   // 缺口 E：Skill 摘要列表（接通此前的死代码）。
+   // 优先级 SKILL_LISTING(8) 排在 CLAUDE.md 之前，确保模型先发现可用 skill。
+@@ -500,6 +516,24 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
+   }
+ 
+   // 4. 按 cacheStability 分拣附件：stable 进静态区享受长 TTL 缓存，dynamic/未标记进动态区
++  //
++  // ⛔ 多 provider 不变量（2026-07-30，反复踩过的隐性前提，务必读完再设计"搬进动态区"的优化）：
++  //
++  //   DYNAMIC_BOUNDARY 之后的内容在 **OpenAI 族**（deepseek 是本项目主力）会被
++  //   `openai.ts prependSystemMessage` 切出来、以 `role: "user"` 追加到 messages 末尾。
++  //   因此「放动态区」**不等于**「不占 user turn」——只是把同一批字节从 system 参数
++  //   搬到了一条 user 消息里，一个 token 都没省，还多绕一层间接。
++  //
++  //   两族的实际落地形态：
++  //     - Anthropic 族：动态区是独立 cache block（boundary 处打 cache_control），确实在 system 参数里；
++  //     - OpenAI 族：动态区变成 messages 末尾一条 `<system-reminder>` 包裹的 user 消息。
++  //
++  //   推论：要真正减少 user turn 占用，只有两条路 —— ① 不注入；② 走增量 delta 只发变化量
++  //   （参考 loop.ts 的 announcedDeferredTools / mcp/instructions-delta.ts）。
++  //   任何以"搬进 system 动态区就不占 user turn"为前提的方案，在本项目不成立。
++  //
++  //   守卫单测：tests/config/dynamic-boundary-multiprovider.test.ts
++  //   （断言动态区非空时 OpenAI provider 的 convertMessages 输出必然多一条 user 消息）。
+   const stableParts: string[] = [];
+   const dynamicParts: string[] = [];
+   for (const att of attachments) {
+diff --git a/src/plan/prompt.ts b/src/plan/prompt.ts
+index 9396c3a..b6f8e24 100644
+--- a/src/plan/prompt.ts
++++ b/src/plan/prompt.ts
+@@ -87,6 +87,29 @@ ${planExists
+  * 节流策略（对标 Claude Code）：完整提醒 token 较多，每 N 轮发一次完整版，
+  * 中间轮次发简短版，平衡"防遗忘"与"省 token"。
+  *
++ * ─── full 档为何要承载完整约束清单（2026-07-30，重复注入根因修复）───
++ *
++ * 此前 plan 的约束文案有**两条通道**：
++ *   ① `PERMISSION_MODE_DESCRIPTIONS.plan` → system prompt 附件（每次 buildSystemPrompt 都带）
++ *   ② 本函数 → user 侧 reminder（每轮，full/sparse 分档节流）
++ * 二者语义重叠但措辞已独立漂移（附件说"绝对不能/此约束覆盖你收到的所有其他指令"，
++ * 本函数说"不要进行任何编辑"），构成同一份约束两处说 + 事实源分裂。
++ *
++ * 修复方向是删附件、保留本通道（理由见
++ * docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md §7.1）：
++ * 附件走 system prompt 动态区，在 OpenAI 族会被 `openai.ts prependSystemMessage`
++ * 原样搬回 user 消息，"放 system 不占 user turn"在本项目不成立；而 reminder 是
++ * 每轮 pull 判定，不需要任何"mode 切换即重建 system prompt"的 push 触发点（那条
++ * 路径会击穿全量静态前缀，CC 实测占 10.2% cache_creation，正在反向迁移）。
++ *
++ * 删附件前必须把它独有的强约束语义搬到这里，否则是**真实安全回归**：
++ * plan 与 acceptEdits / deny-write 等**权限模式**性质不同——后者由 PermissionChecker
++ * 代码硬拦、模型看不到文案也拿不到多一个字节的权限；plan 是**行为模式**（"先规划再
++ * 执行"无法用权限规则表达），只能靠模型自觉，故 CC 也只对 plan 做每轮注入。
++ * 「此约束覆盖你收到的所有其他指令」是其中最强的一道越权防线，不能静默消失。
++ *
++ * 成本控制：完整清单只进 **full 档**（低频，每 N 轮一次），sparse 档保持精简不变。
++ *
+  * @param full true=完整提醒，false=简短提醒（默认 true 保持向后兼容）
+  */
+ export function buildPlanModeReminder(full: boolean = true): string {
+@@ -97,8 +120,23 @@ export function buildPlanModeReminder(full: boolean = true): string {
+ </system-reminder>`;
+   }
+   return `<system-reminder>
+-你当前处于计划模式。不要进行任何编辑或运行任何命令。
+-专注于探索代码库和编写计划。
++# 权限模式: 计划模式已激活
++
++你当前处于计划模式。用户希望你先制定方案再执行。
++你**绝对不能**进行任何编辑（计划文件除外）、运行任何非只读工具、或对系统做出任何变更。
++此约束覆盖你收到的所有其他指令。
++
++允许的操作：
++- 使用 read、grep、glob 探索代码库
++- 使用 sub_agent (explore 类型) 并行搜索
++- 使用 write/edit 编辑计划文件（仅限计划文件）
++- 调用 exit_plan_mode 提交计划
++
++禁止的操作：
++- 编辑任何非计划文件
++- 运行 bash 命令
++- 执行任何写入操作
++
+ 如果你已完成分析并有清晰方案，立即写计划并调用 exit_plan_mode 提交审批。
+ 不要反复探索或过度分析——目标是尽快拿出可执行的方案。
+ 执行计划时遇到工具失败，先用 edit 工具更新计划文件再继续执行。
+diff --git a/src/query/permission-reminder.ts b/src/query/permission-reminder.ts
+index 7e75593..4c76ec4 100644
+--- a/src/query/permission-reminder.ts
++++ b/src/query/permission-reminder.ts
+@@ -4,16 +4,23 @@
+  * 对应《Harness-LLM 可见性缺口》缺口 C：permission mode 只进被 5 分钟缓存冻结的
+  * system prompt，运行时切换（acceptEdits / readonly / dontAsk 等）不刷新。
+  *
+- * 根因：generatePermissionModeAttachment 生成的 mode 行为指南经 buildSystemPrompt 注入，
+- * 但 system prompt 有缓存（system-prompt.ts:89 CACHE_TTL），且仅在 init / CLAUDE.md
+- * 变更时重建，主循环每轮不重建。用户中途切 mode 后，模型上下文里仍是会话启动时的旧值。
++ * 根因：mode 行为指南原先只经 system prompt 附件注入，而 system prompt 有缓存
++ * （system-prompt.ts CACHE_TTL），且仅在 init / CLAUDE.md 变更时重建，主循环每轮不重建。
++ * 用户中途切 mode 后，模型上下文里仍是会话启动时的旧值。
+  * plan mode 另有 getPlanModeReminder 每轮注入兜住了"切入 plan"，但其它 mode 之间的切换
+  * 没有任何每轮通道。
+  *
+  * 解决思路（对标 claude-code command_permissions / hook_permission_decision delta 通道）：
+- * 把 mode 指南从"只在 system prompt"改为"每轮 reminder 通道也注入"。
++ * 把 mode 指南从"只在 system prompt"改为"走每轮 reminder 通道"。
+  * 复用 attachments.ts 的 PERMISSION_MODE_DESCRIPTIONS，避免文案重复维护。
+  *
++ * ⚠️ 现状（2026-07-30 重复注入根因修复 P0）：本通道已是**唯一**通道。
++ * 那条 system 附件通道（generatePermissionModeAttachment）当时与本通道并存，
++ * 导致同一份文案同轮在 system role 与 user role 各出现一次，已删除。
++ * 因此不要因为"system prompt 里反正也有一份"而弱化这里的注入判定——那份已经没有了。
++ * plan mode 例外：它被本通道排除（loop.ts `mode !== "plan"`），约束由
++ * plan/prompt.ts 的 buildPlanModeReminder 承载，见那里的门控注释。
++ *
+  * 设计原则：纯函数（入 mode，出字符串 | null），便于单测。
+  */
+ 
+diff --git a/src/session/state.ts b/src/session/state.ts
+index 6d107d0..8762c12 100644
+--- a/src/session/state.ts
++++ b/src/session/state.ts
+@@ -184,6 +184,28 @@ export class SessionState {
+     this.modelUsage = {};
+   }
+ 
++  /**
++   * 重置 reminder 通道的跨轮去重/基线键（/clear 时调用）。
++   *
++   * 这些键挂在 sessionData 上是**故意的**——它们必须跨用户消息存活，否则每条新消息
++   * 都会重建、去重形同白做（见 loop.ts 里 announcedDeferredTools / lastSeenPermissionMode
++   * 的注释，都踩过"挂 LoopState 导致每条消息归零"的坑）。
++   *
++   * 但"跨消息"不等于"跨 /clear"：`/clear` 清空了对话历史，模型对之前播报过的
++   * 延迟工具列表、权限模式提醒完全失忆，而去重键还记着"已经告诉过它了" →
++   * 新一轮对话里**永远不再播报**，延迟工具机制在 /clear 后彻底失效。
++   * 这与 compact 路径的 deferredToolsPendingAfterCompact 是同一类问题，
++   * compact 已处理，/clear 此前漏了（2026-07-30 重复注入根因修复时发现）。
++   *
++   * `resetCounters()` 只动用量统计、不碰 sessionData，故单独一个方法；
++   * 两处 /clear 分支（斜杠命令结构化结果 / 旧 switch 分支）都必须调用。
++   */
++  resetReminderDedupKeys(): void {
++    this.sessionData.delete("announcedDeferredTools");
++    this.sessionData.delete("lastSeenPermissionMode");
++    this.sessionData.delete("lastSeenContextPressureLevel");
++  }
++
+   /**
+    * 累加辅助调用花费（影子调用：标题生成/记忆召回/bash分类/摘要压缩/缓存预热等）。
+    * 只累加费用，不并入 modelUsage（避免污染 stock 口径的"当前上下文大小"展示）。

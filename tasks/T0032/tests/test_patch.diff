@@ -1,0 +1,226 @@
+diff --git a/tests/memory/dream.test.ts b/tests/memory/dream.test.ts
+new file mode 100644
+index 0000000..c45f797
+--- /dev/null
++++ b/tests/memory/dream.test.ts
+@@ -0,0 +1,128 @@
++/**
++ * G10: autoDream 测试
++ * 聚焦三级 gate（shouldDream）+ 状态持久化 + recordSession 计数
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
++import { join } from "path";
++import { tmpdir } from "os";
++import { shouldDream, initAutoDream, type DreamConfig } from "../../src/memory/dream/dream.ts";
++
++const HOUR = 1000 * 60 * 60;
++
++describe("shouldDream 三级 gate", () => {
++  const config: DreamConfig = {
++    enabled: true,
++    minHoursBetweenDreams: 20,
++    minSessionsBetweenDreams: 5,
++    minMemoriesToDream: 8,
++  };
++  const now = 1_000_000_000_000;
++
++  test("全部满足 → should=true", () => {
++    const state = { lastDreamAt: now - 21 * HOUR, sessionsSinceLastDream: 6 };
++    const r = shouldDream(state, 10, config, now);
++    expect(r.should).toBe(true);
++  });
++
++  test("时间 gate 未满足 → false", () => {
++    const state = { lastDreamAt: now - 10 * HOUR, sessionsSinceLastDream: 6 };
++    const r = shouldDream(state, 10, config, now);
++    expect(r.should).toBe(false);
++    expect(r.reason).toContain("时间 gate");
++  });
++
++  test("会话 gate 未满足 → false", () => {
++    const state = { lastDreamAt: now - 21 * HOUR, sessionsSinceLastDream: 3 };
++    const r = shouldDream(state, 10, config, now);
++    expect(r.should).toBe(false);
++    expect(r.reason).toContain("会话 gate");
++  });
++
++  test("记忆量 gate 未满足 → false", () => {
++    const state = { lastDreamAt: now - 21 * HOUR, sessionsSinceLastDream: 6 };
++    const r = shouldDream(state, 3, config, now);
++    expect(r.should).toBe(false);
++    expect(r.reason).toContain("记忆量 gate");
++  });
++
++  test("首次运行（lastDreamAt=0）跳过时间 gate", () => {
++    const state = { lastDreamAt: 0, sessionsSinceLastDream: 6 };
++    const r = shouldDream(state, 10, config, now);
++    expect(r.should).toBe(true);
++  });
++
++  test("使用默认阈值（config 未指定各阈值）", () => {
++    const minimalConfig: DreamConfig = { enabled: true };
++    // 默认 20h / 5 会话 / 8 条记忆
++    const state = { lastDreamAt: 0, sessionsSinceLastDream: 5 };
++    expect(shouldDream(state, 8, minimalConfig, now).should).toBe(true);
++    expect(shouldDream(state, 7, minimalConfig, now).should).toBe(false); // 记忆不足
++  });
++});
++
++describe("initAutoDream 状态持久化", () => {
++  let memoryDir: string;
++
++  beforeEach(() => {
++    memoryDir = mkdtempSync(join(tmpdir(), "sid-dream-"));
++  });
++  afterEach(() => {
++    rmSync(memoryDir, { recursive: true, force: true });
++  });
++
++  function makeHandle(enabled = true) {
++    return initAutoDream({
++      getMainContext: () => ({
++        systemPrompt: "",
++        messages: [],
++        provider: {} as any,
++        toolRegistry: {} as any,
++        model: "test",
++      }),
++      memoryDir,
++      canUseTool: () => ({ behavior: "passthrough" }) as any,
++      config: { enabled },
++      now: () => 1_000_000_000_000,
++    });
++  }
++
++  test("recordSession 累加会话计数并落盘", () => {
++    const h = makeHandle();
++    h.recordSession();
++    h.recordSession();
++    const statePath = join(memoryDir, ".dream_state.json");
++    expect(existsSync(statePath)).toBe(true);
++    const state = JSON.parse(readFileSync(statePath, "utf-8"));
++    expect(state.sessionsSinceLastDream).toBe(2);
++  });
++
++  test("enabled=false 时 recordSession 不计数", () => {
++    const h = makeHandle(false);
++    h.recordSession();
++    const statePath = join(memoryDir, ".dream_state.json");
++    expect(existsSync(statePath)).toBe(false);
++  });
++
++  test("损坏的状态文件不崩溃（回退默认）", () => {
++    writeFileSync(join(memoryDir, ".dream_state.json"), "not json", "utf-8");
++    const h = makeHandle();
++    // 不应抛异常
++    h.recordSession();
++    const state = JSON.parse(readFileSync(join(memoryDir, ".dream_state.json"), "utf-8"));
++    expect(state.sessionsSinceLastDream).toBe(1); // 从默认 0 开始 +1
++  });
++
++  test("drainPending 无进行中任务时立即返回", async () => {
++    const h = makeHandle();
++    await h.drainPending(100); // 不应挂起
++    expect(true).toBe(true);
++  });
++
++  test("enabled=false 时 maybeDream 无副作用", async () => {
++    const h = makeHandle(false);
++    await h.maybeDream();
++    expect(existsSync(join(memoryDir, ".dream_state.json"))).toBe(false);
++  });
++});
+diff --git a/tests/tool/read-tool.test.ts b/tests/tool/read-tool.test.ts
+index a58bed7..d48279e 100644
+--- a/tests/tool/read-tool.test.ts
++++ b/tests/tool/read-tool.test.ts
+@@ -136,14 +136,18 @@ describe("Read 工具 — 设备文件拦截 (P1)", () => {
+ });
+ 
+ describe("Read 工具 — 二进制扩展名拦截 (P1)", () => {
+-  test(".png 文件被拒绝", async () => {
++  // G6：.png 现在以图片 mediaBlock 返回，不再拒绝
++  test(".png 文件以图片 mediaBlock 返回（G6）", async () => {
+     const filePath = makeTmpFile("fake png content", "image.png");
+     const tool = new ReadTool();
+     const result = await tool.execute({ file_path: filePath });
+ 
+-    expect(result.isError).toBe(true);
+-    expect(result.output).toContain("二进制文件");
+-    expect(result.output).toContain(".png");
++    expect(result.isError).toBeUndefined();
++    expect(result.mediaBlocks).toBeDefined();
++    expect(result.mediaBlocks!.length).toBe(1);
++    expect(result.mediaBlocks![0].kind).toBe("image");
++    expect(result.mediaBlocks![0].mediaType).toBe("image/png");
++    expect(result.output).toContain("图片");
+   });
+ 
+   test(".zip 文件被拒绝", async () => {
+@@ -333,6 +337,64 @@ describe("Read 工具 — AbortSignal 中止 (P0)", () => {
+   });
+ });
+ 
++describe("Read 工具 — G6 富媒体", () => {
++  test(".jpg 以图片 mediaBlock 返回，mediaType=image/jpeg", async () => {
++    const filePath = makeTmpFile("fake jpg", "photo.jpg");
++    const tool = new ReadTool();
++    const result = await tool.execute({ file_path: filePath });
++    expect(result.isError).toBeUndefined();
++    expect(result.mediaBlocks![0].kind).toBe("image");
++    expect(result.mediaBlocks![0].mediaType).toBe("image/jpeg");
++    // base64 数据非空
++    expect(result.mediaBlocks![0].data.length).toBeGreaterThan(0);
++  });
++
++  test(".ipynb 返回带 cell id 的文本视图（无 mediaBlock）", async () => {
++    const notebook = {
++      cells: [
++        { cell_type: "markdown", source: ["# 标题\n"], metadata: { id: "md1" } },
++        {
++          cell_type: "code",
++          source: ["print(1)\n"],
++          metadata: { id: "code1" },
++          outputs: [{ output_type: "stream", text: ["1\n"] }],
++          execution_count: 1,
++        },
++      ],
++      metadata: { kernelspec: { language: "python" } },
++      nbformat: 4,
++      nbformat_minor: 5,
++    };
++    const filePath = makeTmpFile(JSON.stringify(notebook), "analysis.ipynb");
++    const tool = new ReadTool();
++    const result = await tool.execute({ file_path: filePath });
++    expect(result.isError).toBeUndefined();
++    expect(result.mediaBlocks).toBeUndefined();
++    expect(result.output).toContain('<cell id="md1" type="markdown">');
++    expect(result.output).toContain('<cell id="code1" type="code">');
++    expect(result.output).toContain("--- 输出 ---");
++    expect(result.output).toContain("kernel=python");
++  });
++
++  test(".ipynb 格式无效时返回错误提示（不崩溃）", async () => {
++    const filePath = makeTmpFile("not json", "broken.ipynb");
++    const tool = new ReadTool();
++    const result = await tool.execute({ file_path: filePath });
++    // 渲染层容错：JSON 解析失败在 output 里提示，不抛
++    expect(result.output).toContain("解析失败");
++  });
++
++  test(".pdf 以 document mediaBlock 返回", async () => {
++    const filePath = makeTmpFile("%PDF-1.4 fake", "doc.pdf");
++    const tool = new ReadTool();
++    const result = await tool.execute({ file_path: filePath, pages: "1-3" });
++    expect(result.isError).toBeUndefined();
++    expect(result.mediaBlocks![0].kind).toBe("document");
++    expect(result.mediaBlocks![0].mediaType).toBe("application/pdf");
++    expect(result.output).toContain("页码 1-3");
++  });
++});
++
+ describe("Read 工具 — 错误处理", () => {
+   test("文件不存在返回明确错误和相似文件提示", async () => {
+     const dir = makeTmpDir();

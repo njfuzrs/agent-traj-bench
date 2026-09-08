@@ -1,0 +1,598 @@
+diff --git a/tests/goal/goal-gate.test.ts b/tests/goal/goal-gate.test.ts
+index 0dcda01..d9baa33 100644
+--- a/tests/goal/goal-gate.test.ts
++++ b/tests/goal/goal-gate.test.ts
+@@ -130,16 +130,45 @@ describe("handleGoalGate · 评估决策", () => {
+     expect(ctx.goal.status).toBe("complete");
+   });
+ 
+-  test("评估 impossible → impossible=true + status=impossible", async () => {
+-    const ctx = makeCtx({
+-      goalOverrides: { turnsUsed: 3 },
+-      evalResponse: JSON.stringify({ satisfied: false, reason: "文件不存在", impossible: true }),
+-    });
+-    ctx.goal.objective = "修复 nonexistent.ts";
+-    const out = await handleGoalGate(ctx);
+-    expect(out.result.impossible).toBe(true);
+-    expect(out.result.shouldContinue).toBe(false);
+-    expect(ctx.goal.status).toBe("impossible");
++  test("评估 impossible（默认降级模式）→ 不终止，注入软提醒 + shouldContinue=true", async () => {
++    const saved = process.env.SID_ENABLE_GOAL_HARD_STOP;
++    delete process.env.SID_ENABLE_GOAL_HARD_STOP;
++    try {
++      const ctx = makeCtx({
++        goalOverrides: { turnsUsed: 3 },
++        evalResponse: JSON.stringify({ satisfied: false, reason: "文件不存在", impossible: true }),
++      });
++      ctx.goal.objective = "修复 nonexistent.ts";
++      const out = await handleGoalGate(ctx);
++      // 降级：不再终止，也不再标 impossible，而是继续并把判断交还模型
++      expect(out.result.impossible).toBe(false);
++      expect(out.result.shouldContinue).toBe(true);
++      expect(ctx.goal.status).not.toBe("impossible");
++      expect(out.injectMessages.length).toBeGreaterThan(0);
++      expect(out.injectMessages[0]!.content[0]!.text).toContain("无法达成");
++    } finally {
++      if (saved === undefined) delete process.env.SID_ENABLE_GOAL_HARD_STOP;
++      else process.env.SID_ENABLE_GOAL_HARD_STOP = saved;
++    }
++  });
++
++  test("评估 impossible（SID_ENABLE_GOAL_HARD_STOP=1 硬停止模式）→ impossible=true + status=impossible", async () => {
++    const saved = process.env.SID_ENABLE_GOAL_HARD_STOP;
++    process.env.SID_ENABLE_GOAL_HARD_STOP = "1";
++    try {
++      const ctx = makeCtx({
++        goalOverrides: { turnsUsed: 3 },
++        evalResponse: JSON.stringify({ satisfied: false, reason: "文件不存在", impossible: true }),
++      });
++      ctx.goal.objective = "修复 nonexistent.ts";
++      const out = await handleGoalGate(ctx);
++      expect(out.result.impossible).toBe(true);
++      expect(out.result.shouldContinue).toBe(false);
++      expect(ctx.goal.status).toBe("impossible");
++    } finally {
++      if (saved === undefined) delete process.env.SID_ENABLE_GOAL_HARD_STOP;
++      else process.env.SID_ENABLE_GOAL_HARD_STOP = saved;
++    }
+   });
+ 
+   test("评估未满足 → 注入反馈 + shouldContinue=true + 记录 lastEvalReason", async () => {
+@@ -160,24 +189,58 @@ describe("handleGoalGate · 评估决策", () => {
+ // ─── Blocked 检测 ───
+ 
+ describe("handleGoalGate · blocked 检测", () => {
+-  test("连续相同 blockerKey 达阈值 → blocked + shouldContinue=false", async () => {
+-    const detector = new BlockedDetector(3);
+-    const response = JSON.stringify({ satisfied: false, reason: "卡在同一处", blockerKey: "stuck-key" });
+-
+-    // 前两次：未满足但未达阈值 → 继续
+-    for (let i = 0; i < 2; i++) {
+-      const ctx = makeCtx({ goalOverrides: { turnsUsed: 5 + i }, evalResponse: response, blockedDetector: detector });
+-      ctx.goal.objective = "完成迁移工作";
+-      const out = await handleGoalGate(ctx);
+-      expect(out.result.shouldContinue).toBe(true);
++  test("连续相同 blockerKey 达阈值（默认降级模式）→ 不终止，注入换思路提醒 + shouldContinue=true", async () => {
++    const saved = process.env.SID_ENABLE_GOAL_HARD_STOP;
++    delete process.env.SID_ENABLE_GOAL_HARD_STOP;
++    try {
++      const detector = new BlockedDetector(3);
++      const response = JSON.stringify({ satisfied: false, reason: "卡在同一处", blockerKey: "stuck-key" });
++
++      // 前两次：未满足但未达阈值 → 继续
++      for (let i = 0; i < 2; i++) {
++        const ctx = makeCtx({ goalOverrides: { turnsUsed: 5 + i }, evalResponse: response, blockedDetector: detector });
++        ctx.goal.objective = "完成迁移工作";
++        const out = await handleGoalGate(ctx);
++        expect(out.result.shouldContinue).toBe(true);
++      }
++
++      // 第三次：连续 3 次相同 blockerKey → 降级模式下仍继续，但注入"换思路"软提醒、不标 blocked
++      const ctx3 = makeCtx({ goalOverrides: { turnsUsed: 7 }, evalResponse: response, blockedDetector: detector });
++      ctx3.goal.objective = "完成迁移工作";
++      const out3 = await handleGoalGate(ctx3);
++      expect(out3.result.shouldContinue).toBe(true);
++      expect(ctx3.goal.status).not.toBe("blocked");
++      expect(out3.injectMessages.length).toBeGreaterThan(0);
++      expect(out3.injectMessages[0]!.content[0]!.text).toContain("换一种思路");
++    } finally {
++      if (saved === undefined) delete process.env.SID_ENABLE_GOAL_HARD_STOP;
++      else process.env.SID_ENABLE_GOAL_HARD_STOP = saved;
+     }
++  });
++
++  test("连续相同 blockerKey 达阈值（SID_ENABLE_GOAL_HARD_STOP=1 硬停止模式）→ blocked + shouldContinue=false", async () => {
++    const saved = process.env.SID_ENABLE_GOAL_HARD_STOP;
++    process.env.SID_ENABLE_GOAL_HARD_STOP = "1";
++    try {
++      const detector = new BlockedDetector(3);
++      const response = JSON.stringify({ satisfied: false, reason: "卡在同一处", blockerKey: "stuck-key" });
+ 
+-    // 第三次：连续 3 次相同 blockerKey → blocked
+-    const ctx3 = makeCtx({ goalOverrides: { turnsUsed: 7 }, evalResponse: response, blockedDetector: detector });
+-    ctx3.goal.objective = "完成迁移工作";
+-    const out3 = await handleGoalGate(ctx3);
+-    expect(out3.result.shouldContinue).toBe(false);
+-    expect(ctx3.goal.status).toBe("blocked");
++      for (let i = 0; i < 2; i++) {
++        const ctx = makeCtx({ goalOverrides: { turnsUsed: 5 + i }, evalResponse: response, blockedDetector: detector });
++        ctx.goal.objective = "完成迁移工作";
++        const out = await handleGoalGate(ctx);
++        expect(out.result.shouldContinue).toBe(true);
++      }
++
++      const ctx3 = makeCtx({ goalOverrides: { turnsUsed: 7 }, evalResponse: response, blockedDetector: detector });
++      ctx3.goal.objective = "完成迁移工作";
++      const out3 = await handleGoalGate(ctx3);
++      expect(out3.result.shouldContinue).toBe(false);
++      expect(ctx3.goal.status).toBe("blocked");
++    } finally {
++      if (saved === undefined) delete process.env.SID_ENABLE_GOAL_HARD_STOP;
++      else process.env.SID_ENABLE_GOAL_HARD_STOP = saved;
++    }
+   });
+ });
+ 
+diff --git a/tests/query/hypothesis-ledger.test.ts b/tests/query/hypothesis-ledger.test.ts
+new file mode 100644
+index 0000000..3b06cf9
+--- /dev/null
++++ b/tests/query/hypothesis-ledger.test.ts
+@@ -0,0 +1,121 @@
++/**
++ * HypothesisLedger 单测（含 Top 5 约束型误伤修复回归覆盖）
++ *
++ * 覆盖：
++ * - extractCues：2026-07-07 收紧后，短通用词不再纳入线索（降低子串误命中）。
++ * - detectContradictions：长且具体的 cue 仍能命中；短通用词不再一碰就中。
++ * - buildContradictionReminder：措辞已从"立即裁决/矛盾中断"降级为"仅供参考、可忽略"。
++ * - 机制1/3 基本行为（register 必填 falsifier、unsettled/hasOpen）。
++ */
++
++import { test, expect, describe } from "bun:test";
++import {
++  HypothesisLedger,
++  extractCues,
++  buildContradictionReminder,
++} from "../../src/query/hypothesis-ledger.ts";
++
++describe("extractCues（Top 5：收紧 cue 长度）", () => {
++  test("中文只取 ≥4 连续汉字整段，短通用词不纳入", () => {
++    const cues = extractCues("进程崩溃");
++    // "进程崩溃" 是 4 字整段 → 纳入；不再拆出 "进程"/"崩溃" 这类 2 字短词
++    expect(cues).toContain("进程崩溃");
++    expect(cues).not.toContain("进程");
++    expect(cues).not.toContain("崩溃");
++  });
++
++  test("少于 4 字的中文片段整体被过滤（如纯 2-3 字短语）", () => {
++    const cues = extractCues("崩溃");
++    expect(cues).toEqual([]);
++  });
++
++  test("英文 token 要求长度 ≥5，过滤 err/pid/cpu 等易撞车短词", () => {
++    const cues = extractCues("process crashed pid err cpu");
++    expect(cues).toContain("process");
++    expect(cues).toContain("crashed");
++    expect(cues).not.toContain("pid");
++    expect(cues).not.toContain("err");
++    expect(cues).not.toContain("cpu");
++  });
++
++  test("空 falsifier → 空数组", () => {
++    expect(extractCues("")).toEqual([]);
++  });
++});
++
++describe("detectContradictions（Top 5：长 cue 命中，短通用词不再误命中）", () => {
++  test("长且具体的 cue 仍能命中矛盾", () => {
++    const ledger = new HypothesisLedger();
++    ledger.register({
++      statement: "服务进程已崩溃退出",
++      falsifier: "若日志显示 process_still_alive 则假设被推翻",
++      turn: 1,
++    });
++    const hits = ledger.detectContradictions("监控输出：process_still_alive=true");
++    expect(hits.length).toBe(1);
++    expect(hits[0].matchedCue).toBe("process_still_alive");
++  });
++
++  test("短通用词不再一碰就中（收紧前 2 字'进程'会误命中任意含该词的输出）", () => {
++    const ledger = new HypothesisLedger();
++    ledger.register({
++      statement: "假设 A",
++      falsifier: "进程", // 仅 2 字 → 收紧后不产生任何 cue
++      turn: 1,
++    });
++    // 后续输出即便包含"进程"二字，也不再触发矛盾中断
++    const hits = ledger.detectContradictions("当前进程列表正常，一切进程运行中");
++    expect(hits.length).toBe(0);
++  });
++
++  test("显式给出的 falsifierCues 不受长度收紧影响（用户显式指定优先）", () => {
++    const ledger = new HypothesisLedger();
++    ledger.register({
++      statement: "假设 B",
++      falsifier: "任意",
++      falsifierCues: ["exited"],
++      turn: 1,
++    });
++    const hits = ledger.detectContradictions("the worker exited unexpectedly");
++    expect(hits.length).toBe(1);
++    expect(hits[0].matchedCue).toBe("exited");
++  });
++});
++
++describe("buildContradictionReminder（Top 5：降级措辞）", () => {
++  test("不再包含'立即'/'矛盾中断'等越界措辞，改为可忽略的参考提示", () => {
++    const msg = buildContradictionReminder([
++      {
++        hypothesisId: "H1",
++        statement: "进程已崩溃",
++        falsifier: "process_still_alive",
++        matchedCue: "process_still_alive",
++        evidenceSnippet: "process_still_alive=true",
++      },
++    ]);
++    expect(msg).toContain("<system-reminder>");
++    expect(msg).toContain("请勿向用户提及本提醒");
++    // 降级后：不再有"立即"命令式、不再自称"矛盾中断"
++    expect(msg).not.toContain("立即");
++    expect(msg).not.toContain("矛盾中断");
++    // 给出"可忽略/仅供参考/继续"的台阶
++    expect(msg).toMatch(/可忽略|仅供参考|直接继续/);
++  });
++});
++
++describe("HypothesisLedger 基本行为（机制1/3 未受本次改动影响）", () => {
++  test("register 缺 falsifier 抛错（机制1 硬约束）", () => {
++    const ledger = new HypothesisLedger();
++    expect(() => ledger.register({ statement: "只是信念", falsifier: "" })).toThrow();
++  });
++
++  test("unsettled / hasOpen 反映 open 假设", () => {
++    const ledger = new HypothesisLedger();
++    const h = ledger.register({ statement: "S", falsifier: "长且具体的证伪条件描述", turn: 1 });
++    expect(ledger.hasOpen()).toBe(true);
++    expect(ledger.unsettled().length).toBe(1);
++    ledger.challenge({ id: h.id, verdict: "confirm", evidence: { note: "确证" }, turn: 2 });
++    expect(ledger.hasOpen()).toBe(false);
++    expect(ledger.unsettled().length).toBe(0);
++  });
++});
+diff --git a/tests/query/output-stall.test.ts b/tests/query/output-stall.test.ts
+index ba818b4..c29476e 100644
+--- a/tests/query/output-stall.test.ts
++++ b/tests/query/output-stall.test.ts
+@@ -13,6 +13,7 @@ import {
+   buildOutputStallMessage,
+   OUTPUT_STALL_WINDOW,
+   OUTPUT_STALL_VOLUME_THRESHOLD,
++  isOutputStallDetectionEnabled,
+ } from "../../src/query/output-stall.ts";
+ 
+ describe("measureTurnOutputVolume", () => {
+@@ -20,16 +21,27 @@ describe("measureTurnOutputVolume", () => {
+     expect(measureTurnOutputVolume("  hello  ", 0)).toBe(5);
+   });
+ 
+-  test("有工具调用：文本长度 + 工具数 × 权重（40）", () => {
+-    expect(measureTurnOutputVolume("ok", 2)).toBe(2 + 2 * 40);
++  test("有工具调用：文本长度 + 工具数 × 权重（60）", () => {
++    expect(measureTurnOutputVolume("ok", 2)).toBe(2 + 2 * 60);
++  });
++
++  test("单工具无文本轮不再低于阈值（Top 1 误伤修复：权重 60 ≥ 阈值 60）", () => {
++    // 此前权重 40 < 阈值 60，单工具串行探索连续 5 轮被误判停滞；提权后不再计入停滞窗口。
++    expect(measureTurnOutputVolume("", 1)).toBeGreaterThanOrEqual(OUTPUT_STALL_VOLUME_THRESHOLD);
++  });
++
++  test("连续 5 轮单工具无文本 → 不再判停滞（Top 1 核心误伤场景）", () => {
++    const history = [1, 2, 3, 4, 5].map(() => measureTurnOutputVolume("", 1));
++    expect(isOutputStalling(history)).toBe(false);
+   });
+ 
+   test("空文本 + 无工具调用 → 0", () => {
+     expect(measureTurnOutputVolume("", 0)).toBe(0);
+   });
+ 
+-  test("单次工具调用即可轻松超过阈值", () => {
+-    expect(measureTurnOutputVolume("", 1)).toBeGreaterThan(OUTPUT_STALL_VOLUME_THRESHOLD);
++  test("单次工具调用即达到阈值（不再低于阈值 → 不计入停滞）", () => {
++    // 权重 60 = 阈值 60；判定用 `< 阈值`，故 60 不算停滞。单工具轮=实质进展。
++    expect(measureTurnOutputVolume("", 1)).toBeGreaterThanOrEqual(OUTPUT_STALL_VOLUME_THRESHOLD);
+   });
+ });
+ 
+@@ -87,3 +99,50 @@ describe("buildOutputStallMessage", () => {
+     expect(msg).toContain("请勿向用户提及本提醒");
+   });
+ });
++
++describe("isOutputStallDetectionEnabled（Top 1：默认关闭 + env 门控）", () => {
++  const KEYS = ["SID_ENABLE_OUTPUT_STALL", "SID_ENABLE_LOOP_DETECTION"] as const;
++  const saved: Record<string, string | undefined> = {};
++
++  function clearAll() {
++    for (const k of KEYS) {
++      saved[k] = process.env[k];
++      delete process.env[k];
++    }
++  }
++  function restore() {
++    for (const k of KEYS) {
++      if (saved[k] === undefined) delete process.env[k];
++      else process.env[k] = saved[k];
++    }
++  }
++
++  test("默认（两个开关都未设）→ 关闭", () => {
++    clearAll();
++    try {
++      expect(isOutputStallDetectionEnabled()).toBe(false);
++    } finally {
++      restore();
++    }
++  });
++
++  test("SID_ENABLE_OUTPUT_STALL=1 → 单独开启", () => {
++    clearAll();
++    try {
++      process.env.SID_ENABLE_OUTPUT_STALL = "1";
++      expect(isOutputStallDetectionEnabled()).toBe(true);
++    } finally {
++      restore();
++    }
++  });
++
++  test("SID_ENABLE_LOOP_DETECTION=1 → 一并开启（同属防跑偏启发式）", () => {
++    clearAll();
++    try {
++      process.env.SID_ENABLE_LOOP_DETECTION = "1";
++      expect(isOutputStallDetectionEnabled()).toBe(true);
++    } finally {
++      restore();
++    }
++  });
++});
+diff --git a/tests/query/reactive-compact.test.ts b/tests/query/reactive-compact.test.ts
+index cbcb493..6a711b1 100644
+--- a/tests/query/reactive-compact.test.ts
++++ b/tests/query/reactive-compact.test.ts
+@@ -16,32 +16,44 @@ describe("DiminishingReturnsDetector — 默认配置（向后兼容）", () =>
+     expect(d.shouldStop()).toBe(false);
+   });
+ 
+-  test("达到默认最大次数（3 次）→ 应停止", () => {
++  test("达到默认最大次数（8 次，Top 3 从 3 放宽）→ 应停止", () => {
+     const d = new DiminishingReturnsDetector();
+-    d.record(2000);
+-    d.record(2000);
+-    d.record(2000);
++    for (let i = 0; i < 8; i++) d.record(2000);
+     expect(d.shouldStop()).toBe(true);
+   });
+ 
+-  test("连续两次增量 < 默认阈值（500）→ 应停止", () => {
++  test("续写 7 次（未达 8 次上限）且增量正常 → 不应停止（分段写大文件留足空间）", () => {
+     const d = new DiminishingReturnsDetector();
+-    d.record(400);
+-    d.record(300);
++    for (let i = 0; i < 7; i++) d.record(2000);
++    expect(d.shouldStop()).toBe(false);
++  });
++
++  test("连续两次增量 < 默认阈值（150，Top 3 从 500 收紧）→ 应停止", () => {
++    const d = new DiminishingReturnsDetector();
++    d.record(100);
++    d.record(50);
+     expect(d.shouldStop()).toBe(true);
+   });
+ 
++  test("分段写入常见段大小（各 300 token，≥ 新阈值 150）→ 不再误判递减停止", () => {
++    // 此前阈值 500 时，连续两段各 300 会命中"两次 <500"被误终止；收紧到 150 后不再误伤。
++    const d = new DiminishingReturnsDetector();
++    d.record(300);
++    d.record(300);
++    expect(d.shouldStop()).toBe(false);
++  });
++
+   test("连续两次增量中有一次 ≥ 阈值 → 不应停止", () => {
+     const d = new DiminishingReturnsDetector();
+-    d.record(400);
+-    d.record(600);
++    d.record(100);
++    d.record(200);
+     expect(d.shouldStop()).toBe(false);
+   });
+ 
+   test("reset 后计数清零", () => {
+     const d = new DiminishingReturnsDetector();
+-    d.record(100);
+-    d.record(100);
++    d.record(50);
++    d.record(50);
+     expect(d.shouldStop()).toBe(true);
+     d.reset();
+     expect(d.count).toBe(0);
+diff --git a/tests/query/thinking-divergence.test.ts b/tests/query/thinking-divergence.test.ts
+index ba3f382..fcf6892 100644
+--- a/tests/query/thinking-divergence.test.ts
++++ b/tests/query/thinking-divergence.test.ts
+@@ -13,6 +13,7 @@ import {
+   buildThinkingDivergenceMessage,
+   THINKING_DIVERGENCE_WINDOW,
+   THINKING_DIVERGENCE_LEN,
++  isThinkingDivergenceDetectionEnabled,
+ } from "../../src/query/thinking-divergence.ts";
+ 
+ describe("measureThinkingLen", () => {
+@@ -78,3 +79,50 @@ describe("buildThinkingDivergenceMessage", () => {
+     expect(msg).toContain("todo_write");
+   });
+ });
++
++describe("isThinkingDivergenceDetectionEnabled（Top 4：默认关闭 + env 门控）", () => {
++  const KEYS = ["SID_ENABLE_THINKING_DIVERGENCE", "SID_ENABLE_LOOP_DETECTION"] as const;
++  const saved: Record<string, string | undefined> = {};
++
++  function clearAll() {
++    for (const k of KEYS) {
++      saved[k] = process.env[k];
++      delete process.env[k];
++    }
++  }
++  function restore() {
++    for (const k of KEYS) {
++      if (saved[k] === undefined) delete process.env[k];
++      else process.env[k] = saved[k];
++    }
++  }
++
++  test("默认（两个开关都未设）→ 关闭", () => {
++    clearAll();
++    try {
++      expect(isThinkingDivergenceDetectionEnabled()).toBe(false);
++    } finally {
++      restore();
++    }
++  });
++
++  test("SID_ENABLE_THINKING_DIVERGENCE=1 → 单独开启", () => {
++    clearAll();
++    try {
++      process.env.SID_ENABLE_THINKING_DIVERGENCE = "1";
++      expect(isThinkingDivergenceDetectionEnabled()).toBe(true);
++    } finally {
++      restore();
++    }
++  });
++
++  test("SID_ENABLE_LOOP_DETECTION=1 → 一并开启（同属防跑偏启发式）", () => {
++    clearAll();
++    try {
++      process.env.SID_ENABLE_LOOP_DETECTION = "1";
++      expect(isThinkingDivergenceDetectionEnabled()).toBe(true);
++    } finally {
++      restore();
++    }
++  });
++});
+diff --git a/tests/tool/omission-detector.test.ts b/tests/tool/omission-detector.test.ts
+index 906829d..c4d35a8 100644
+--- a/tests/tool/omission-detector.test.ts
++++ b/tests/tool/omission-detector.test.ts
+@@ -5,7 +5,7 @@
+  */
+ 
+ import { describe, test, expect } from "bun:test";
+-import { detectOmissionPlaceholders, hasOmissionPlaceholders, isDocumentFile } from "../../src/tool/omission-detector.ts";
++import { detectOmissionPlaceholders, hasOmissionPlaceholders, isDocumentFile, isPythonFile } from "../../src/tool/omission-detector.ts";
+ 
+ describe("detectOmissionPlaceholders - JavaScript/TypeScript", () => {
+   test("检测 // ... rest of 注释", () => {
+@@ -39,14 +39,13 @@ describe("detectOmissionPlaceholders - JavaScript/TypeScript", () => {
+     expect(matches[0].text).toContain("existing");
+   });
+ 
+-  test("检测 TODO 占位符", () => {
++  test("TODO 注释不再误报（合法注释非省略占位符，2026-07-07 移除该规则）", () => {
+     const code = `function process() {
+   // TODO: implement this
+   return null;
+ }`;
+     const matches = detectOmissionPlaceholders(code);
+-    expect(matches.length).toBeGreaterThan(0);
+-    expect(matches[0].text).toContain("TODO");
++    expect(matches.length).toBe(0);
+   });
+ 
+   test("正常注释不误报", () => {
+@@ -171,7 +170,7 @@ describe("detectOmissionPlaceholders - 边界情况", () => {
+     const code = `function foo() {
+   // ... rest of implementation
+   console.log("middle");
+-  // TODO: complete this
++  // ... remaining logic
+   return true;
+ }`;
+     const matches = detectOmissionPlaceholders(code);
+@@ -270,13 +269,6 @@ describe("detectOmissionPlaceholders - 文档文件分级检测", () => {
+     expect(matches[0].pattern).toBe("JS comment ellipsis");
+   });
+ 
+-  test("文档仍检测 TODO 占位符", () => {
+-    const content = "// TODO: implement this";
+-    const matches = detectOmissionPlaceholders(content, true);
+-    expect(matches.length).toBeGreaterThan(0);
+-    expect(matches[0].pattern).toBe("TODO placeholder");
+-  });
+-
+   test("文档仍检测 Python/Shell 注释省略", () => {
+     const content = "# ... rest of implementation";
+     const matches = detectOmissionPlaceholders(content, true);
+@@ -359,3 +351,64 @@ describe("hasOmissionPlaceholders - 文档文件兼容", () => {
+     expect(hasOmissionPlaceholders(content)).toBe(true);
+   });
+ });
++
++describe("isPythonFile", () => {
++  test("识别 .py 文件", () => {
++    expect(isPythonFile("/path/to/mod.py")).toBe(true);
++  });
++
++  test("识别 .pyi stub 文件", () => {
++    expect(isPythonFile("/path/to/mod.pyi")).toBe(true);
++  });
++
++  test("识别 .pyw 文件", () => {
++    expect(isPythonFile("/path/to/app.pyw")).toBe(true);
++  });
++
++  test("大小写不敏感", () => {
++    expect(isPythonFile("/path/to/MOD.PY")).toBe(true);
++  });
++
++  test("不识别 .ts / .js 文件", () => {
++    expect(isPythonFile("/path/to/code.ts")).toBe(false);
++    expect(isPythonFile("/path/to/code.js")).toBe(false);
++  });
++});
++
++describe("detectOmissionPlaceholders - Python 源码放行合法 Ellipsis（2026-07-07 误伤修复）", () => {
++  test("Python 抽象方法体独立 `...` 放行（isPython=true）", () => {
++    const content = `def foo():
++    ...`;
++    const matches = detectOmissionPlaceholders(content, false, true);
++    expect(matches.length).toBe(0);
++  });
++
++  test(".pyi stub 里独立 `...` 放行", () => {
++    const content = `class C:
++    def method(self) -> int: ...
++    x: int
++    ...`;
++    const matches = detectOmissionPlaceholders(content, false, true);
++    expect(matches.length).toBe(0);
++  });
++
++  test("非 Python 文件的独立 `...` 仍被检测（isPython=false）", () => {
++    const content = `function foo() {
++  ...
++  return true;
++}`;
++    const matches = detectOmissionPlaceholders(content, false, false);
++    expect(matches.length).toBeGreaterThan(0);
++    expect(matches[0].pattern).toBe("Standalone ellipsis");
++  });
++
++  test("Python 文件里真正的偷懒省略仍被检测（`# ... rest of` 不属 pySafe 规则）", () => {
++    const content = `def foo():
++    print("start")
++    # ... rest of implementation
++    return True`;
++    const matches = detectOmissionPlaceholders(content, false, true);
++    expect(matches.length).toBeGreaterThan(0);
++    expect(matches[0].pattern).toBe("Python/Shell ellipsis");
++  });
++});

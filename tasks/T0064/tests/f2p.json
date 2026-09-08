@@ -1,0 +1,1 @@
+["tests/extension/managed-layer.test.ts", "tests/plugin/plugin-skills.test.ts", "tests/skill/activation-coordinator.test.ts", "tests/skill/executor.test.ts", "tests/skill/meta-tool.test.ts"]

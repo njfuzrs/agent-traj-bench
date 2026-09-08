@@ -1,0 +1,548 @@
+diff --git a/src/query/goal-gate.ts b/src/query/goal-gate.ts
+index 063ed1f..c511512 100644
+--- a/src/query/goal-gate.ts
++++ b/src/query/goal-gate.ts
+@@ -154,12 +154,27 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+ 
+   // 5. 目标不可能达成
+   if (evalResult.impossible) {
+-    goal.status = "impossible";
+-    log.warn("GOAL_GATE", `目标不可能达成: reason="${evalResult.reason}", turn=${goal.turnsUsed}`);
+-    systemMessages.push({ level: "warning", text: `Goal 被判定为不可能达成: ${evalResult.reason}` });
+-    emitTraceEvent("impossible", false, { evalReason: evalResult.reason });
++    if (isGoalHardStopEnabled()) {
++      // 硬停止模式（需 SID_ENABLE_GOAL_HARD_STOP=1 显式开启）：保留旧的"即终止"行为。
++      goal.status = "impossible";
++      log.warn("GOAL_GATE", `目标不可能达成（硬停止）: reason="${evalResult.reason}", turn=${goal.turnsUsed}`);
++      systemMessages.push({ level: "warning", text: `Goal 被判定为不可能达成: ${evalResult.reason}` });
++      emitTraceEvent("impossible", false, { evalReason: evalResult.reason });
++      return {
++        result: { shouldContinue: false, completed: false, impossible: true, evalResult },
++        injectMessages,
++        systemMessages,
++      };
++    }
++    // 默认（降级模式）：不终止，注入软提醒把判断交还模型，继续循环（由 maxTurns/budget 兜底）。
++    goal.lastEvalReason = evalResult.reason;
++    log.info("GOAL_GATE", `目标疑似不可能达成（降级为提醒，不终止）: reason="${evalResult.reason?.slice(0, 80)}", turn=${goal.turnsUsed}`);
++    const impossibleReminder = buildImpossibleReminder(goal, evalResult);
++    injectMessages.push({ role: "user", content: [{ type: "text", text: impossibleReminder }] });
++    systemMessages.push({ level: "warning", text: `评估者认为目标可能无法达成（${evalResult.reason?.slice(0, 60)}），已提醒模型自行决定` });
++    emitTraceEvent("impossible_soft", true, { evalReason: evalResult.reason });
+     return {
+-      result: { shouldContinue: false, completed: false, impossible: true, evalResult },
++      result: { shouldContinue: true, completed: false, impossible: false, feedback: impossibleReminder, evalResult },
+       injectMessages,
+       systemMessages,
+     };
+@@ -180,15 +195,35 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+ 
+   // 7. 未达成 → blocked 检测
+   if (goalConfig.enableBlockedDetection && blockedDetector.record(evalResult.blockerKey)) {
+-    goal.status = "blocked";
+-    log.warn("GOAL_GATE", `blocked 检测触发: blockerKey="${evalResult.blockerKey}", threshold=${goalConfig.blockedThreshold}, turn=${goal.turnsUsed}`);
++    if (isGoalHardStopEnabled()) {
++      // 硬停止模式（需 SID_ENABLE_GOAL_HARD_STOP=1 显式开启）：保留旧的"即暂停"行为。
++      goal.status = "blocked";
++      log.warn("GOAL_GATE", `blocked 检测触发（硬停止）: blockerKey="${evalResult.blockerKey}", threshold=${goalConfig.blockedThreshold}, turn=${goal.turnsUsed}`);
++      systemMessages.push({
++        level: "warning",
++        text: `Goal 检测到卡住（连续 ${goalConfig.blockedThreshold} 轮相同阻塞原因: ${evalResult.blockerKey}），已暂停`,
++      });
++      emitTraceEvent("blocked", false, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold });
++      return {
++        result: { shouldContinue: false, completed: false, impossible: false, evalResult },
++        injectMessages,
++        systemMessages,
++      };
++    }
++    // 默认（降级模式）：不终止，注入软提醒逼模型换思路，继续循环（由 maxTurns/budget 兜底）。
++    // 注意：命中后 blockedDetector 内部计数不重置——若模型换路后仍卡在同一 blockerKey，
++    // 下一轮会再次命中并再提醒一次，直到换出新 blockerKey（重置）或触及轮次/预算上限。
++    goal.lastEvalReason = evalResult.reason;
++    log.info("GOAL_GATE", `blocked 检测触发（降级为提醒，不终止）: blockerKey="${evalResult.blockerKey}", turn=${goal.turnsUsed}`);
++    const blockedReminder = buildBlockedReminder(goal, evalResult.blockerKey, goalConfig.blockedThreshold);
++    injectMessages.push({ role: "user", content: [{ type: "text", text: blockedReminder }] });
+     systemMessages.push({
+       level: "warning",
+-      text: `Goal 检测到卡住（连续 ${goalConfig.blockedThreshold} 轮相同阻塞原因: ${evalResult.blockerKey}），已暂停`,
++      text: `Goal 疑似卡住（连续 ${goalConfig.blockedThreshold} 轮相同阻塞原因），已提醒模型换思路`,
+     });
+-    emitTraceEvent("blocked", false, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold });
++    emitTraceEvent("blocked_soft", true, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold });
+     return {
+-      result: { shouldContinue: false, completed: false, impossible: false, evalResult },
++      result: { shouldContinue: true, completed: false, impossible: false, feedback: blockedReminder, evalResult },
+       injectMessages,
+       systemMessages,
+     };
+@@ -234,3 +269,56 @@ ${evalResult.progress != null ? `当前进度: ${evalResult.progress}%` : ""}
+ - 若确认目标无法达成，请明确说明原因
+ </system-reminder>`;
+ }
++
++/**
++ * 目标"硬停止"是否启用（默认关闭 = 降级为"提醒 + 继续"）。
++ *
++ * 为什么默认把 blocked/impossible 从"终止"降为"提醒"（2026-07-07 决策，
++ * 约束型误伤排查清单 §3.5 #7 + §8）：
++ * - blocked 判据是"连续 N 轮相同 blockerKey"，但这未必真卡住——模型可能正稳步攻克
++ *   同一个难点，评估者却因表层现象相同持续报同一 blockerKey，于是把"正在攻坚"误判成
++ *   "卡死"直接终止整个 /goal 任务。
++ * - impossible 是评估者 LLM 的主观判定，本身有误判风险；一次误判就终止，代价过重。
++ * - 二者拦的都是"模型可能走的弯路"而非"不可逆危害"，且已有 maxTurns / tokenBudget 双重
++ *   硬上限兜底、用户可随时 ESC 介入。让评估者的"卡住/不可能"判断从"替用户拍板终止"降为
++ *   "把判断告知模型、让它自己决定换路还是收尾"，更符合"信任模型能力"的设计哲学。
++ *
++ * 代码不删、仅默认降级（env 门控可逆）：SID_ENABLE_GOAL_HARD_STOP=1 可恢复旧的
++ * "blocked/impossible 即终止"行为（例如批处理/无人值守场景希望尽早止损）。
++ */
++export function isGoalHardStopEnabled(): boolean {
++  return process.env.SID_ENABLE_GOAL_HARD_STOP === "1";
++}
++
++/** 构造 impossible 软提醒（降级模式下注入，让模型自己决定换路/收尾，而非直接终止）。 */
++function buildImpossibleReminder(goal: GoalState, evalResult: GoalEvalResult): string {
++  return `<system-reminder>
++[Goal 评估提示 — 第 ${goal.turnsUsed} 轮 / 最多 ${goal.maxTurns} 轮]
++
++目标条件: ${goal.objective}
++
++评估者认为当前目标可能无法达成，理由：${evalResult.reason}
++
++这只是评估者的判断，可能不准。请你自己决定下一步：
++- 如果确实无法达成，明确向用户说明原因和已尝试过的路径，然后收尾；
++- 如果你判断仍有别的思路没试过，换一种方法继续推进；
++- 不要因为这条提示就机械放弃一个其实还能推进的目标。
++（已达最大轮次或预算耗尽时会自动停止，用户也可随时介入。）
++</system-reminder>`;
++}
++
++/** 构造 blocked 软提醒（降级模式下注入，让模型换思路，而非直接终止）。 */
++function buildBlockedReminder(goal: GoalState, blockerKey: string | undefined, threshold: number): string {
++  return `<system-reminder>
++[Goal 卡住提示 — 第 ${goal.turnsUsed} 轮 / 最多 ${goal.maxTurns} 轮]
++
++目标条件: ${goal.objective}
++
++评估者连续 ${threshold} 轮报告相同的阻塞原因${blockerKey ? `（${blockerKey}）` : ""}，你可能在同一处反复受阻。
++请换一种思路：
++- 回顾前几轮到底卡在哪，不要重复已经失败的同一操作；
++- 尝试从不同角度切入，或用不同工具去验证假设；
++- 如果确实无法突破，明确说明卡点和已尝试的路径，再决定是否收尾。
++（这只是提示，不会强制终止；达最大轮次或预算耗尽时会自动停止，用户也可随时介入。）
++</system-reminder>`;
++}
+diff --git a/src/query/hypothesis-ledger.ts b/src/query/hypothesis-ledger.ts
+index 4235908..aba4382 100644
+--- a/src/query/hypothesis-ledger.ts
++++ b/src/query/hypothesis-ledger.ts
+@@ -94,23 +94,27 @@ const STOPWORDS = new Set([
+ 
+ /**
+  * 从 falsifier 文本提取关键线索词(机制2 的匹配基础)。
+- * 朴素策略:抽取中文 2+ 连续字片段 + 英文/数字单词(长度≥3),去停用词与纯数字。
+- * 目标是召回潜在矛盾(宁可多触发让模型裁决,也不漏掉),不是精确 NLP。
++ *
++ * 2026-07-07 约束型误伤修复(Top 5):收紧 cue 提取,要求线索词更长更具体。
++ * 此前中文 2 字片段(如"崩溃/进程/存活")+ 英文 3 字 token 做朴素 `includes` 子串匹配,
++ * 高频通用词几乎必然命中任意后续工具输出,且 detectContradictions 不判断语义方向——
++ * 证据其实在**支持**假设也会被当成"矛盾"触发中断。要求更长的 cue 大幅降低这种误命中:
++ *   - 中文:只取整段(≥4 连续汉字),不再加 2-3 字短片段、不再加 4 字前缀;
++ *   - 英文/数字 token:长度≥5(过滤掉 err/pid/cpu 等极易撞车的短词)。
++ * 仍是粗召回而非精确 NLP,但把"高频短词一碰就中"的最大误伤面收掉。
+  */
+ export function extractCues(falsifier: string): string[] {
+   if (!falsifier) return [];
+   const cues = new Set<string>();
+-  // 英文/数字 token
+-  for (const m of falsifier.toLowerCase().matchAll(/[a-z_][a-z0-9_]{2,}/g)) {
++  // 英文/数字 token(长度≥5,过滤极短易撞车词)
++  for (const m of falsifier.toLowerCase().matchAll(/[a-z_][a-z0-9_]{4,}/g)) {
+     const w = m[0];
+     if (!STOPWORDS.has(w)) cues.add(w);
+   }
+-  // 中文 2-6 字片段(滑窗,粗召回)
++  // 中文片段:只取≥4 连续汉字的整段(短通用词误命中率过高,不再纳入)
+   for (const seg of falsifier.split(/[^一-龥]+/)) {
+-    if (seg.length < 2) continue;
+-    // 取整段 + 前 4 字,兼顾长短匹配
++    if (seg.length < 4) continue;
+     if (!STOPWORDS.has(seg)) cues.add(seg);
+-    if (seg.length > 4) cues.add(seg.slice(0, 4));
+   }
+   return [...cues];
+ }
+@@ -262,15 +266,16 @@ export function buildContradictionReminder(hits: ContradictionHit[]): string {
+       `  刚出现的证据命中了它的关键线索「${h.matchedCue}」:${h.evidenceSnippet}`,
+   );
+   return `<system-reminder>
+-⚠️ 矛盾中断(请勿向用户提及本提醒):新证据可能与你之前登记的假设相矛盾。
++提示(请勿向用户提及本提醒):以下新证据的文本命中了你之前登记假设的证伪条件线索,
++可能与假设相关,也可能只是词面撞车——请你自己判断。
+ 
+ ${lines.join("\n")}
+ 
+-这是抗沉没成本的关键时刻。请**立即**用 hypothesis_challenge 对上述每条假设显式裁决:
+-- 若证据确实推翻了假设 → verdict=refute(这是有价值的纠偏,不是失败);
+-- 若证据不足以定论 → verdict=keep_open;
+-- 若你判断证据其实不构成矛盾 → 也要 verdict=confirm 或 keep_open 并说明理由。
+-不要忽略这条矛盾、继续按原结论推进。先裁决,再往下走。
++如果你判断证据确实与某条假设相关,可用 hypothesis_challenge 更新其状态:
++- 证据推翻了假设 → verdict=refute(这是有价值的纠偏,不是失败);
++- 证据不足以定论 → verdict=keep_open;
++- 证据其实支持假设或只是词面撞车、不构成矛盾 → 可忽略本提醒,或按需 confirm/keep_open。
++本提醒仅供参考,不要求你中断当前工作;若无关可直接继续。
+ </system-reminder>`;
+ }
+ 
+diff --git a/src/query/loop.ts b/src/query/loop.ts
+index 14c02ba..e8c0e24 100644
+--- a/src/query/loop.ts
++++ b/src/query/loop.ts
+@@ -56,6 +56,7 @@ import {
+   buildOutputStallMessage,
+   MAX_OUTPUT_STALL_INTERVENTIONS,
+   OUTPUT_STALL_WINDOW,
++  isOutputStallDetectionEnabled,
+ } from "./output-stall.ts";
+ import { runCompactPipeline } from "./compact/index.ts";
+ import {
+@@ -87,6 +88,7 @@ import {
+   pushThinkingLen,
+   buildThinkingDivergenceMessage,
+   MAX_THINKING_DIVERGENCE_INTERVENTIONS,
++  isThinkingDivergenceDetectionEnabled,
+ } from "./thinking-divergence.ts";
+ import { injectReminders } from "./reminder-inject.ts";
+ import { buildContextPressureReminder } from "./context-pressure.ts";
+@@ -1375,7 +1377,9 @@ export async function* queryLoop(
+     // 最早信号）。命中则置 pending 标记，下一轮循环开头经 reminderParts 注入收敛提示
+     //（不在此直接插消息，避免破坏 assistant/tool_result 配对——同 pendingContradictions）。
+     // 真因⓪修好后此路径应极少触发，留作回归指标。
+-    {
++    // 2026-07-07：整段受 isThinkingDivergenceDetectionEnabled() gate 保护，默认关闭（对齐 CC）。
++    // 此前这段绕过 SID_ENABLE_LOOP_DETECTION 全局 gate，用户关不掉；现纳入统一治理。
++    if (isThinkingDivergenceDetectionEnabled()) {
+       const thinkingLen = measureThinkingLen(response.content as any);
+       state.thinkingLenHistory = pushThinkingLen(state.thinkingLenHistory, thinkingLen);
+       const interventions = state.thinkingDivergenceInterventions ?? 0;
+@@ -1405,7 +1409,9 @@ export async function* queryLoop(
+     // 命中则置 pending 标记，下一轮循环开头经 reminderParts 注入软提醒（同 pendingThinkingDivergenceReminder
+     // 机制，不在此直接插消息，避免破坏 assistant/tool_result 配对）。只作提醒，不占用
+     // LoopDetector 恢复计数、不会 terminate——这是"可能卡住"的软信号，不是判定循环。
+-    {
++    // 2026-07-07：整段受 isOutputStallDetectionEnabled() gate 保护，默认关闭（对齐 CC）。
++    // 此前这段绕过 SID_ENABLE_LOOP_DETECTION 全局 gate，用户关不掉；现纳入统一治理。
++    if (isOutputStallDetectionEnabled()) {
+       const toolUseCount = response.content.filter((b) => b.type === "tool_use").length;
+       const outputVolume = measureTurnOutputVolume(responseText, toolUseCount);
+       state.outputVolumeHistory = pushOutputVolume(state.outputVolumeHistory, outputVolume);
+@@ -1985,7 +1991,34 @@ export async function* queryLoop(
+       diminishingDetector.record(response.usage.outputTokens);
+ 
+       if (diminishingDetector.shouldStop()) {
+-        log.warn("QUERY_LOOP", `max_tokens 续写递减收益检测触发（已续写 ${diminishingDetector.count} 次），停止续写`);
++        // Top 3（2026-07-07 约束型误伤修复）：递减收益命中不再直接 `return` 终止整轮——
++        // 那会在模型"没说完"时静默掐断，且与"分段小步写大文件"的续写引导自相矛盾。
++        // 改为：第一次命中 → 停止自动续写，注入一次"让手提示"把决定权交还模型（它可以
++        // 收尾、换分段策略、或调工具继续），continue 让模型自己走下一轮；仅当让手后仍
++        // 撞 max_tokens 且再次命中递减收益时，才真正终止（避免无限续写烧 token）。
++        if (!state.diminishingReturnsHandoffDone) {
++          state.diminishingReturnsHandoffDone = true;
++          diminishingDetector.reset(); // 让手后重新计数，给模型一个干净的续写窗口
++          log.warn("QUERY_LOOP", `max_tokens 续写递减收益命中（已续写 ${diminishingDetector.count} 次），停止自动续写并让手给模型自行决定`);
++          yield { kind: "system", level: "info", text: `连续续写产出递减，已停止自动续写，交由模型决定下一步` };
++          const handoffNotice =
++            `<system-reminder>\n` +
++            `连续自动续写多次后每次产出都很少，已停止自动续写。请你自己决定下一步：\n` +
++            `1. 如果内容已基本完成，直接收尾并说明结论，不要为了"继续"而继续。\n` +
++            `2. 如果确实还有大量内容要写，改用分段策略：单次工具调用（如 write 的 content）` +
++            `不要超过输出上限，先写一部分落盘，再用 edit / bash 追加剩余部分。\n` +
++            `3. 如果卡在某处，明确说出卡点，或改调其他工具去推进。\n` +
++            `请勿向用户提及本提醒。\n` +
++            `</system-reminder>`;
++          ctxMgr.addMessage({ role: "user", content: [{ type: "text", text: handoffNotice }] });
++          try {
++            deps.sessionStore?.appendMessage({ role: "user", content: [{ type: "text", text: handoffNotice }] });
++          } catch { /* 持久化失败不阻断让手 */ }
++          setTransition(state, { type: "max_tokens_continuation" }, deps, sessionState.sessionId);
++          continue;
++        }
++        // 让手后仍收敛不了 → 终止，避免无限续写
++        log.warn("QUERY_LOOP", `max_tokens 续写递减收益二次命中（让手后仍未收敛，已续写 ${diminishingDetector.count} 次），停止续写`);
+         yield { kind: "system", level: "info", text: `输出续写已达上限（${diminishingDetector.count} 次），自动停止` };
+         yield { kind: "done", turns: state.turnCount };
+         return;
+diff --git a/src/query/output-stall.ts b/src/query/output-stall.ts
+index d00928f..cfa888e 100644
+--- a/src/query/output-stall.ts
++++ b/src/query/output-stall.ts
+@@ -31,8 +31,36 @@ export const OUTPUT_STALL_VOLUME_THRESHOLD = 60;
+ /** 熔断最多介入次数（避免每轮刷屏；超过说明模型确实卡死，交由其他兜底处理） */
+ export const MAX_OUTPUT_STALL_INTERVENTIONS = 2;
+ 
+-/** 每次工具调用为"产出量"贡献的固定权重（工具调用本身即是实质性动作，权重明显高于纯文本字符）。 */
+-const TOOL_USE_WEIGHT = 40;
++/**
++ * 每次工具调用为"产出量"贡献的固定权重。
++ *
++ * 2026-07-07 约束型误伤修复（Top 1）：权重从 40 提到 60，使**任意一次工具调用**
++ * （60 ≥ OUTPUT_STALL_VOLUME_THRESHOLD）都不再低于阈值。此前 40 < 60，导致"单工具、
++ * 无文本"的正常串行探索（逐个 read 文件、逐步单点 edit）连续 5 轮被误判"停滞"——
++ * 而这正是日常最高频的合法工作流。提权后，只有**连续多轮既没什么文本、也完全没有
++ * 工具调用**（纯空转 / 极短闲聊）才会持续低于阈值，与注释自述的语义对齐。
++ */
++const TOOL_USE_WEIGHT = 60;
++
++/**
++ * 产出停滞检测是否启用（默认关闭，对齐 Claude Code——CC 无此机制）。
++ *
++ * 为什么默认关闭 + 独立 env 门控（2026-07-07 决策，约束型误伤排查清单发现一）：
++ * 产出停滞是启发式"纠偏"类约束，拦的是"模型可能走的弯路"而非"不可逆危害"。随模型
++ * 能力提升，这类启发式正从"保护"退化成"负担"。更关键的是：此前它是 loop.ts 里独立的
++ * state 字段逻辑，**绕过了 `SID_ENABLE_LOOP_DETECTION` 全局 gate**——用户以为关掉循环
++ * 检测就关掉了所有启发式纠偏，实际它仍每轮在跑。现纳入独立、可逆的 env 开关，与
++ * 循环检测样板一致：代码不删、仅默认关，需要时（如接入行为不稳定的弱模型）显式开启。
++ *
++ * 复用 SID_ENABLE_LOOP_DETECTION 作为总开关的一部分：开启循环检测时一并开启产出停滞
++ * 检测（二者同属"防跑偏"启发式）；也可用 SID_ENABLE_OUTPUT_STALL=1 单独开启。
++ */
++export function isOutputStallDetectionEnabled(): boolean {
++  return (
++    process.env.SID_ENABLE_OUTPUT_STALL === "1" ||
++    process.env.SID_ENABLE_LOOP_DETECTION === "1"
++  );
++}
+ 
+ /**
+  * 计算本轮的产出量：assistant 文本长度（trim 后）+ 工具调用数 × 固定权重。
+diff --git a/src/query/reactive-compact.ts b/src/query/reactive-compact.ts
+index 1ac543f..b0e4163 100644
+--- a/src/query/reactive-compact.ts
++++ b/src/query/reactive-compact.ts
+@@ -173,10 +173,23 @@ export interface DiminishingReturnsOptions {
+ export class DiminishingReturnsDetector {
+   /** 每次续写的输出 token 数 */
+   private outputTokenHistory: number[] = [];
+-  /** 最大续写次数（默认） */
+-  static readonly MAX_RECOVERY_COUNT = 3;
+-  /** 递减收益阈值，token 数（默认） */
+-  static readonly DIMINISHING_THRESHOLD = 500;
++  /**
++   * 最大续写次数（默认）。
++   *
++   * 2026-07-07 约束型误伤修复（Top 3）：从 3 放宽到 8。此前 3 次上限与"分段小步写大文件"
++   * 的续写提示词自相矛盾——续写提示恰恰引导模型"单次调用别超上限、分多段写"，而 3 次
++   * 上限又把"连续几段小步"判为递减收益掐断，正常分段写大文件高概率被误终止。放宽到 8
++   * 给分段写入留足空间；真正的失控由 maxTurns/costLimit 兜底，不靠这个次数。
++   */
++  static readonly MAX_RECOVERY_COUNT = 8;
++  /**
++   * 递减收益阈值，token 数（默认）。
++   *
++   * 2026-07-07 约束型误伤修复（Top 3）：从 500 收紧到 150。分段写入时每段本就不大
++   * （几百 token 很正常），500 阈值下"连续两段各 <500"极易命中，把正常分段误判为
++   * "重复/填充"。降到 150 只在模型真的在吐极少量内容（几乎没进展）时才判递减收益。
++   */
++  static readonly DIMINISHING_THRESHOLD = 150;
+ 
+   private readonly maxRecoveryCount: number;
+   private readonly diminishingThreshold: number;
+diff --git a/src/query/thinking-divergence.ts b/src/query/thinking-divergence.ts
+index 7be12f5..b04872a 100644
+--- a/src/query/thinking-divergence.ts
++++ b/src/query/thinking-divergence.ts
+@@ -25,6 +25,26 @@ export const THINKING_DIVERGENCE_LEN = 20_000;
+ /** 熔断最多介入次数（避免每轮刷屏烧 token；超过说明模型确实卡死，交由其他兜底处理） */
+ export const MAX_THINKING_DIVERGENCE_INTERVENTIONS = 2;
+ 
++/**
++ * 思考发散熔断是否启用（默认关闭，对齐 Claude Code——CC 无思考量监控/发散熔断）。
++ *
++ * 为什么默认关闭 + 独立 env 门控（2026-07-07 决策，约束型误伤排查清单 Top 4 + 发现一）：
++ * 本熔断器早已自认从"治本"降级为"早期哨兵 + 回归指标"（真因⓪ reasoning_content 回传修好
++ * 后应极少触发）。它拦的是"模型可能走的弯路"（深度推理任务思考量天然递增），属启发式
++ * 纠偏而非不可逆危害；措辞"陷入分析瘫痪/立即改变策略"是替模型下判断，随模型能力提升
++ * 误伤面扩大。更关键：此前它是 loop.ts 里独立 state 字段逻辑，**绕过了
++ * `SID_ENABLE_LOOP_DETECTION` 全局 gate**——用户以为关掉循环检测即关掉所有启发式纠偏，
++ * 实际它仍每轮在跑。现纳入独立、可逆 env 开关，与循环检测/产出停滞样板一致：代码不删、
++ * 仅默认关；作为回归指标需要观察时，用 SID_ENABLE_THINKING_DIVERGENCE=1 或随
++ * SID_ENABLE_LOOP_DETECTION=1 一并开启。
++ */
++export function isThinkingDivergenceDetectionEnabled(): boolean {
++  return (
++    process.env.SID_ENABLE_THINKING_DIVERGENCE === "1" ||
++    process.env.SID_ENABLE_LOOP_DETECTION === "1"
++  );
++}
++
+ /**
+  * 计算一次响应里所有 thinking 块的总字符数。
+  * 思考块已由 stream-processor 原地转型为 { type:"thinking", thinking }。
+diff --git a/src/query/types.ts b/src/query/types.ts
+index 1b6bf4d..ba6583f 100644
+--- a/src/query/types.ts
++++ b/src/query/types.ts
+@@ -105,6 +105,13 @@ export interface LoopState {
+   maxOutputTokensRecoveryCount: number;
+   /** max_tokens 上限提升覆盖值（首次截断时提升到模型硬上限） */
+   maxOutputTokensOverride?: number;
++  /**
++   * Top 3（2026-07-07 约束型误伤修复）：max_tokens 续写递减收益检测命中后，是否已经做过
++   * 一次"优雅让手"（停止自动续写、注入让手提示、把决定权交还模型）。one-shot 标志：
++   * 第一次命中不再硬 `return` 终止整轮，而是让手让模型自己决定继续/收尾；若让手后模型
++   * 仍撞 max_tokens 且再次命中递减收益，则说明确实收敛不了，此时才终止，避免无限续写。
++   */
++  diminishingReturnsHandoffDone?: boolean;
+   /** 是否已尝试过响应式压缩。
+    *
+    *  P0-2（对齐 CC 死亡螺旋防御）：这是一个 one-shot 标志位，只允许在触发响应式压缩的两处
+diff --git a/src/tool/edit.ts b/src/tool/edit.ts
+index 7b1ea6d..f2bcfad 100644
+--- a/src/tool/edit.ts
++++ b/src/tool/edit.ts
+@@ -8,7 +8,7 @@
+ import type { LegacyTool as Tool, LegacyToolResult as ToolResult, PermissionResult, ToolUseContext } from "./types.ts";
+ import type { FileReadTracker } from "./file-read-tracker.ts";
+ import { getLogger } from "../debug/logger.ts";
+-import { detectOmissionPlaceholders, isDocumentFile } from "./omission-detector.ts";
++import { detectOmissionPlaceholders, isDocumentFile, isPythonFile } from "./omission-detector.ts";
+ import { coerceSemanticBoolean } from "../utils/semantic-boolean.ts";
+ import { mkdirSync, existsSync } from "fs";
+ import { dirname, basename } from "path";
+@@ -463,7 +463,7 @@ export class EditTool implements Tool {
+     // 省略占位符检测（文档文件完全不检测；代码文件仅对 > 10 行的 new_string 检测）
+     const isDoc = isDocumentFile(filePath);
+     if (!isDoc && newString.split("\n").length > 10) {
+-      const omissions = detectOmissionPlaceholders(newString, false);
++      const omissions = detectOmissionPlaceholders(newString, false, isPythonFile(filePath));
+       if (omissions.length > 0) {
+         const details = omissions.map(m => `  行 ${m.line}: ${m.text}`).join("\n");
+         return {
+diff --git a/src/tool/omission-detector.ts b/src/tool/omission-detector.ts
+index 6d01457..b67d948 100644
+--- a/src/tool/omission-detector.ts
++++ b/src/tool/omission-detector.ts
+@@ -18,6 +18,14 @@ const DOCUMENT_EXTENSIONS = new Set([
+   ".org",
+ ]);
+ 
++// Python 源码文件扩展名（不区分大小写）。
++// Python 的 `...`（Ellipsis）是合法字面量：抽象方法体、`.pyi` stub、占位实现、
++// numpy 切片、重载声明都会独占一行写 `...`。对这类文件放行"独立省略号"规则，
++// 否则合法 Python 代码会被误判为"偷懒省略"而拒写（见约束型误伤排查清单 Top 2）。
++const PYTHON_EXTENSIONS = new Set([
++  ".py", ".pyi", ".pyw",
++]);
++
+ /**
+  * 判断文件是否为文档类型（基于扩展名）
+  */
+@@ -26,8 +34,26 @@ export function isDocumentFile(filePath: string): boolean {
+   return DOCUMENT_EXTENSIONS.has(ext);
+ }
+ 
+-/** 省略占位符模式（docSafe: true 表示文档文件跳过检测） */
+-const OMISSION_PATTERNS: Array<{ pattern: RegExp; name: string; docSafe: boolean }> = [
++/**
++ * 判断文件是否为 Python 源码（基于扩展名）。
++ * 用于对 Python 的合法 `...` Ellipsis 字面量放行"独立省略号"检测。
++ */
++export function isPythonFile(filePath: string): boolean {
++  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
++  return PYTHON_EXTENSIONS.has(ext);
++}
++
++/**
++ * 省略占位符模式。
++ * - docSafe: true 表示文档文件（.md 等）跳过此规则。
++ * - pySafe: true 表示 Python 源码文件跳过此规则（Python `...` 是合法 Ellipsis 字面量）。
++ *
++ * 注意（2026-07-07 约束型误伤修复）：原 `TODO placeholder` 规则已移除。
++ * `// TODO: implement X` 是完全合法的注释，不等同于"用省略标记代替已有代码"这种偷懒省略。
++ * 把合法 TODO 当成省略占位符拒写属误伤（CLAUDE.md 禁的是省略标记，不是 TODO 注释）。
++ * 真正的"偷懒省略"由 `... rest of` / `existing code` / 独立省略号等规则覆盖，无需 TODO 规则。
++ */
++const OMISSION_PATTERNS: Array<{ pattern: RegExp; name: string; docSafe: boolean; pySafe?: boolean }> = [
+   // JavaScript/TypeScript 注释
+   { pattern: /\/\/\s*\.{3,}\s*(rest|remaining|existing|previous|other|more)/i,
+     name: "JS comment ellipsis", docSafe: false },
+@@ -35,8 +61,6 @@ const OMISSION_PATTERNS: Array<{ pattern: RegExp; name: string; docSafe: boolean
+     name: "JS block comment ellipsis", docSafe: true },
+   { pattern: /\/\/\s*(existing|previous|rest of|remaining)\s+(code|implementation|logic|methods?|functions?)/i,
+     name: "JS existing code", docSafe: false },
+-  { pattern: /\/\/\s*TODO:\s*(implement|add|complete)/i,
+-    name: "TODO placeholder", docSafe: false },
+ 
+   // Python/Shell 注释
+   { pattern: /#\s*\.{3,}\s*(rest|remaining|existing|previous|other|more)/i,
+@@ -52,7 +76,8 @@ const OMISSION_PATTERNS: Array<{ pattern: RegExp; name: string; docSafe: boolean
+ 
+   // 独立省略号（整行只有省略号或空白）
+   // 修复：去掉 m 多行标志，外层循环已逐行处理，m 标志导致匹配跨行污染和错误行号报告
+-  { pattern: /^\s*\.{3,}\s*$/, name: "Standalone ellipsis", docSafe: true },
++  // pySafe：Python 源码放行——`...` 是合法 Ellipsis 字面量（stub/抽象方法/占位实现）。
++  { pattern: /^\s*\.{3,}\s*$/, name: "Standalone ellipsis", docSafe: true, pySafe: true },
+ 
+   // 常见占位符文本
+   { pattern: /\[\.{3,}\]/i, name: "Bracketed ellipsis", docSafe: true },
+@@ -63,10 +88,12 @@ const OMISSION_PATTERNS: Array<{ pattern: RegExp; name: string; docSafe: boolean
+  * 检测内容中的省略占位符
+  * @param content 要检测的内容
+  * @param isDoc 是否为文档文件，文档文件会跳过部分易误伤规则（默认 false）
++ * @param isPython 是否为 Python 源码文件，会跳过对 Python 合法的 `...` 独立省略号规则（默认 false）
+  */
+ export function detectOmissionPlaceholders(
+   content: string,
+   isDoc = false,
++  isPython = false,
+ ): OmissionMatch[] {
+   const matches: OmissionMatch[] = [];
+   const lines = content.split("\n");
+@@ -75,8 +102,9 @@ export function detectOmissionPlaceholders(
+     const line = lines[i];
+     const lineNum = i + 1;
+ 
+-    for (const { pattern, name, docSafe } of OMISSION_PATTERNS) {
++    for (const { pattern, name, docSafe, pySafe } of OMISSION_PATTERNS) {
+       if (isDoc && docSafe) continue;  // 文档文件跳过易误伤规则
++      if (isPython && pySafe) continue;  // Python 源码跳过合法 `...` Ellipsis 规则
+       if (pattern.test(line)) {
+         matches.push({
+           line: lineNum,
+@@ -95,7 +123,8 @@ export function detectOmissionPlaceholders(
+  * 检查内容是否包含省略占位符
+  * @param content 要检测的内容
+  * @param isDoc 是否为文档文件（默认 false）
++ * @param isPython 是否为 Python 源码文件（默认 false）
+  */
+-export function hasOmissionPlaceholders(content: string, isDoc = false): boolean {
+-  return detectOmissionPlaceholders(content, isDoc).length > 0;
++export function hasOmissionPlaceholders(content: string, isDoc = false, isPython = false): boolean {
++  return detectOmissionPlaceholders(content, isDoc, isPython).length > 0;
+ }
+diff --git a/src/tool/write.ts b/src/tool/write.ts
+index 1fd1a98..0672dca 100644
+--- a/src/tool/write.ts
++++ b/src/tool/write.ts
+@@ -7,7 +7,7 @@ import type { LegacyTool as Tool, LegacyToolResult as ToolResult, PermissionResu
+ import { dirname, basename } from "path";
+ import { mkdirSync, existsSync, statSync } from "fs";
+ import { getLogger } from "../debug/logger.ts";
+-import { detectOmissionPlaceholders, isDocumentFile } from "./omission-detector.ts";
++import { detectOmissionPlaceholders, isDocumentFile, isPythonFile } from "./omission-detector.ts";
+ import { detectTruncation } from "./truncation-detector.ts";
+ import { normalizeToolPath } from "./path-utils.ts";
+ import { buildStructuredPatch } from "./diff-output.ts";
+@@ -91,8 +91,8 @@ export class WriteTool implements Tool {
+       return { output: `路径无效: ${err.message}`, isError: true };
+     }
+ 
+-    // 省略占位符检测（文档文件跳过易误伤规则）
+-    const omissions = detectOmissionPlaceholders(params.content, isDocumentFile(filePath));
++    // 省略占位符检测（文档文件跳过易误伤规则；Python 源码放行合法 `...` Ellipsis）
++    const omissions = detectOmissionPlaceholders(params.content, isDocumentFile(filePath), isPythonFile(filePath));
+     if (omissions.length > 0) {
+       const details = omissions.map(m => `  行 ${m.line}: ${m.text}`).join("\n");
+       return {

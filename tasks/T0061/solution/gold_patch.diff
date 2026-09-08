@@ -1,0 +1,44 @@
+diff --git a/src/ui/components/LoadingIndicator.tsx b/src/ui/components/LoadingIndicator.tsx
+index 2b971d0..db8321d 100644
+--- a/src/ui/components/LoadingIndicator.tsx
++++ b/src/ui/components/LoadingIndicator.tsx
+@@ -27,6 +27,8 @@ interface LoadingIndicatorProps {
+   elapsedTime: number;
+   /** 当前加载短语 */
+   currentLoadingPhrase?: string | null;
++  /** 慢响应渐进提示（达阈值才出现）。暗色追加，不抢主文案。 */
++  slowHint?: string | null;
+   /** 工具名称（执行工具时显示） */
+   toolName?: string | null;
+   /** 本轮新增的输出 token 数（↑ 上行，= 会话累计 − 本轮起点）。0 或缺省时不显示 token 段。 */
+@@ -49,6 +51,7 @@ export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
+   streamingState,
+   elapsedTime,
+   currentLoadingPhrase,
++  slowHint,
+   toolName,
+   outputTokens = 0,
+   inline = false,
+@@ -107,6 +110,9 @@ export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
+   }
+ 
+   // inline / block 两种容器复用同一内容片段，避免渲染逻辑重复。
++  // 慢提示用 status.warning + dimColor 暗色追加，不抢主文案（遵守交互铁律 C 渐进衰减、
++  // D 反馈活而不吵——文字本身不动，达阈值才出现）。等待态不显示慢提示。
++  const showSlowHint = !!slowHint && !isWaiting;
+   const content = (
+     <>
+       <Text color={theme.ui.active}>{isWaiting ? "⠏" : spinner} </Text>
+@@ -119,6 +125,12 @@ export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
+           <Text color={theme.text.secondary}>{cancelAndTimer}</Text>
+         </>
+       )}
++      {showSlowHint && (
++        <>
++          <Text> </Text>
++          <Text color={theme.status.warning} dimColor>· {slowHint}</Text>
++        </>
++      )}
+     </>
+   );
+ 

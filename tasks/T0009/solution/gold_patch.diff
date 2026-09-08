@@ -1,0 +1,336 @@
+diff --git a/src/context/manager.ts b/src/context/manager.ts
+index bd990a2..24efff6 100644
+--- a/src/context/manager.ts
++++ b/src/context/manager.ts
+@@ -744,8 +744,13 @@ export class Manager {
+ 
+     // 深拷贝并清理（P1-3 + 9.3：占位符附带精准重读指引——含工具名 + input 摘要）
+     // 使用 replacementState 保证同一 tool_use_id 的占位文本跨调用字节级一致（prompt cache 稳定）
++    // ⚠️ 必须用 `...msg` 默认透传：手写 `{role, content}` 会丢弃 `_meta`，
++    // 导致 DeepSeek 要求原样回传的 `reasoning_content`、压缩边界 `compact_boundary`、
++    // TUI 隐藏标记 `origin` 在长会话（触发本清理分支）里静默消失。
++    // 重建消息对象时一律「默认透传、只覆盖要改的字段」，别再写字段清单——
++    // 清单跟不上 Message 类型演进就是下一次静默丢字段。
+     const result = cleaned.map((msg, msgIdx) => ({
+-      role: msg.role,
++      ...msg,
+       content: msg.content.map((block, blockIdx) => {
+         const key = `${msgIdx}:${blockIdx}`;
+         const meta = cleanMap.get(key);
+@@ -870,10 +875,12 @@ export class Manager {
+       });
+ 
+       if (hadContent) {
++        // `...msg._meta` 而非整体覆盖：`origin`（TUI 隐藏标记）、`compact_boundary`
++        // 等已有元数据必须留下，只叠加 gc_released。
+         this.messages[i] = {
+-          role: msg.role,
++          ...msg,
+           content: [{ type: "text", text: `[已释放] ${msg.role} 消息内容已被 GC 回收，详情见 compact_boundary` }],
+-          _meta: { gc_released: true },
++          _meta: { ...msg._meta, gc_released: true },
+         };
+         releasedCount++;
+       }
+diff --git a/src/context/tool-output-masking.ts b/src/context/tool-output-masking.ts
+index 33df22d..7b86314 100644
+--- a/src/context/tool-output-masking.ts
++++ b/src/context/tool-output-masking.ts
+@@ -110,8 +110,10 @@ export class ToolOutputMaskingService {
+     }
+ 
+     // 第二遍：执行遮罩
++    // ⚠️ 必须用 `...msg` 默认透传（同 ContextManager.getCleanedMessages）：
++    // 手写 `{role, content}` 会丢 `_meta`（reasoning_content / compact_boundary / origin）。
+     const masked: Message[] = messages.map((msg, msgIdx) => ({
+-      role: msg.role,
++      ...msg,
+       content: msg.content.map((block, blockIdx) => {
+         const candidate = candidateSet.get(`${msgIdx}:${blockIdx}`);
+         if (!candidate) return block;
+diff --git a/src/llm/openai-responses-request.ts b/src/llm/openai-responses-request.ts
+index 13b3541..0f09735 100644
+--- a/src/llm/openai-responses-request.ts
++++ b/src/llm/openai-responses-request.ts
+@@ -14,6 +14,7 @@
+  */
+ 
+ import type { SendParams, Message, ToolDefinition, ContentBlock } from "./types.ts";
++import { serializeToolResultContentForOpenAI } from "./openai-tool-result-content.ts";
+ 
+ /**
+  * OpenAI Responses API 请求体
+@@ -287,12 +288,14 @@ function expandMessage(message: Message): ResponsesInputItem[] {
+         break;
+       }
+       case "tool_result": {
+-        // 工具结果切分为独立 item
++        // 工具结果切分为独立 item。
++        // output 走统一序列化：is_error 前缀标注 + mediaBlocks 降级文本说明
++        // （此前只取 block.content，两者静默丢弃——审计第 6 条）。
+         flushText();
+         items.push({
+           type: "function_call_output",
+           call_id: block.tool_use_id,
+-          output: block.content,
++          output: serializeToolResultContentForOpenAI(block, "openai-responses"),
+         });
+         break;
+       }
+diff --git a/src/llm/openai-tool-result-content.ts b/src/llm/openai-tool-result-content.ts
+new file mode 100644
+index 0000000..ebd8d3d
+--- /dev/null
++++ b/src/llm/openai-tool-result-content.ts
+@@ -0,0 +1,65 @@
++/**
++ * OpenAI 兼容路径的 tool_result 内容序列化（单一事实源）
++ *
++ * 背景（审计第 6 条）：`ToolResultBlock` 有四个字段进上下文——`content` / `is_error` /
++ * `mediaBlocks` / `structuredPatch`。Anthropic 路径（`anthropic.ts` 的
++ * `serializeToolResultBlock`）把前三个都发出去了；OpenAI 兼容路径此前**只取 `content`**，
++ * `is_error` 与 `mediaBlocks` 无处安放，静默丢弃：
++ *
++ * - `is_error` 丢失（**任何工具报错 + OpenAI 兼容 provider 即必现**）：模型无法区分
++ *   "工具成功返回了这段文本" 与 "工具失败了，这段是错误信息"，可能把报错当有效结果继续推理。
++ * - `mediaBlocks` 丢失：模型完全看不到工具返回的图像，却看到 content 里说"已附上截图"。
++ *
++ * 为什么不像 Anthropic 那样拼多部件 content：OpenAI 规范明确写着
++ * 「For tool messages, only type `text` is supported」（openapi.yaml 的
++ * `ChatCompletionRequestToolMessageContentPart` 只 oneOf 到 text part），
++ * 且本项目 OpenAI provider 的 `capabilities().vision === false`。
++ * 因此图片无法真正回传，正确做法是**如实告知模型"有图但看不到"**，而不是假装附上、
++ * 也不是静默抹掉——后者会让模型对着"已附上截图"的文字空想。
++ *
++ * `structuredPatch` 刻意不回传（仅供 UI 渲染 diff，见 types.ts 注释），不在此处理。
++ */
++
++import type { ToolResultBlock } from "./types.ts";
++import { getLogger } from "../debug/logger.ts";
++
++/** 工具失败时给 content 加的前缀标记（OpenAI 协议无 is_error 原生字段，只能落到文本里） */
++export const OPENAI_TOOL_ERROR_PREFIX = "[ERROR] ";
++
++/**
++ * 把内部 tool_result 块序列化为 OpenAI 兼容路径的 tool message content 字符串。
++ *
++ * @param block 内部 tool_result 块
++ * @param providerName provider 名称，仅用于告警文案定位
++ * @returns 非空字符串（规范要求 tool message content 非空）
++ */
++export function serializeToolResultContentForOpenAI(
++  block: Pick<ToolResultBlock, "content" | "is_error" | "mediaBlocks" | "tool_use_id">,
++  providerName: string,
++): string {
++  // §2.1：规范要求 tool message content 为非空 string。工具返回空串
++  //（如 bash 无输出、grep 无匹配）时部分严格网关会判非法 → 400，兜底占位。
++  let content = block.content && block.content.length > 0 ? block.content : "(empty)";
++
++  // mediaBlocks：无法回传（协议只允许 text part + 本 provider vision=false），
++  // 但要在文本里如实交代，避免模型对着"已附上截图"空想。
++  if (block.mediaBlocks && block.mediaBlocks.length > 0) {
++    const kinds = block.mediaBlocks.map(mb => `${mb.kind}(${mb.mediaType})`).join(", ");
++    content +=
++      `\n[注意：本工具结果还包含 ${block.mediaBlocks.length} 个富媒体附件（${kinds}），` +
++      `但当前 provider 的工具消息不支持图片/文档回传，你看不到这些内容。` +
++      `若需要其中信息，请让用户改用支持视觉的模型，或改用能输出文本的方式获取。]`;
++    getLogger().warn(
++      "LLM:PROTOCOL",
++      `[${providerName}] tool_result（tool_use_id=${block.tool_use_id}）含 ${block.mediaBlocks.length} 个 ` +
++        `mediaBlocks，OpenAI 兼容路径无法回传（协议 tool message 仅支持 text part），已降级为文本说明。`,
++    );
++  }
++
++  // is_error：OpenAI 协议下 tool message 没有原生错误字段，用前缀标注而非静默抹掉。
++  if (block.is_error) {
++    content = OPENAI_TOOL_ERROR_PREFIX + content;
++  }
++
++  return content;
++}
+diff --git a/src/llm/openai.ts b/src/llm/openai.ts
+index dce6a11..819deaa 100644
+--- a/src/llm/openai.ts
++++ b/src/llm/openai.ts
+@@ -28,6 +28,7 @@ import { splitSystemByDynamicBoundary } from "../api/cache-strategy.ts";
+ import { updateRateLimitStatus } from "../api/rate-limit.ts";
+ import { estimateTextTokens } from "../context/token.ts";
+ import { sanitizeStrings } from "./sanitize-unicode.ts";
++import { serializeToolResultContentForOpenAI } from "./openai-tool-result-content.ts";
+ import { SseChunkDumper, currentSseDumpContext } from "./sse-chunk-dumper.ts";
+ import { resolveHeaderTimeoutMs, resolveProviderStreamTimeouts } from "../config/network-profile.ts";
+ import { buildResponsesRequest } from "./openai-responses-request.ts";
+@@ -443,6 +444,16 @@ export class OpenAIProvider implements Provider {
+             textParts.push(block.text);
+           } else if (block.type === "thinking") {
+             if (block.thinking) thinkingParts.push(block.thinking);
++          } else if (block.type === "redacted_thinking") {
++            // Anthropic 安全审查脱敏后的思考块。OpenAI 协议**无对应字段**，
++            // `data` 是不可读的密文，塞进 content 只会污染上下文 → 只能丢弃。
++            // 但必须**可观测**：此前它落进"未识别"静默消失，推理链断裂无迹可寻。
++            // 典型来路：Anthropic 侧历史 + 跨 provider fallback。
++            getLogger().warn(
++              "LLM:PROTOCOL",
++              `[${this.name()}] convertMessages 丢弃 redacted_thinking 块（OpenAI 协议无对应字段，` +
++                `data 为密文无法降级为文本）。跨 provider 回放 Anthropic 历史时会出现，推理链在此断裂。`,
++            );
+           } else if (block.type === "tool_use") {
+             // §2.3 fail-fast：空 id 的 tool_use 无法与后续 tool message 配对，
+             // 原样转发必然触发 OpenAI 400。在转换层提前抛错，比让服务端 400 更易定位。
+@@ -461,6 +472,14 @@ export class OpenAIProvider implements Provider {
+                 arguments: JSON.stringify(block.input ?? {}),
+               },
+             });
++          } else {
++            // default 兜底告警：让"丢弃"可观测。手写分派链的通用病是跟不上 ContentBlock
++            // 类型演进——新增块类型若忘了在此加分支，此前会静默消失，只能靠事后审计发现。
++            getLogger().warn(
++              "LLM:PROTOCOL",
++              `[${this.name()}] convertMessages 遇到未识别的 assistant content block（` +
++                `type=${(block as { type?: string }).type}），已丢弃。请在此补齐分派分支。`,
++            );
+           }
+         }
+ 
+@@ -533,7 +552,7 @@ export class OpenAIProvider implements Provider {
+               tool_call_id: block.tool_use_id,
+               // §2.1：规范要求 tool message content 为非空 string。工具返回空串
+               //（如 bash 无输出、grep 无匹配）时部分严格网关会判非法 → 400，兜底占位。
+-              content: block.content && block.content.length > 0 ? block.content : "(empty)",
++              content: serializeToolResultContentForOpenAI(block, this.name()),
+             });
+           }
+         }
+diff --git a/src/ui/history-adapter.ts b/src/ui/history-adapter.ts
+index 563b1e7..35a5c63 100644
+--- a/src/ui/history-adapter.ts
++++ b/src/ui/history-adapter.ts
+@@ -243,6 +243,20 @@ function hasInternalOrigin(msg: Message): boolean {
+   return hasInternalOriginImpl(msg);
+ }
+ 
++/**
++ * 消息里是否含"必须渲染的工具块"——即 tool_use / tool_result。
++ *
++ * 这类块**不能随整条消息一起被隐藏/分流吃掉**：`tool_result` 丢了对应的 `tool_use`
++ * 就永远配不上结果，滞留 pendingToolCalls，最终被兜底逻辑输出成 executing 态挂在
++ * 历史**末尾**——表现为任务已完成、屏幕最后却挂着一行"执行中"的工具气泡。
++ * 这是 task-notification / command-expansion / internal-origin 三处共享的隐蔽性来源：
++ * 单一内容块的消息永远不暴露，只有角色交替合并把内部消息追加到含 tool_result 的
++ * user 消息上时才现形。
++ */
++function hasToolBlocks(msg: Message): boolean {
++  return msg.content.some(b => b.type === "tool_use" || b.type === "tool_result");
++}
++
+ /**
+  * 整条消息是否应从展示中隐藏(占位 / 续接标记 / 纯内部文本消息)。
+  * 仅当消息**只含**内部文本(无真实用户文本、无 tool_result)时才整条隐藏;
+@@ -254,7 +268,11 @@ export function isHiddenFromDisplay(msg: Message): boolean {
+   if (isResumeMarkerMessage(msg)) return true;
+   // 压缩 / 恢复注入的摘要+ack 消息对:按 _meta.origin 标记整条隐藏
+   //(含 assistant ack——前缀匹配无法覆盖 assistant 侧,故用来源标记)。
+-  if (hasInternalOrigin(msg)) return true;
++  //
++  // 但**含工具块时不整条隐藏**：否则同消息内的 tool_result 被一并丢弃(见 hasToolBlocks
++  // 注释)。这条早退此前不看内容、只看 _meta.origin,违反了本函数自己的注释;
++  // 现按注释办——混合内容交给调用方剥离文本块后继续渲染工具块。
++  if (hasInternalOrigin(msg)) return !hasToolBlocks(msg);
+   // 仅含内部文本块(无其它类型 block)的消息整条隐藏
+   return msg.content.length > 0
+     && msg.content.every(b => b.type === "text" && isInternalOnlyText(b.text));
+@@ -276,6 +294,42 @@ function stripInternalTextBlocks(msg: Message): Message {
+   };
+ }
+ 
++/**
++ * 「分流但保留兄弟块」的统一出口。
++ *
++ * 三条整条分流/隐藏路径（task-notification 专用折叠项 / command-expansion 命令项 /
++ * internal-origin 整条隐藏）都必须走这里，而不是各自 `continue`：
++ * 它们吃掉的只是**文本块**（通知 XML / 展开后的提示词 / 内部 ack），同消息内的
++ * `tool_use` / `tool_result` 属于兄弟块，要原样交回正常渲染路径。
++ *
++ * 逐处打补丁的做法已经失败过一次——task-notification 修好后另两处仍在丢块，
++ * 所以这里收口成单一函数：新增任何「整条分流」路径都调它，不要再写第四份 `continue`。
++ *
++ * @param blocks 分流后剩余的 block（调用方已剔除自己消费掉的文本块）
++ * @returns 是否产出了历史项（false = 无剩余内容，调用方直接 continue）
++ */
++function pushRemainingBlocks(
++  rawMsg: Message,
++  blocks: import("../llm/types.ts").ContentBlock[],
++  items: HistoryItemWithoutId[],
++  toolNameMap: Map<string, string>,
++  pendingToolCalls: Map<string, IndividualToolCallDisplay>,
++): boolean {
++  if (blocks.length === 0) return false;
++  const msg = stripInternalTextBlocks({ ...rawMsg, content: blocks });
++  if (msg.content.length === 0) return false;
++  // 与主路径一致：先补 tool_use 名称映射，再转换（否则 tool_result 侧取不到工具名）
++  for (const block of msg.content) {
++    if (block.type === "tool_use") toolNameMap.set(block.id, block.name);
++  }
++  if (msg.role === "assistant") {
++    items.push(...convertAssistantMessage(msg, pendingToolCalls));
++  } else {
++    items.push(...convertUserMessage(msg, toolNameMap, pendingToolCalls));
++  }
++  return true;
++}
++
+ /**
+  * 从消息数组中构建 tool_use_id → toolName 映射
+  * 用于增量同步时传入完整的映射关系
+@@ -324,17 +378,9 @@ export function messagesToHistoryItemsWithMap(
+     const notifResult = tryParseTaskNotifications(rawMsg);
+     if (notifResult) {
+       items.push(...notifResult.notifications);
++      // 剩余 blocks（tool_result 等）继续走正常渲染路径（与其余两条分流路径共用出口）
+       if (notifResult.remaining) {
+-        // 剩余 blocks（tool_result 等）继续走正常渲染路径
+-        const remainingMsg = { ...rawMsg, content: notifResult.remaining };
+-        const strippedRemaining = stripInternalTextBlocks(remainingMsg);
+-        if (strippedRemaining.content.length > 0) {
+-          if (strippedRemaining.role === "assistant") {
+-            items.push(...convertAssistantMessage(strippedRemaining, pendingToolCalls));
+-          } else {
+-            items.push(...convertUserMessage(strippedRemaining, toolNameMap, pendingToolCalls));
+-          }
+-        }
++        pushRemainingBlocks(rawMsg, notifResult.remaining, items, toolNameMap, pendingToolCalls);
+       }
+       continue;
+     }
+@@ -350,6 +396,31 @@ export function messagesToHistoryItemsWithMap(
+       if (displayCommand) {
+         items.push({ type: "command", input: displayCommand, output: null });
+       }
++      // 只吃掉展开后的**提示词文本**，其余 block（tool_result 等）交回正常渲染路径。
++      // 此前是无条件 continue：角色交替合并把展开消息追加进含 tool_result 的 user 消息时，
++      // 那条 tool_result 被一并丢弃 → tool_use 永久 pending → 末尾挂"执行中"气泡。
++      pushRemainingBlocks(
++        rawMsg,
++        rawMsg.content.filter(b => b.type !== "text"),
++        items,
++        toolNameMap,
++        pendingToolCalls,
++      );
++      continue;
++    }
++
++    // 内部来源消息（压缩摘要 / ack 等）含工具块时不再整条隐藏（见 isHiddenFromDisplay），
++    // 但它的**文本**仍是"仅供 LLM"的，必须在这里吃掉——这类 ack 文案（如「了解，继续。」）
++    // 没有 `<system-reminder>` 之类前缀，stripInternalTextBlocks 认不出来，
++    // 只能按 _meta.origin 判定。
++    if (hasInternalOrigin(rawMsg)) {
++      pushRemainingBlocks(
++        rawMsg,
++        rawMsg.content.filter(b => b.type !== "text"),
++        items,
++        toolNameMap,
++        pendingToolCalls,
++      );
+       continue;
+     }
+ 

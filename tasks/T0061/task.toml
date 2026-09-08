@@ -1,0 +1,18 @@
+schema_version = "1.4"
+
+[metadata]
+task_id = "T0061"
+source_unit_id = "dea97910-2179-4fe0-b6fa-9dfc987c96a8#01"
+repo = "person/sid-code"
+base_commit = "898a2a5a469f6b77ac74df5413132d331212143f"
+difficulty_band = "M"
+category = "bug_fix"
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+build_timeout_sec = 1800.0

@@ -1,0 +1,1658 @@
+diff --git a/src/agent/agent-definition.ts b/src/agent/agent-definition.ts
+index 8a0974a..93bfc88 100644
+--- a/src/agent/agent-definition.ts
++++ b/src/agent/agent-definition.ts
+@@ -26,6 +26,36 @@ export interface AgentDefinition {
+   disallowedTools?: string[];
+   /** 模型覆盖（undefined = 继承主模型） */
+   model?: string;
++  /**
++   * 语义模型档位（P0-1，对齐 CC 给 Explore pin haiku 的成本设计）。
++   * "cheap" 高频只读代理（explore/plan/summarize）省 token；"strong" 需最强模型；"default" 跟主模型。
++   * 不硬编码模型名（铁律 feedback-no-hardcoded-model-tier-rules）——档位→实际模型由
++   * registry.getModelForSubAgent 从「已注册模型按价格排序 + 环境变量」派生，fail-open 回退主模型。
++   * 优先级：task.model 每次调用覆盖 > subAgentModels[type] 用户配置 > model 字段 > modelTier 档位 > 主模型。
++   */
++  modelTier?: "cheap" | "default" | "strong";
++  /**
++   * 预加载技能名列表（P1-1，对齐 CC §11.8 角色链最佳实践）。
++   * spawn 时把这些 skill 的内容作为「预加载专业知识」段注入子代理 system prompt。
++   * skill 不存在时 warn 跳过，不 spawn 失败。
++   */
++  skills?: string[];
++  /**
++   * UI 区分色（P1-2，对齐 CC frontmatter color）。
++   * 声明后该 agent 的进度/结果行用此色；未声明走 assignAgentColor 哈希分配。
++   * 校验是否在允许色板内（见 color.ts PALETTE），非法值 warn 跳过用默认分配色。
++   */
++  color?: string;
++  /**
++   * 权限模式（P2-1，对齐 CC frontmatter permissionMode）。
++   * 声明后子代理用此权限模式（如 acceptEdits/plan）。非法值 warn 跳过。
++   */
++  permissionMode?: string;
++  /**
++   * agent 专用 hooks（P2-1，对齐 CC frontmatter hooks + §11.8「子代理专用 hooks」）。
++   * 结构与 settings.json hooks 一致；spawn 时注册到该子代理的 hook 系统。
++   */
++  hooks?: unknown;
+   /** 最大轮次（默认 10） */
+   maxTurns?: number;
+   /** 超时时间（毫秒，默认 120000） */
+@@ -54,16 +84,19 @@ export const BUILTIN_AGENTS: Record<string, AgentDefinition> = {
+   explore: {
+     agentType: "explore",
+     description: "快速搜索和分析代码库，只返回关键发现",
+-    whenToUse: "当需要搜索代码库、查找文件、理解代码结构时使用。只读操作，不修改文件。",
+-    systemPrompt: `你是一个代码库探索代理。你的任务是搜索和分析代码，只返回关键发现。
++    whenToUse: "当需要搜索代码库、查找文件、理解代码结构时使用。只读操作，不修改文件。派活时在 prompt 里指明彻底程度：quick（快速定位单个文件/符号）/ medium（适度探索，覆盖主要相关点）/ very thorough（多处、多命名约定的全面分析）——不同程度对应不同的搜索深度。",
++    systemPrompt: `你是一个代码库探索代理。你的任务是搜索和分析代码，只返回关键发现。你被设计为一个快速代理，尽可能快地返回结果。
+ 规则：
+ - 使用 grep、glob、read 工具搜索代码
++- 根据调用方在 prompt 中指定的彻底程度调整搜索深度：quick 只做最小必要搜索快速定位；medium 覆盖主要相关点；very thorough 时探索多处位置与多种命名约定，力求全面。未指定时按 medium 处理。
+ - 只返回文件路径、行号和关键代码片段
+ - 保持输出简洁，不要冗长解释
+ - 完成搜索后，以 "## 发现" 开头输出最终报告，包含：关键文件列表、核心发现、建议的下一步行动
+ - 标注置信度：对每个关键发现，简短标注确定性（如「已读码确认」「推测，未核实」「未找到，可能不存在」），并显式列出你没能确认的点。不要把推测当事实陈述，让主代理能判断哪些结论需要复核`,
+     tools: ["read", "grep", "glob", "ls", "read_many", "task_list", "task_get"],
+     readOnly: true,
++    // P0-1：explore 是高频只读搜索代理，pin 便宜档省 token（对齐 CC 给 Explore 固定 haiku）。
++    modelTier: "cheap",
+     // explore 常被派去读 7-11 个文件 + 多轮 grep，每轮都要等 LLM 响应；
+     // 慢模型（glm/deepseek 等）下 120s 明显不够，给足 300s。
+     timeout: 300_000,
+@@ -97,6 +130,8 @@ export const BUILTIN_AGENTS: Record<string, AgentDefinition> = {
+ - 保持简洁
+ - 完成后以 "## 摘要" 开头输出结构化摘要`,
+     // summarize 不需要工具
++    // P0-1：摘要是纯文本压缩任务，pin 便宜档省 token。
++    modelTier: "cheap",
+     timeout: 180_000,
+     source: "built-in",
+   },
+@@ -112,6 +147,8 @@ export const BUILTIN_AGENTS: Record<string, AgentDefinition> = {
+ - 完成后以 "## 方案" 开头输出：问题分析、方案设计、涉及文件、实现步骤`,
+     tools: ["read", "grep", "glob", "ls", "read_many", "task_list", "task_get"],
+     readOnly: true,
++    // P0-1：plan 只读分析代理，pin 便宜档省 token。
++    modelTier: "cheap",
+     // plan 只读但需要大量阅读代码，给足 240s。
+     timeout: 240_000,
+     source: "built-in",
+diff --git a/src/agent/agent-hooks.ts b/src/agent/agent-hooks.ts
+new file mode 100644
+index 0000000..4c886f1
+--- /dev/null
++++ b/src/agent/agent-hooks.ts
+@@ -0,0 +1,92 @@
++/**
++ * Agent 专用 hooks 注册（P2-1，对齐 CC frontmatter hooks + §11.8「子代理专用 hooks」）
++ *
++ * 自定义/插件 agent 可在 frontmatter 声明 hooks，spawn 时注册到该子代理**专属**的
++ * HookSystem，PostToolUse / PreToolUse 等事件触发。
++ *
++ * 隔离设计：并发子代理共享主 HookSystem 实例，若把 agent hooks 注册进去，A 的 hook 会
++ * 对 B 的工具调用误触发（matcher 无法区分是哪个 agent）。故 hook-declaring agent 走
++ * **独立 HookSystem**（本模块 buildAgentHookSystem 创建），只承载该 agent 自己的 hooks，
++ * 与其他 agent / 主会话完全隔离。权限安全仍由 permissionChecker 独立保证（不依赖 hooks）。
++ *
++ * frontmatter 结构与 skill hooks / settings.json hooks 一致：
++ *   hooks:
++ *     PostToolUse:
++ *       - matcher: "write"
++ *         hooks:
++ *           - command: "npx eslint --fix"
++ */
++
++import { getLogger } from "../debug/logger.ts";
++import { HookSystem } from "../hook/system.ts";
++import {
++  HookEventName,
++  LEGACY_EVENT_MAP,
++  type CommandHookConfig,
++} from "../hook/types.ts";
++
++/** 事件名解析（PascalCase 或旧 snake_case）；未知返回 null。 */
++function resolveEvent(name: string): HookEventName | null {
++  const values = Object.values(HookEventName) as string[];
++  if (values.includes(name)) return name as HookEventName;
++  return (LEGACY_EVENT_MAP as Record<string, HookEventName>)[name] ?? null;
++}
++
++/**
++ * 把 agent frontmatter 声明的 hooks 注册进给定 HookSystem。
++ * 非法事件名 / 缺 command 的项 warn 跳过（不 spawn 失败）。
++ * @returns 成功注册的 hook 数量
++ */
++export function registerAgentHooks(
++  hookSystem: HookSystem,
++  agentType: string,
++  hooksConfig: unknown,
++): number {
++  if (!hooksConfig || typeof hooksConfig !== "object") return 0;
++  const log = getLogger();
++  let count = 0;
++
++  for (const [eventName, definitions] of Object.entries(hooksConfig as Record<string, unknown>)) {
++    const resolved = resolveEvent(eventName);
++    if (!resolved) {
++      log.warn("AGENT", `Agent ${agentType} 声明了未知的 hook 事件: ${eventName}`);
++      continue;
++    }
++    if (!Array.isArray(definitions)) continue;
++
++    for (const def of definitions as Array<{ matcher?: string; hooks?: Array<{ command?: string; timeout?: number }> }>) {
++      if (!def || !Array.isArray(def.hooks)) continue;
++      for (const hook of def.hooks) {
++        if (!hook?.command) continue;
++        const config: CommandHookConfig = {
++          type: "command",
++          name: `agent:${agentType}`,
++          command: hook.command,
++          ...(typeof hook.timeout === "number" ? { timeout: hook.timeout } : {}),
++        };
++        try {
++          hookSystem.registerHook(config, resolved, { matcher: def.matcher });
++          count++;
++          log.debug("AGENT", `注册 Agent hook: ${agentType} → ${eventName}:${def.matcher ?? "*"}`);
++        } catch (err) {
++          const msg = err instanceof Error ? err.message : String(err);
++          log.warn("AGENT", `注册 Agent hook 失败 (${agentType}): ${msg}`);
++        }
++      }
++    }
++  }
++
++  if (count > 0) log.info("AGENT", `Agent ${agentType} 注册了 ${count} 个专属 hook`);
++  return count;
++}
++
++/**
++ * 为声明了 hooks 的 agent 构建专属隔离 HookSystem。
++ * agent 未声明 hooks（或结构非法/注册数为 0）时返回 undefined，调用方回退共享 hookSystem。
++ */
++export function buildAgentHookSystem(agentType: string, hooksConfig: unknown): HookSystem | undefined {
++  if (!hooksConfig || typeof hooksConfig !== "object") return undefined;
++  const sys = new HookSystem();
++  const n = registerAgentHooks(sys, agentType, hooksConfig);
++  return n > 0 ? sys : undefined;
++}
+diff --git a/src/agent/color.ts b/src/agent/color.ts
+index 758272c..39359a1 100644
+--- a/src/agent/color.ts
++++ b/src/agent/color.ts
+@@ -39,6 +39,51 @@ export function assignAgentColor(agentId: string): AgentColor {
+   return PALETTE[idx]!;
+ }
+ 
++// ============================================================
++// P1-2：frontmatter 显式色注册（对齐 CC setAgentColor / agentColorManager）
++//
++// agent 可在 frontmatter 声明 `color: blue`，注册进此表；TUI 渲染该 agent 的
++// 进度/结果行时优先用声明色，未声明走 assignAgentColor 哈希分配（现状行为）。
++// ============================================================
++
++/** agentType → 显式声明色 的映射（frontmatter color 注册端）。 */
++const explicitAgentColors = new Map<string, AgentColor>();
++
++/** 允许的色名（= PALETTE 的 name 集合），供 frontmatter 校验用。 */
++export function isValidAgentColorName(name: string): boolean {
++  return PALETTE.some((c) => c.name === name.toLowerCase());
++}
++
++/** 按色名查 PALETTE 项（不区分大小写）；未命中返回 undefined。 */
++export function getColorByName(name: string): AgentColor | undefined {
++  const lower = name.toLowerCase();
++  return PALETTE.find((c) => c.name === lower);
++}
++
++/**
++ * 注册 agent 的显式声明色（P1-2）。
++ * 非法色名 → 返回 false（调用方 warn，回退哈希分配）；合法 → 注册并返回 true。
++ */
++export function setAgentColor(agentType: string, colorName: string): boolean {
++  const color = getColorByName(colorName);
++  if (!color) return false;
++  explicitAgentColors.set(agentType, color);
++  return true;
++}
++
++/**
++ * 获取 agent 的颜色：优先显式声明色（setAgentColor），否则按 agentType 哈希分配。
++ * 这是 TUI 渲染 agent 进度/结果行的统一取色入口。
++ */
++export function getAgentColor(agentType: string): AgentColor {
++  return explicitAgentColors.get(agentType) ?? assignAgentColor(agentType);
++}
++
++/** 清空显式色注册（测试用）。 */
++export function clearExplicitAgentColors(): void {
++  explicitAgentColors.clear();
++}
++
+ /** 用代理颜色包裹文本（ANSI 256 色） */
+ export function colorize(text: string, color: AgentColor): string {
+   return `\x1b[38;5;${color.code}m${text}\x1b[0m`;
+diff --git a/src/agent/custom.ts b/src/agent/custom.ts
+index c39c8a7..c44c583 100644
+--- a/src/agent/custom.ts
++++ b/src/agent/custom.ts
+@@ -34,6 +34,87 @@ export interface CustomAgentDefinition {
+   filePath: string;
+   /** 超时时间（毫秒），默认 300_000（5 分钟，对齐 task 类型） */
+   timeout?: number;
++  /** 模型覆盖（P0-2，frontmatter model；"inherit"/空 = 继承主模型） */
++  model?: string;
++  /** 预加载技能名列表（P1-1，frontmatter skills） */
++  skills?: string[];
++  /** UI 区分色（P1-2，frontmatter color） */
++  color?: string;
++  /** 权限模式（P2-1，frontmatter permissionMode） */
++  permissionMode?: string;
++  /** agent 专用 hooks（P2-1，frontmatter hooks） */
++  hooks?: unknown;
++  /** 是否默认后台执行（P2-1，frontmatter background） */
++  background?: boolean;
++  /** 是否默认 worktree 隔离（P2-1，frontmatter isolation） */
++  isolation?: "worktree";
++}
++
++/**
++ * 解析「逗号分隔字符串或 YAML 数组」双格式字段（tools/skills 共用）。
++ * 非字符串非数组 → 空数组。
++ */
++export function parseListField(raw: unknown): string[] {
++  if (typeof raw === "string") {
++    return raw.split(",").map((s) => s.trim()).filter(Boolean);
++  }
++  if (Array.isArray(raw)) {
++    return raw.map(String).map((s) => s.trim()).filter(Boolean);
++  }
++  return [];
++}
++
++/** 合法权限模式名（P2-1 校验，对齐 src/permission/mode.ts PermissionMode）。 */
++const VALID_PERMISSION_MODES = new Set([
++  "default", "always-allow", "deny-write", "acceptEdits",
++  "plan", "dontAsk", "auto", "dangerously-skip-permissions",
++]);
++
++/**
++ * 从 frontmatter 提取扩展字段（P0-2/P1-1/P1-2/P2-1 共用）。
++ * 非法值 warn 跳过（不 spawn 失败），返回可直接展开进 CustomAgentDefinition 的部分对象。
++ */
++export function parseAgentExtendedFrontmatter(
++  fm: Record<string, unknown>,
++  agentName: string,
++): Pick<CustomAgentDefinition, "model" | "skills" | "color" | "permissionMode" | "hooks" | "background" | "isolation"> {
++  const log = getLogger();
++  const out: Pick<CustomAgentDefinition, "model" | "skills" | "color" | "permissionMode" | "hooks" | "background" | "isolation"> = {};
++
++  // model（P0-2）："inherit"（大小写不敏感）视为不设。
++  if (typeof fm.model === "string") {
++    const m = fm.model.trim();
++    if (m && m.toLowerCase() !== "inherit") out.model = m;
++  }
++
++  // skills（P1-1）：双格式解析。
++  const skills = parseListField(fm.skills);
++  if (skills.length > 0) out.skills = skills;
++
++  // color（P1-2）：字符串；色板校验交给注册层（此处只透传，非法值由 color 注册器 warn）。
++  if (typeof fm.color === "string" && fm.color.trim()) out.color = fm.color.trim();
++
++  // permissionMode（P2-1）：枚举校验，非法值 warn 跳过。
++  if (typeof fm.permissionMode === "string") {
++    const pm = fm.permissionMode.trim();
++    if (VALID_PERMISSION_MODES.has(pm)) out.permissionMode = pm;
++    else if (pm) log.warn("CUSTOM_AGENT", `Agent ${agentName} 的 permissionMode="${pm}" 非法，已忽略`);
++  }
++
++  // hooks（P2-1）：透传对象/数组，非法结构由 hook 注册层校验。
++  if (fm.hooks && typeof fm.hooks === "object") out.hooks = fm.hooks;
++
++  // background（P2-1）：布尔。
++  if (typeof fm.background === "boolean") out.background = fm.background;
++
++  // isolation（P2-1）：仅接受 "worktree"，非法值 warn 跳过。
++  if (typeof fm.isolation === "string") {
++    const iso = fm.isolation.trim();
++    if (iso === "worktree") out.isolation = "worktree";
++    else if (iso) log.warn("CUSTOM_AGENT", `Agent ${agentName} 的 isolation="${iso}" 非法（仅支持 worktree），已忽略`);
++  }
++
++  return out;
+ }
+ 
+ /** 自定义 Agent 加载器 */
+@@ -83,7 +164,14 @@ export class CustomAgentLoader {
+   }
+ }
+ 
+-/** 自定义 Agent 工具（包装为 Tool 接口） */
++/**
++ * 自定义 Agent 工具（包装为 Tool 接口）。
++ *
++ * @deprecated P2-4：双注册收敛后，自定义/插件 agent 不再包装为独立 `agent__xxx` 工具，
++ * 而是统一通过 `sub_agent({type: "<name>"})` 访问（对齐 CC 单 Agent 工具模型）。
++ * cli.ts 已停止注册此类实例；保留类定义仅为兼容期回归测试与潜在外部引用。
++ * 新代码请勿再注册 CustomAgentTool——用 registerDynamicAgents 让 agent 进 sub_agent 通道。
++ */
+ export class CustomAgentTool implements Tool {
+   private def: CustomAgentDefinition;
+   private providerRegistry: ProviderRegistry;
+diff --git a/src/agent/skill-preload.ts b/src/agent/skill-preload.ts
+new file mode 100644
+index 0000000..e098309
+--- /dev/null
++++ b/src/agent/skill-preload.ts
+@@ -0,0 +1,73 @@
++/**
++ * 子代理技能预加载（P1-1，对齐 CC §11.8 角色链最佳实践）
++ *
++ * CC 的核心最佳实践：在子代理 frontmatter 用 `skills:` 预加载专业知识
++ * （如 api-developer 预加载 api-conventions + error-handling-patterns）。
++ * 本模块负责按名解析 skill 内容，供 enhanceSubAgentPrompt 注入子代理 system prompt。
++ *
++ * 设计：memoize 一次性 discover 全部 skill，之后按名 O(1) 查表。
++ * skill 不存在 → 返回 null（调用方 warn 跳过，不 spawn 失败）。
++ */
++
++import { getLogger } from "../debug/logger.ts";
++import { memoize } from "../utils/memoize.ts";
++
++/** name(lowercase) → prompt body 的内容表。 */
++type SkillContentMap = Map<string, { name: string; content: string }>;
++
++/**
++ * 加载并缓存全部 skill 的内容表（memoized，进程内只 discover 一次）。
++ * discover 失败降级为空表（不阻断子代理启动）。
++ */
++const loadSkillContentMap = memoize(async (): Promise<SkillContentMap> => {
++  const map: SkillContentMap = new Map();
++  try {
++    const { SkillManager } = await import("../skill/manager.ts");
++    const mgr = new SkillManager();
++    await mgr.discover(process.cwd());
++    for (const skill of mgr.getAllSkills()) {
++      if (skill.name && typeof skill.prompt === "string") {
++        map.set(skill.name.toLowerCase(), { name: skill.name, content: skill.prompt });
++      }
++    }
++  } catch (err: any) {
++    getLogger().debug("SUBAGENT", `技能预加载 discover 失败（降级为空）: ${err?.message ?? String(err)}`);
++  }
++  return map;
++});
++
++/**
++ * 构建子代理预加载技能段（P1-1）。
++ *
++ * @param skillNames frontmatter 声明的技能名列表
++ * @param agentType  子代理类型（仅用于日志）
++ * @returns 注入 system prompt 的段落；无有效技能时返回空串。
++ */
++export async function buildSkillPreloadSection(
++  skillNames: string[] | undefined,
++  agentType?: string,
++): Promise<string> {
++  if (!skillNames || skillNames.length === 0) return "";
++  const log = getLogger();
++  const map = await loadSkillContentMap();
++
++  const sections: string[] = [];
++  for (const rawName of skillNames) {
++    const name = rawName.trim();
++    if (!name) continue;
++    const entry = map.get(name.toLowerCase());
++    if (!entry) {
++      log.warn("SUBAGENT", `子代理 ${agentType ?? ""} 声明的预加载技能 "${name}" 不存在，已跳过`);
++      continue;
++    }
++    sections.push(`### 技能：${entry.name}\n\n${entry.content}`);
++  }
++
++  if (sections.length === 0) return "";
++  return `## 预加载专业知识（skills）\n\n以下是为你预加载的领域技能内容，作为完成任务时的专业知识参考：\n\n${sections.join("\n\n---\n\n")}`;
++}
++
++/** 测试用：清除 memoize 缓存。 */
++export function __clearSkillPreloadCache(): void {
++  loadSkillContentMap.clear();
++}
+diff --git a/src/agent/sub-agent.ts b/src/agent/sub-agent.ts
+index 38eecef..1699fc9 100644
+--- a/src/agent/sub-agent.ts
++++ b/src/agent/sub-agent.ts
+@@ -110,6 +110,11 @@ export interface SubAgentTask {
+    *  存在时子代理不从空上下文起步，而是接续这段父对话历史（prompt cache 友好），
+    *  适合"接着主对话往下深钻某个分支"的子任务。对标 cc forkSubagent。 */
+   forkMessages?: { role: string; content: ContentBlock[] }[];
++  /** P1-3：额外消息拉取回调（swarm 团队成员用）。每轮开始时调用，返回的字符串作为
++   *  user 消息注入子代理上下文——team.ts 用它把成员 mailbox 里的未读消息（来自 leader/peer）
++   *  drain 出来，实现真正的双向通信。与 message-queue 的 drainAgentMessages 并列消费，
++   *  互不干扰。缺省时不影响任何行为（向后兼容）。 */
++  drainInbox?: () => string[];
+ }
+ 
+ /** P2-2：计算子代理默认 maxTurns（未显式指定 task.maxTurns 时）。
+@@ -164,6 +169,7 @@ async function enhanceSubAgentPrompt(
+   preferredLanguage?: "zh" | "en",
+   workingDir?: string,
+   agentType?: string,
++  skills?: string[],
+ ): Promise<string> {
+   const notes: string[] = [];
+ 
+@@ -209,6 +215,18 @@ async function enhanceSubAgentPrompt(
+     );
+   }
+ 
++  // P1-1：预加载技能段（对齐 CC §11.8 角色链）。放在语言铁律之后、env details 之前，
++  // 与 agent memory 注入并列。skill 不存在时内部 warn 跳过，返回空串（向后兼容）。
++  let skillSection = "";
++  if (skills && skills.length > 0) {
++    try {
++      const { buildSkillPreloadSection } = await import("./skill-preload.ts");
++      skillSection = await buildSkillPreloadSection(skills, agentType);
++    } catch {
++      // 技能预加载失败不阻断子代理启动
++    }
++  }
++
+   // G13：按 agent 类型注入历史积累记忆（跨会话领域经验）。
+   // 无该类型记忆时返回空串，行为与改动前一致（向后兼容）。
+   let agentMemorySection = "";
+@@ -221,7 +239,10 @@ async function enhanceSubAgentPrompt(
+     }
+   }
+ 
+-  const enhanced = `${basePrompt}\n\n---\n\n${notes.join("\n")}`;
++  // 组装顺序：base prompt → 预加载技能（语言铁律后、env 前）→ notes（含语言/环境）→ agent memory。
++  let enhanced = basePrompt;
++  if (skillSection) enhanced += `\n\n---\n\n${skillSection}`;
++  enhanced += `\n\n---\n\n${notes.join("\n")}`;
+   return agentMemorySection ? `${enhanced}\n\n${agentMemorySection}` : enhanced;
+ }
+ 
+@@ -938,7 +959,10 @@ export class SubAgent {
+       sidechain?.start(task.type, task.description, this.modelOverride || this.model);
+ 
+       const basePrompt = getSystemPrompt(task.type);
+-      let systemPrompt = await enhanceSubAgentPrompt(basePrompt, this.language, process.cwd(), task.type);
++      // P1-1：解析 agent 定义拿到 skills（预加载技能）。resolveAgent 覆盖 built-in + custom + plugin。
++      // 复用到下方 tool 过滤（agentDef.tools/disallowedTools），避免重复解析。
++      const agentDef = resolveAgent(task.type);
++      let systemPrompt = await enhanceSubAgentPrompt(basePrompt, this.language, process.cwd(), task.type, agentDef?.skills);
+ 
+       // M2(Dynamic Workflows): 带 schema 时,系统提示追加结构化输出强制段
+       let structuredTool: StructuredOutputTool | undefined;
+@@ -967,7 +991,7 @@ export class SubAgent {
+       // 区分内置类型 vs 动态(自定义/插件)类型：
+       // 内置走 tool-filter 的角色白名单(builtInType)；动态类型该白名单查不到，
+       // 改用其 AgentDefinition 声明的 tools/disallowedTools(对标 cc resolveAgentTools)。
+-      const agentDef = resolveAgent(task.type);
++      // agentDef 已在上方（P1-1 skills 解析处）解析，此处复用。
+       const isBuiltInType = task.type in BUILTIN_AGENTS;
+       const filteredTools = filterToolsForAgent(allTools, {
+         isBuiltIn: isBuiltInType,
+@@ -1053,6 +1077,19 @@ export class SubAgent {
+               });
+             }
+           }
++          // P1-3：消费 swarm mailbox 里的未读消息（来自 leader / peer 成员）。
++          // 与主代理消息队列并列 drain，从第 2 轮起检查——首轮已带初始任务，无需重复注入。
++          if (task.drainInbox && turn > 1) {
++            let inboxMsgs: string[] = [];
++            try { inboxMsgs = task.drainInbox(); } catch { /* drain 失败不阻断本轮 */ }
++            for (const msg of inboxMsgs) {
++              log.info("SUBAGENT", `[${task.type}] 收到团队消息: ${msg.slice(0, 100)}`);
++              ctxMgr!.addMessage({
++                role: "user",
++                content: [{ type: "text", text: `<system-reminder>\n[团队消息] ${msg}\n</system-reminder>` }],
++              });
++            }
++          }
+         },
+         onTurnEnd: (info) => {
+           lastTextOutput = info.textOutput || lastTextOutput;
+diff --git a/src/agent/tool.ts b/src/agent/tool.ts
+index da10246..be4b685 100644
+--- a/src/agent/tool.ts
++++ b/src/agent/tool.ts
+@@ -15,6 +15,7 @@ import {
+   failAgentTask,
+ } from "../task/index.ts";
+ import type { HookSystem } from "../hook/system.ts";
++import { buildAgentHookSystem } from "./agent-hooks.ts";
+ import type { SubAgentResult } from "./sub-agent.ts";
+ import { z } from "zod/v4";
+ import { lazySchema } from "../sdk/lazy-schema.ts";
+@@ -348,6 +349,19 @@ ${typeLines}
+       return { output: `错误: 无效的子代理类型 "${params.type}"，可选: ${validTypes.join(", ")}`, isError: true };
+     }
+ 
++    // P2-1：agent 定义声明的 background / isolation 作为默认值，显式工具参数优先覆盖。
++    // （frontmatter 里声明 background: true 的 coordinator/审计类 agent 默认后台跑；
++    //  声明 isolation: worktree 的写类 agent 默认隔离，无需每次调用方显式传。）
++    const def = resolveAgent(params.type);
++    if (def) {
++      if (params.run_in_background === undefined && def.background === true) {
++        params.run_in_background = true;
++      }
++      if (params.isolation === undefined && def.isolation === "worktree") {
++        params.isolation = "worktree";
++      }
++    }
++
+     // 后台执行模式
+     if (params.run_in_background) {
+       return this.runAsync(params, signal);
+@@ -357,6 +371,51 @@ ${typeLines}
+     return this.runSync(params, signal);
+   }
+ 
++  /**
++   * P2-1：按 agent 类型创建 SubAgent，并应用 frontmatter 声明的 permissionMode / hooks。
++   *
++   * - permissionMode：若 agent 声明且主 checker 支持 deriveWithPermissionMode，则派生一个
++   *   覆盖该模式的独立 checker（不污染并发的其他子代理）；否则用共享 checker。
++   * - hooks：若 agent 声明，构建**专属隔离** HookSystem（只承载该 agent 的 hook），
++   *   避免 A 的 hook 对 B 的工具调用误触发；未声明则用共享 hookSystem。
++   *
++   * runSync / runAsync 共用此工厂，保证两条路径行为一致。
++   */
++  private createSubAgentForType(agentType: string): SubAgent {
++    const def = resolveAgent(agentType);
++
++    // hooks：优先专属隔离 HookSystem，回退共享。
++    let hookSystem = this.hookSystem;
++    if (def?.hooks) {
++      try {
++        const isolated = buildAgentHookSystem(agentType, def.hooks);
++        if (isolated) hookSystem = isolated;
++      } catch (err: any) {
++        getLogger().warn("SUBAGENT", `Agent ${agentType} hooks 注册失败（回退共享 hookSystem）: ${err?.message ?? err}`);
++      }
++    }
++
++    const subAgent = SubAgent.fromRegistry(this.providerRegistry, this.toolRegistry, hookSystem);
++
++    // permissionMode：优先派生覆盖模式的独立 checker，回退共享。
++    if (this.permissionChecker) {
++      let checker = this.permissionChecker;
++      const mode = def?.permissionMode;
++      const derivable = checker as { deriveWithPermissionMode?: (m: string) => import("../permission/types.ts").Checker };
++      if (mode && typeof derivable.deriveWithPermissionMode === "function") {
++        try {
++          checker = derivable.deriveWithPermissionMode(mode);
++          getLogger().debug("SUBAGENT", `Agent ${agentType} 应用 permissionMode=${mode}`);
++        } catch (err: any) {
++          getLogger().warn("SUBAGENT", `Agent ${agentType} permissionMode=${mode} 派生失败（回退共享 checker）: ${err?.message ?? err}`);
++        }
++      }
++      subAgent.setPermissionChecker(checker);
++    }
++
++    return subAgent;
++  }
++
+   /** 同步执行子代理 */
+   private async runSync(params: {
+     type: string;
+@@ -419,8 +478,7 @@ ${typeLines}
+         }
+       }
+ 
+-      const subAgent = SubAgent.fromRegistry(this.providerRegistry, this.toolRegistry, this.hookSystem);
+-      if (this.permissionChecker) subAgent.setPermissionChecker(this.permissionChecker);
++      const subAgent = this.createSubAgentForType(params.type);
+       subAgent.setParentSessionId(this.parentSessionId); // P2-10：启用 sidechain 持久化
+ 
+       // Fork 模式：继承主对话上下文（prompt cache 友好）
+@@ -539,8 +597,7 @@ ${typeLines}
+     }
+ 
+     try {
+-      const subAgent = SubAgent.fromRegistry(this.providerRegistry, this.toolRegistry, this.hookSystem);
+-      if (this.permissionChecker) subAgent.setPermissionChecker(this.permissionChecker);
++      const subAgent = this.createSubAgentForType(params.type);
+       subAgent.setParentSessionId(this.parentSessionId); // P2-10：启用 sidechain 持久化
+ 
+       // 传递预创建的 task 信息，execute() 内部不再重复创建
+diff --git a/src/cli.ts b/src/cli.ts
+index 487109b..0b20be9 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1351,9 +1351,19 @@ export async function main(): Promise<void> {
+       );
+     }
+ 
+-    // 加载自定义 Agents（注册为工具 + 注册进统一聚合 registry）
+-    const { CustomAgentLoader, CustomAgentTool } = await import("./agent/custom.ts");
++    // 加载自定义 Agents（P2-4：只注册进统一聚合 registry，通过 sub_agent({type}) 访问；
++    // 不再包装为 agent__xxx 独立工具——收敛到 CC 式单通道，自定义 agent 自动获得
++    // sub_agent 的 run_in_background/isolation/fork/并发信号量能力）。
++    const { CustomAgentLoader } = await import("./agent/custom.ts");
+     const { registerDynamicAgents } = await import("./agent/agent-definition.ts");
++    const { setAgentColor } = await import("./agent/color.ts");
++    // P1-2：把 frontmatter 声明的 color 注册进颜色映射；非法色名 warn 跳过（回退哈希分配）。
++    const registerAgentColor = (agentType: string, color: string | undefined) => {
++      if (!color) return;
++      if (!setAgentColor(agentType, color)) {
++        getLogger().warn("AGENT", `Agent "${agentType}" 的 color="${color}" 非法，已回退自动分配色`);
++      }
++    };
+     const customAgents = await new CustomAgentLoader().loadAll(undefined, scanOptions);
+     // 注册进聚合 registry：让 sub_agent 的 type 枚举能发现自定义 agent
+     if (customAgents.length > 0) {
+@@ -1366,11 +1376,17 @@ export async function main(): Promise<void> {
+           tools: def.tools.length > 0 ? def.tools : undefined,
+           source: "userSettings" as const,
+           filePath: def.filePath,
++          // P0-2/P1-1/P1-2/P2-1：透传扩展 frontmatter 字段到 AgentDefinition。
++          model: def.model,
++          skills: def.skills,
++          color: def.color,
++          permissionMode: def.permissionMode,
++          hooks: def.hooks,
++          background: def.background,
++          isolation: def.isolation,
+         })),
+       );
+-    }
+-    for (const def of customAgents) {
+-      toolRegistry.register(new CustomAgentTool(def, providerRegistry, toolRegistry));
++      for (const def of customAgents) registerAgentColor(def.name, def.color);
+     }
+ 
+     // P1-10 --agents：注入 CLI 指定的子代理定义（内联 JSON）。
+@@ -1387,23 +1403,7 @@ export async function main(): Promise<void> {
+         source: "userSettings" as const,
+       }));
+       registerDynamicAgents(injected);
+-      // 同步注册为工具，使模型可直接调用（与自定义 agent 对等）。
+-      for (const [name, def] of Object.entries(config.injectedAgents)) {
+-        toolRegistry.register(
+-          new CustomAgentTool(
+-            {
+-              name,
+-              description: def.description ?? name,
+-              prompt: def.prompt,
+-              tools: def.tools ?? [],
+-              source: "user", // CLI 注入（--agents）归为 user 来源
+-              filePath: "",
+-            },
+-            providerRegistry,
+-            toolRegistry,
+-          ),
+-        );
+-      }
++      // P2-4：不再注册 agent__xxx 独立工具，注入的 agent 统一通过 sub_agent({type}) 访问。
+       getLogger().info("AGENT", `--agents 注入 ${injected.length} 个子代理: ${injected.map((a) => a.agentType).join(", ")}`);
+     }
+ 
+@@ -1431,13 +1431,20 @@ export async function main(): Promise<void> {
+             tools: def.tools.length > 0 ? def.tools : undefined,
+             source: "plugin" as const,
+             filePath: def.filePath,
++            // P0-2/P1-1/P1-2/P2-1：透传扩展 frontmatter 字段到 AgentDefinition。
++            model: def.model,
++            skills: def.skills,
++            color: def.color,
++            permissionMode: def.permissionMode,
++            hooks: def.hooks,
++            background: def.background,
++            isolation: def.isolation,
+           })),
+           false,
+         );
++        for (const def of pluginAgents) registerAgentColor(def.name, def.color);
+       }
+-      for (const def of pluginAgents) {
+-        toolRegistry.register(new CustomAgentTool(def, providerRegistry, toolRegistry));
+-      }
++      // P2-4：不再注册 agent__xxx 独立工具，插件 agent 统一通过 sub_agent({type}) 访问。
+ 
+       // 收集插件 MCP 服务器（合并到 config.mcpServers，下方统一连接）
+       pluginMcpServers = await collectPluginMcpServers();
+diff --git a/src/llm/registry.ts b/src/llm/registry.ts
+index ae83d16..08a04e2 100644
+--- a/src/llm/registry.ts
++++ b/src/llm/registry.ts
+@@ -8,6 +8,8 @@ import type { Config, ModelConfig } from "../config/config.ts";
+ import { getLogger } from "../debug/logger.ts";
+ import { ModelAvailabilityService } from "./availability.ts";
+ import { TokenEstimator } from "./token-estimator.ts";
++import { resolvePricing } from "../api/cost-tracker.ts";
++import { resolveAgent } from "../agent/agent-definition.ts";
+ 
+ /** 子代理模型映射 */
+ export interface SubAgentModelMap {
+@@ -86,10 +88,89 @@ export class ProviderRegistry {
+     };
+   }
+ 
+-  /** 获取子代理模型（按类型查映射 > default 兜底 > 主模型） */
++  /**
++   * 获取子代理模型。
++   *
++   * 优先级（P0-1/P0-2 补全后）：
++   *   1. subAgentModels[type]     —— 用户按类型显式配置（最高，永远优先于任何默认）
++   *   2. subAgentModels.default   —— 用户兜底默认
++   *   3. agentDef.model           —— agent 定义/frontmatter 声明的 model（P0-2 自定义 agent）
++   *   4. modelTier 档位映射        —— 语义档位派生（P0-1，explore/plan/summarize=cheap）
++   *   5. this.config.model        —— 主模型兜底（fail-open，绝不因配错更贵或报错）
++   *
++   * 注意：task.model（每次调用覆盖）在调用方 sub-agent.ts 层处理，优先级高于本方法的全部返回值。
++   */
+   getModelForSubAgent(type: string): string {
+-    const mapped = this.subAgentModels[type as keyof SubAgentModelMap];
+-    return mapped || this.subAgentModels.default || this.config.model;
++    // 1 + 2：用户配置（按类型 > default）——永远优先，保留用户完全控制权。
++    const userConfigured = this.subAgentModels[type as keyof SubAgentModelMap] || this.subAgentModels.default;
++    if (userConfigured) return userConfigured;
++
++    // 3 + 4：agent 定义驱动（frontmatter model > 语义档位）。resolveAgent 覆盖 built-in + custom + plugin。
++    const def = (() => {
++      try { return resolveAgent(type); } catch { return undefined; }
++    })();
++    if (def) {
++      // 3：frontmatter/定义显式 model（P0-2）。"inherit" 已在解析层归一为不设，此处非空即用。
++      if (def.model && def.model.trim()) return def.model.trim();
++      // 4：语义档位映射（P0-1）。仅 cheap/strong 尝试派生；default 或未设直接落主模型。
++      if (def.modelTier && def.modelTier !== "default") {
++        const tierModel = this.resolveModelForTier(def.modelTier);
++        if (tierModel) return tierModel;
++      }
++    }
++
++    // 5：主模型兜底。
++    return this.config.model;
++  }
++
++  /**
++   * 语义档位 → 实际模型名派生（P0-1）。
++   *
++   * 不硬编码模型名单（铁律 feedback-no-hardcoded-model-tier-rules）。派生来源按优先级：
++   *   1. 环境变量 SID_CHEAP_MODEL / SID_STRONG_MODEL（用户显式指定，最高权威）
++   *   2. availableModels 按 input 价排序：cheap=最便宜、strong=最贵（且不同于主模型档位）
++   *   3. 派生不出（无 availableModels / 无定价 / 只有主模型自己）→ null，调用方 fail-open 回退主模型
++   *
++   * 绝不返回比主模型更贵的 cheap 档，也绝不因派生失败报错。
++   */
++  private resolveModelForTier(tier: "cheap" | "strong"): string | null {
++    // 1：环境变量显式指定。
++    const envName = tier === "cheap" ? "SID_CHEAP_MODEL" : "SID_STRONG_MODEL";
++    const envModel = process.env[envName]?.trim();
++    if (envModel) return envModel;
++
++    // 2：从 availableModels 按价格派生。无配置模型列表时无从派生。
++    const models = this.config.availableModels;
++    if (!models || models.length === 0) return null;
++
++    // 为每个候选模型解析 input 单价（USD/M），过滤解析不出价格的。
++    const priced: Array<{ name: string; input: number }> = [];
++    for (const m of models) {
++      if (!m.name) continue;
++      const pricing = resolvePricing(m.name, models, m.baseURL);
++      if (pricing && pricing.input > 0) {
++        priced.push({ name: m.name, input: pricing.input });
++      }
++    }
++    if (priced.length === 0) return null;
++
++    // 主模型的价格作为参照：cheap 档必须严格更便宜，strong 档必须严格更贵，否则宁可回退主模型。
++    const mainPricing = resolvePricing(this.config.model, models, this.config.baseURL);
++    const mainInput = mainPricing && mainPricing.input > 0 ? mainPricing.input : null;
++
++    if (tier === "cheap") {
++      // 取最便宜的一个；若比主模型贵/相等则不派生（回退主模型，绝不更贵）。
++      const cheapest = priced.reduce((a, b) => (b.input < a.input ? b : a));
++      if (cheapest.name === this.config.model) return null;
++      if (mainInput !== null && cheapest.input >= mainInput) return null;
++      return cheapest.name;
++    } else {
++      // strong：取最贵的一个；若不比主模型贵则不派生。
++      const strongest = priced.reduce((a, b) => (b.input > a.input ? b : a));
++      if (strongest.name === this.config.model) return null;
++      if (mainInput !== null && strongest.input <= mainInput) return null;
++      return strongest.name;
++    }
+   }
+ 
+   /**
+diff --git a/src/permission/checker.ts b/src/permission/checker.ts
+index 3a06850..9ae37a0 100644
+--- a/src/permission/checker.ts
++++ b/src/permission/checker.ts
+@@ -13,6 +13,7 @@
+ 
+ import type { Checker, Decision, PermissionRequest, PermissionRule, PermissionDecisionReason, PermissionCheckOptions } from "./types.ts";
+ import type { Config } from "../config/config.ts";
++import type { PermissionMode } from "./mode.ts";
+ import type { PlanModeManager } from "../plan/state.ts";
+ import type { Tool, PermissionResult, ToolUseContext } from "../tool/types.ts";
+ import { checkRules } from "./rules.ts";
+@@ -217,6 +218,30 @@ export class PermissionChecker implements Checker {
+     this.prePlanMode = null;
+   }
+ 
++  /**
++   * P2-1：派生一个覆盖 permissionMode 的新 checker（供 agent frontmatter permissionMode 用）。
++   *
++   * 为什么派生而非 mutate：并发子代理共享同一主 checker 实例，直接改 this.config.permissionMode
++   * 会污染其他子代理/主代理。故浅拷贝 config（仅换 permissionMode），复用同一套 rules/workspace，
++   * 并把已注入的运行期协作者（planManager/sandbox/classifier 等）原样搬到新实例——否则派生 checker
++   * 丢失 auto 模式分类器 / 沙箱等能力，行为与主 checker 不一致。
++   *
++   * sessionMemory / preApproved / denialTracking 刻意不共享（各自独立会话记忆），派生实例从干净态起步。
++   */
++  deriveWithPermissionMode(mode: PermissionMode): PermissionChecker {
++    const derivedConfig: Config = { ...this.config, permissionMode: mode };
++    const derived = new PermissionChecker(derivedConfig, this.rules ?? undefined, this.workspacePath);
++    // 搬运运行期注入的协作者（构造函数不覆盖这些，需显式复制）。
++    if (this.planManager) derived.setPlanManager(this.planManager);
++    if (this.sandboxManager) derived.setSandboxManager(this.sandboxManager);
++    if (this.bashClassifier) derived.setBashClassifier(this.bashClassifier);
++    if (this.toolClassifier) derived.setToolClassifier(this.toolClassifier);
++    if (this.bridgePermissionDelegate) derived.setBridgePermissionDelegate(this.bridgePermissionDelegate);
++    // 运行时扩展的允许目录白名单也一并继承（用户 /add-dir 授权对子代理同样生效）。
++    for (const dir of this.getAllowedDirectories()) derived.addAllowedDirectory(dir);
++    return derived;
++  }
++
+   /** 设置沙箱管理器 */
+   setSandboxManager(manager: SandboxManager): void {
+     this.sandboxManager = manager;
+diff --git a/src/plugin/loadPluginAgents.ts b/src/plugin/loadPluginAgents.ts
+index a241fcf..d557712 100644
+--- a/src/plugin/loadPluginAgents.ts
++++ b/src/plugin/loadPluginAgents.ts
+@@ -12,6 +12,7 @@ import { getLogger } from "../debug/logger.ts";
+ import { memoize } from "../utils/memoize.ts";
+ import { parseFrontmatter } from "../extension/frontmatter.ts";
+ import type { CustomAgentDefinition } from "../agent/custom.ts";
++import { parseListField, parseAgentExtendedFrontmatter } from "../agent/custom.ts";
+ import { registerPluginCache } from "./caches.ts";
+ import { loadAllPluginsCacheOnly } from "./loader.ts";
+ import type { LoadedPlugin } from "./types.ts";
+@@ -34,17 +35,6 @@ function getAgentName(filePath: string, baseDir: string, pluginName: string): st
+   return `${pluginName}:${namespace}`;
+ }
+ 
+-/** 解析 frontmatter.tools（逗号分隔字符串或数组） */
+-function parseTools(rawTools: unknown): string[] {
+-  if (typeof rawTools === "string") {
+-    return rawTools.split(",").map((s) => s.trim()).filter(Boolean);
+-  }
+-  if (Array.isArray(rawTools)) {
+-    return rawTools.map(String);
+-  }
+-  return [];
+-}
+-
+ async function scanAgentFiles(
+   dir: string,
+   baseDir: string,
+@@ -92,10 +82,12 @@ async function loadAgentFile(
+     out.push({
+       name,
+       description: (frontmatter.description as string) || (frontmatter.whenToUse as string) || "",
+-      tools: parseTools(frontmatter.tools),
++      tools: parseListField(frontmatter.tools),
+       prompt: body,
+       source: "user", // 插件 Agent 视为 user 级来源（ExtensionSource 无 plugin 值）
+       filePath,
++      // P0-2/P1-1/P1-2/P2-1：消费扩展 frontmatter 字段（与自定义 agent 同源解析）。
++      ...parseAgentExtendedFrontmatter(frontmatter, name),
+     });
+   } catch (err: any) {
+     getLogger().warn("PLUGIN", `加载插件 Agent 失败 ${filePath}: ${err.message}`);
+diff --git a/src/session/sidechain.ts b/src/session/sidechain.ts
+index f6b5669..6a5e66d 100644
+--- a/src/session/sidechain.ts
++++ b/src/session/sidechain.ts
+@@ -206,6 +206,108 @@ export function scanUnfinishedSidechains(sessionId: string): UnfinishedSidechain
+   return result;
+ }
+ 
++/** 重建出的 sidechain 对话（供 resume 续跑用）。 */
++export interface ReconstructedSidechain {
++  /** 重建后的线性消息历史（已过滤孤儿 thinking / 未解析 tool_use，保证可安全续跑）。 */
++  messages: { role: "user" | "assistant"; content: ContentBlock[] }[];
++  /** sidechain_start 里记录的 agentType（缺失为空串）。 */
++  agentType: string;
++  /** 是否已正常结束（末尾有 sidechain_end）。 */
++  ended: boolean;
++}
++
++/**
++ * P2-3：从 sidechain JSONL 重建子代理的完整对话历史，供 resume 在完整上下文上续跑。
++ *
++ * 读 `<sessionId>-<agentId>.jsonl`，按写入顺序还原 message 记录，并做两步清洗（对齐 CC
++ * filterOrphanedThinkingOnlyMessages / filterUnresolvedToolUses）：
++ *   1. 过滤「只含 thinking 且无实质内容」的孤儿 assistant 消息——续跑时 thinking 无意义且
++ *      可能破坏 provider 的 thinking 契约。
++ *   2. 过滤末尾「未被 tool_result 解析的 tool_use」——续接新 user 消息前，悬空 tool_use 会
++ *      让 provider 报「tool_use 无对应 tool_result」。
++ *
++ * transcript 不存在 / 空 / 全损坏时返回 null（调用方 fail-open 降级到轻量续传）。
++ *
++ * @param sessionId 主会话 id
++ * @param agentId   子代理 id（= 执行时的 taskId）
++ */
++export function reconstructSidechainMessages(
++  sessionId: string,
++  agentId: string,
++): ReconstructedSidechain | null {
++  const dir = resolveSessionDirForSidechain(sessionId);
++  const filePath = join(dir, sidechainFileName(sessionId, agentId));
++  if (!existsSync(filePath)) return null;
++
++  let lines: string[];
++  try {
++    if (statSync(filePath).size === 0) return null;
++    lines = readFileSync(filePath, "utf-8").trim().split("\n").filter(Boolean);
++  } catch {
++    return null;
++  }
++  if (lines.length === 0) return null;
++
++  const raw: { role: "user" | "assistant" | "tool"; content: ContentBlock[] }[] = [];
++  let agentType = "";
++  let ended = false;
++  for (const line of lines) {
++    let rec: SidechainRecord;
++    try {
++      rec = JSON.parse(line) as SidechainRecord;
++    } catch {
++      continue; // 跳过损坏行
++    }
++    if (rec.type === "sidechain_start") agentType = rec.agentType;
++    else if (rec.type === "sidechain_end") ended = true;
++    else if (rec.type === "message" && Array.isArray(rec.content)) {
++      raw.push({ role: rec.role, content: rec.content });
++    }
++  }
++  if (raw.length === 0) return null;
++
++  // tool 角色消息在 provider 侧属 user 轮（tool_result 载体），归一到 user。
++  const normalized = raw.map((m) => ({
++    role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
++    content: m.content,
++  }));
++
++  // 清洗 1：丢弃只含 thinking / 空内容的孤儿 assistant 消息。
++  const noOrphanThinking = normalized.filter((m) => {
++    if (m.role !== "assistant") return true;
++    const hasSubstantive = m.content.some((b: any) => {
++      const t = b?.type;
++      return t && t !== "thinking" && t !== "redacted_thinking";
++    });
++    return hasSubstantive;
++  });
++
++  // 清洗 2：收集所有已解析的 tool_use id（有对应 tool_result 的），剔除悬空 tool_use。
++  const resolvedIds = new Set<string>();
++  for (const m of noOrphanThinking) {
++    for (const b of m.content as any[]) {
++      if (b?.type === "tool_result" && b.tool_use_id) resolvedIds.add(b.tool_use_id);
++    }
++  }
++  const cleaned = noOrphanThinking
++    .map((m) => {
++      if (m.role !== "assistant") return m;
++      const content = (m.content as any[]).filter((b) => b?.type !== "tool_use" || resolvedIds.has(b.id));
++      return { role: m.role, content };
++    })
++    // 清洗后可能出现空 content 的 assistant 消息，剔除。
++    .filter((m) => Array.isArray(m.content) && m.content.length > 0);
++
++  if (cleaned.length === 0) return null;
++
++  // provider 契约：首条必须是 user。若清洗后以 assistant 开头，前置一条占位 user。
++  if (cleaned[0]!.role !== "user") {
++    cleaned.unshift({ role: "user", content: [{ type: "text", text: "(接续之前的子代理任务)" } as ContentBlock] });
++  }
++
++  return { messages: cleaned, agentType, ended };
++}
++
+ /**
+  * 删除指定目录下某主会话名下所有 sidechain 文件。
+  * 返回删除的文件数。失败静默（best-effort 清理）。
+diff --git a/src/swarm/team.ts b/src/swarm/team.ts
+index 0191f37..dd40a35 100644
+--- a/src/swarm/team.ts
++++ b/src/swarm/team.ts
+@@ -12,7 +12,16 @@ import { join } from "path";
+ import { randomBytes } from "crypto";
+ import { Mailbox } from "./mailbox.ts";
+ import { PermissionSync, type PermissionArbiter } from "./permission-sync.ts";
+-import { assignAgentColor, type AgentColor } from "../agent/color.ts";
++import { assignAgentColor, getAgentColor, type AgentColor } from "../agent/color.ts";
++import {
++  createStructuredTask,
++  updateStructuredTask,
++  getStructuredTask,
++  getAllStructuredTasks,
++  isTaskUnblocked,
++  __clearStructuredTasks,
++} from "../task/structured-task-store.ts";
++import { persistTeamTasks, loadTeamTasks } from "../task/team-task-store.ts";
+ import { getLogger } from "../debug/logger.ts";
+ import type { ProviderRegistry } from "../llm/registry.ts";
+ import { Registry as ToolRegistry } from "../tool/registry.ts";
+@@ -27,6 +36,9 @@ export interface TeammateSpec {
+   task: string;
+   /** 是否需要独立 Worktree（默认 true，会改文件的成员需要） */
+   isolated?: boolean;
++  /** P2-2：本成员依赖的其他成员名（这些成员完成后本成员才开始执行）。
++   *  用于「B 依赖 A」的有序编排——A 未完成前 B 不启动。空/未设 = 无依赖，可立即并发。 */
++  dependsOn?: string[];
+ }
+ 
+ /** 成员执行结果 */
+@@ -60,6 +72,10 @@ export class TeamManager {
+   readonly mailbox: Mailbox;
+   readonly permissionSync: PermissionSync;
+   private readonly teamDir: string;
++  /** P1-3：leader 收件箱 drain 出的成员回写消息（run() 结束时填充，供观测/回放）。 */
++  leaderMessages: import("./mailbox.ts").MailMessage[] = [];
++  /** P2-2：成员名 → 共享任务列表中的任务 ID 映射（seedTaskList 建立）。 */
++  private memberTaskIds = new Map<string, string>();
+ 
+   constructor(private opts: TeamOptions) {
+     this.teamName = opts.teamName;
+@@ -109,6 +125,121 @@ export class TeamManager {
+     };
+   }
+ 
++  // ============================================================
++  // P2-2：共享任务列表调度（seed → 依赖等待 → 完成解锁 + 持久化）
++  // ============================================================
++
++  /**
++   * 把成员任务建成结构化共享任务列表：每个成员一个任务，dependsOn 建成 blockedBy 依赖边。
++   * 建完落盘一次（`.sid-code/tasks/{team}/tasks.json`）。
++   * 依赖引用不存在的成员名时 warn 跳过该边（不阻断建列表）。
++   */
++  private seedTaskList(): void {
++    const log = getLogger();
++    this.memberTaskIds.clear();
++
++    // P2-2：若该团队有历史任务文件，先恢复（进程重启/团队接续场景），并尝试按
++    // metadata.member 复原成员→任务映射，让已完成的上游依赖在重启后依然生效。
++    try {
++      if (loadTeamTasks(this.teamName, this.opts.baseDir)) {
++        for (const t of getAllStructuredTasks()) {
++          const member = (t.metadata as { member?: string })?.member;
++          if (typeof member === "string" && this.opts.members.some((m) => m.name === member)) {
++            this.memberTaskIds.set(member, t.id);
++          }
++        }
++        // 已完整复原全部成员映射时直接复用（不重建），保留历史完成态与依赖。
++        if (this.memberTaskIds.size === this.opts.members.length) {
++          log.info("TEAM_TASKS", `团队 "${this.teamName}" 从历史任务文件恢复 ${this.memberTaskIds.size} 个任务`);
++          return;
++        }
++        // 映射不完整（成员集变更）→ 放弃复用，清空重建，避免半吊子状态。
++        this.memberTaskIds.clear();
++        __clearStructuredTasks();
++      }
++    } catch (err: any) {
++      log.warn("TEAM_TASKS", `团队任务恢复失败（降级为全新）: ${err?.message ?? err}`);
++      this.memberTaskIds.clear();
++    }
++
++    // 先建全部任务节点，拿到 ID
++    for (const m of this.opts.members) {
++      const task = createStructuredTask({
++        subject: `[${this.teamName}] ${m.name}`,
++        description: m.task,
++        metadata: { team: this.teamName, member: m.name, agentType: m.type },
++      });
++      this.memberTaskIds.set(m.name, task.id);
++    }
++    // 再建依赖边：dependsOn 的上游成员完成后，本成员任务才解锁
++    for (const m of this.opts.members) {
++      if (!m.dependsOn || m.dependsOn.length === 0) continue;
++      const selfId = this.memberTaskIds.get(m.name)!;
++      const upstreamIds: string[] = [];
++      for (const dep of m.dependsOn) {
++        const depId = this.memberTaskIds.get(dep);
++        if (!depId) {
++          log.warn("TEAM_TASKS", `成员 "${m.name}" 依赖的成员 "${dep}" 不存在，已忽略该依赖`);
++          continue;
++        }
++        upstreamIds.push(depId);
++      }
++      if (upstreamIds.length > 0) {
++        const res = updateStructuredTask(selfId, { addBlockedBy: upstreamIds });
++        if (!res.ok) log.warn("TEAM_TASKS", `成员 "${m.name}" 依赖建边失败: ${res.error}`);
++      }
++    }
++    persistTeamTasks(this.teamName, this.opts.baseDir);
++  }
++
++  /** 某成员的所有依赖是否都已完成（据共享任务列表判断）。无任务映射时视为无依赖。 */
++  private isMemberUnblocked(memberName: string): boolean {
++    const taskId = this.memberTaskIds.get(memberName);
++    if (!taskId) return true;
++    const task = getStructuredTask(taskId);
++    if (!task) return true;
++    return isTaskUnblocked(task);
++  }
++
++  /** 标记成员任务进入执行态（认领），落盘。 */
++  private markMemberRunning(memberName: string): void {
++    const taskId = this.memberTaskIds.get(memberName);
++    if (!taskId) return;
++    updateStructuredTask(taskId, { status: "in_progress", owner: memberName });
++    persistTeamTasks(this.teamName, this.opts.baseDir);
++  }
++
++  /** 标记成员任务终态（成功=completed / 失败保持 in_progress→仍标 completed 释放依赖，但记 metadata.failed），落盘。 */
++  private markMemberDone(memberName: string, success: boolean): void {
++    const taskId = this.memberTaskIds.get(memberName);
++    if (!taskId) return;
++    // 完成（含失败）都置 completed 以解锁下游——失败细节记入 metadata，避免整图死锁。
++    updateStructuredTask(taskId, { status: "completed", metadata: { failed: !success } });
++    persistTeamTasks(this.teamName, this.opts.baseDir);
++  }
++
++  /**
++   * 等待某成员的依赖全部完成（轮询共享任务列表）。
++   * 已解锁立即返回；否则每 200ms 检查一次，直到解锁或 signal abort。
++   */
++  private async waitForMemberUnblocked(memberName: string, signal?: AbortSignal): Promise<void> {
++    if (this.isMemberUnblocked(memberName)) return;
++    return new Promise<void>((resolve, reject) => {
++      const timer = setInterval(() => {
++        if (signal?.aborted) {
++          clearInterval(timer);
++          reject(new Error("等待依赖时被中止"));
++          return;
++        }
++        if (this.isMemberUnblocked(memberName)) {
++          clearInterval(timer);
++          resolve();
++        }
++      }, 200);
++      timer.unref?.();
++    });
++  }
++
+   /**
+    * 执行所有成员任务，返回汇总结果。
+    *
+@@ -126,6 +257,10 @@ export class TeamManager {
+     const gitRoot = findGitRootForAgent(process.cwd());
+     const ts = stampMs ?? 0;
+ 
++    // P2-2：把成员任务建成共享任务列表（结构化任务图），落盘 + 依赖建边。
++    // 成员完成时 markTaskCompleted 触发依赖解锁，dependsOn 的成员据此等待上游。
++    this.seedTaskList();
++
+     // B7：隔离成员经 SubAgentTask.cwd 走 withAgentCwd（AsyncLocalStorage），
+     // 不再用 process.chdir，因此隔离成员也可与非隔离成员一起并发执行（无 chdir 竞态）。
+     // D 模式兜底：team 级硬超时，防止单个成员 hang 导致整个 Promise.all 永久阻塞
+@@ -152,6 +287,12 @@ export class TeamManager {
+         teamTimeoutPromise,
+       ]);
+ 
++      // P1-3：leader drain 自己的收件箱，消费成员回写的 result 消息（真正闭合通信环——
++      // 成员 send(to:"leader") 至此有了确定的消费方，不再是只写不读的伪通信）。
++      // 结果本身已通过返回值收集，此处 drain 用于：① 让 mailbox 状态归零（标记已读）；
++      // ② 供 leaderMessages 观测/回放（如后续 P3-2 三态显示模式消费）。
++      this.leaderMessages = this.mailbox.drain("leader");
++
+       // 保持成员定义顺序
+       const byName = new Map<string, TeammateResult>();
+       for (const r of results) byName.set(r.name, r);
+@@ -174,7 +315,11 @@ export class TeamManager {
+     const { SubAgent } = await import("../agent/sub-agent.ts");
+     const { WorktreeManager } = await import("../worktree/manager.ts");
+ 
+-    const color = assignAgentColor(`${this.teamName}:${member.name}`);
++    // P1-2：优先用 agent 类型的 frontmatter 显式声明色（getAgentColor 内部回退哈希分配）；
++    // 未声明色的 agent 仍按「团队名:成员名」哈希分配，保证同一成员颜色稳定。
++    const color = member.type
++      ? getAgentColor(member.type)
++      : assignAgentColor(`${this.teamName}:${member.name}`);
+     const result: TeammateResult = {
+       name: member.name,
+       success: false,
+@@ -182,6 +327,21 @@ export class TeamManager {
+       color,
+     };
+ 
++    // P2-2：若本成员依赖其他成员，先等上游全部完成再启动（据共享任务列表判断）。
++    // 无依赖成员立即通过，与原并发行为一致。等待期间 signal abort 则抛出，由外层捕获。
++    if (member.dependsOn && member.dependsOn.length > 0) {
++      try {
++        await this.waitForMemberUnblocked(member.name, signal ?? teamSignal);
++      } catch (err: any) {
++        result.output = `成员 ${member.name} 等待依赖时被中止: ${err.message}`;
++        this.markMemberDone(member.name, false);
++        return result;
++      }
++    }
++
++    // P2-2：认领任务（置 in_progress + owner），落盘。
++    this.markMemberRunning(member.name);
++
+     // 投递初始任务到成员邮箱（可回放）
+     this.mailbox.send({
+       from: "leader",
+@@ -229,6 +389,15 @@ export class TeamManager {
+           description: `[${this.teamName}] ${member.name}`,
+           prompt: member.task,
+           cwd: isolatedCwd, // B7: withAgentCwd 隔离，并发安全
++          // P1-3：双向通信——每轮开始时 drain 本成员收件箱里的未读消息
++          //（来自 leader 或其他 peer 成员），格式化后由子代理注入上下文。
++          drainInbox: () => {
++            const msgs = this.mailbox.drain(member.name);
++            return msgs.map((m) => {
++              const kind = m.kind ? `(${m.kind})` : "";
++              return `来自 ${m.from}${kind}：${m.content}`;
++            });
++          },
+         },
+         memberSignal,
+       );
+@@ -247,6 +416,10 @@ export class TeamManager {
+       result.output = `成员 ${member.name} 执行失败: ${err.message}`;
+       log.error("SWARM", result.output);
+     } finally {
++      // P2-2：标记成员任务终态（completed 解锁下游依赖），落盘。放在最前——
++      // 让等待本成员的 dependsOn 成员尽早解锁，不必等 worktree 清理/hook 触发完成。
++      this.markMemberDone(member.name, result.success);
++
+       if (manager && worktreeSession) {
+         try {
+           await manager.remove(worktreeSession, false); // 无改动才删
+diff --git a/src/task/structured-task-store.ts b/src/task/structured-task-store.ts
+index 0058436..759723d 100644
+--- a/src/task/structured-task-store.ts
++++ b/src/task/structured-task-store.ts
+@@ -190,6 +190,70 @@ export function isTaskUnblocked(task: StructuredTask): boolean {
+   });
+ }
+ 
++// ============================================================
++// P2-2：持久化快照 + 认领调度（供 swarm team 共享任务列表用）
++// ============================================================
++
++/** 序列化当前全部任务为可落盘的快照（深拷贝，隔离外部改动）。 */
++export function serializeStructuredTasks(): StructuredTask[] {
++  return getAllStructuredTasks().map((t) => ({
++    ...t,
++    blocks: [...t.blocks],
++    blockedBy: [...t.blockedBy],
++    metadata: { ...t.metadata },
++  }));
++}
++
++/**
++ * 从快照恢复任务（P2-2 进程重启/团队接续）。替换当前内存态，
++ * 并把 idCounter 重置为快照里的最大数字 ID，避免新建任务 ID 撞车。
++ * 非法条目（缺 id/subject）跳过。
++ */
++export function restoreStructuredTasks(snapshot: StructuredTask[]): void {
++  tasks.clear();
++  idCounter = 0;
++  let maxId = 0;
++  for (const t of snapshot) {
++    if (!t || typeof t.id !== "string" || typeof t.subject !== "string") continue;
++    tasks.set(t.id, {
++      ...t,
++      blocks: Array.isArray(t.blocks) ? [...t.blocks] : [],
++      blockedBy: Array.isArray(t.blockedBy) ? [...t.blockedBy] : [],
++      metadata: t.metadata && typeof t.metadata === "object" ? { ...t.metadata } : {},
++    });
++    const n = Number(t.id);
++    if (Number.isFinite(n) && n > maxId) maxId = n;
++  }
++  idCounter = maxId;
++}
++
++/**
++ * 认领下一个可执行任务（P2-2 team 成员自协调调度）。
++ *
++ * 挑选首个 `pending` 且 `isTaskUnblocked`（所有上游已完成）的任务，
++ * 置 owner + in_progress 后返回；无可认领任务返回 undefined。
++ * 按数字 ID 升序挑选，保证认领顺序稳定可预测。
++ */
++export function claimNextUnblockedTask(owner: string): StructuredTask | undefined {
++  for (const task of getAllStructuredTasks()) {
++    if (task.status !== "pending") continue;
++    if (!isTaskUnblocked(task)) continue;
++    task.owner = owner;
++    task.status = "in_progress";
++    task.updatedAt = Date.now();
++    return task;
++  }
++  return undefined;
++}
++
++/** 是否还有未完成（pending/in_progress）的任务。供调度循环判断终止。 */
++export function hasUnfinishedTasks(): boolean {
++  for (const t of tasks.values()) {
++    if (t.status === "pending" || t.status === "in_progress") return true;
++  }
++  return false;
++}
++
+ /** 测试辅助：清空全部结构化任务并重置 ID 计数。 */
+ export function __clearStructuredTasks(): void {
+   tasks.clear();
+diff --git a/src/task/team-task-store.ts b/src/task/team-task-store.ts
+new file mode 100644
+index 0000000..e2b52e4
+--- /dev/null
++++ b/src/task/team-task-store.ts
+@@ -0,0 +1,70 @@
++/**
++ * 团队任务列表持久化（P2-2，对齐 CC ~/.claude/tasks/{team}/）
++ *
++ * 把 structured-task-store 的内存态任务落盘到 `.sid-code/tasks/{team-name}/tasks.json`，
++ * 供 swarm team 作为「共享任务列表」调度底座：进程重启可恢复、成员按依赖认领任务。
++ *
++ * 原子写（temp + rename）防并发/崩溃时半写损坏。
++ */
++
++import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync } from "fs";
++import { join } from "path";
++import { getLogger } from "../debug/logger.ts";
++import {
++  serializeStructuredTasks,
++  restoreStructuredTasks,
++  type StructuredTask,
++} from "./structured-task-store.ts";
++
++/** 团队名安全化（与 swarm/team.ts safeName 一致口径），防路径穿越。 */
++function safeName(s: string): string {
++  return s.replace(/[^a-zA-Z0-9_-]/g, "_");
++}
++
++/** 团队任务文件路径：{baseDir}/.sid-code/tasks/{team}/tasks.json */
++export function teamTasksPath(teamName: string, baseDir?: string): string {
++  const base = baseDir ?? process.cwd();
++  return join(base, ".sid-code", "tasks", safeName(teamName), "tasks.json");
++}
++
++/**
++ * 把当前内存态任务快照原子落盘到团队任务文件。
++ * 写失败 warn 但不抛（持久化是增益，不应阻断 team 执行）。
++ */
++export function persistTeamTasks(teamName: string, baseDir?: string): void {
++  const path = teamTasksPath(teamName, baseDir);
++  const snapshot = serializeStructuredTasks();
++  try {
++    const dir = join(path, "..");
++    mkdirSync(dir, { recursive: true });
++    // 原子写：先写临时文件再 rename（rename 在同一文件系统内原子），避免读到半写内容。
++    const tmp = `${path}.${process.pid}.tmp`;
++    writeFileSync(tmp, JSON.stringify({ version: 1, teamName, tasks: snapshot }, null, 2));
++    renameSync(tmp, path);
++  } catch (err: any) {
++    getLogger().warn("TEAM_TASKS", `团队任务落盘失败 (${teamName}): ${err?.message ?? err}`);
++  }
++}
++
++/**
++ * 从团队任务文件恢复任务到内存态。
++ * 文件不存在返回 false（无历史，全新团队）；损坏则 warn 后返回 false（降级为全新）。
++ * 成功恢复返回 true。
++ */
++export function loadTeamTasks(teamName: string, baseDir?: string): boolean {
++  const path = teamTasksPath(teamName, baseDir);
++  if (!existsSync(path)) return false;
++  try {
++    const raw = readFileSync(path, "utf-8");
++    const parsed = JSON.parse(raw) as { tasks?: StructuredTask[] };
++    if (!parsed || !Array.isArray(parsed.tasks)) {
++      getLogger().warn("TEAM_TASKS", `团队任务文件结构非法 (${teamName})，忽略`);
++      return false;
++    }
++    restoreStructuredTasks(parsed.tasks);
++    return true;
++  } catch (err: any) {
++    getLogger().warn("TEAM_TASKS", `团队任务文件读取失败 (${teamName})，降级为全新: ${err?.message ?? err}`);
++    return false;
++  }
++}
+diff --git a/src/tool/send-message.ts b/src/tool/send-message.ts
+index 105fcb4..506f981 100644
+--- a/src/tool/send-message.ts
++++ b/src/tool/send-message.ts
+@@ -39,12 +39,19 @@ export class SendMessageTool implements Tool {
+ 
+   private providerRegistry?: ProviderRegistry;
+   private toolRegistry?: ToolRegistry;
++  /** P2-3：父会话 id，用于定位子代理 sidechain transcript 做真恢复。由 app.ts 鸭子类型注入。 */
++  private parentSessionId?: string;
+ 
+   constructor(providerRegistry?: ProviderRegistry, toolRegistry?: ToolRegistry) {
+     this.providerRegistry = providerRegistry;
+     this.toolRegistry = toolRegistry;
+   }
+ 
++  /** P2-3：注入父会话 id（与 SubAgentTool 同款，app.ts wireParentSessionId 统一接线）。 */
++  setParentSessionId(sessionId: string | undefined): void {
++    this.parentSessionId = sessionId;
++  }
++
+   name(): string {
+     return "send_message";
+   }
+@@ -95,14 +102,15 @@ export class SendMessageTool implements Tool {
+   }
+ 
+   /**
+-   * Resume 已终态 Agent：基于原任务上下文(prompt + output)重启 Agent。
++   * Resume 已终态 Agent（P2-3，对标 cc resumeAgent 真恢复）。
+    *
+-   * 对标 cc resumeAgent：不解析完整 JSONL transcript（复杂度高），
+-   * 而是用轻量续传——把原 prompt + 原 output 作为上下文前缀，新消息作为续传指令，
+-   * 创建新的后台 agent task 继续执行。调用方得到新 task_id 便于追踪。
++   * 优先从子代理 sidechain JSONL transcript 重建**完整对话历史**（含中间轮工具调用/结论），
++   * 经 forkMessages 灌入新子代理，让 resume 的 agent 看到自己之前的完整上下文再续接新指令。
+    *
+-   * 这比 cc 的"从完整 transcript 恢复"轻量得多，但覆盖了主要用例：
+-   * 用户觉得子代理做完后"还差一步"时，能直接续传而不是从头再来。
++   * transcript 缺失/损坏/无 parentSessionId 时，fail-open 降级到**轻量续传**：
++   * 把原 prompt + 原 output 拼成上下文前缀 + 新指令起新 task（覆盖「还差一步」主用例）。
++   *
++   * 两条路径都创建新的后台 agent task，调用方得到新 task_id 便于追踪。
+    */
+   private async resumeAgent(task: LocalAgentTaskState, message: string): Promise<ToolResult> {
+     const log = getLogger();
+@@ -117,7 +125,28 @@ export class SendMessageTool implements Tool {
+       };
+     }
+ 
+-    // 构建续传 prompt：原上下文 + 原输出 + 新指令
++    // P2-3：尝试从 sidechain transcript 重建完整历史（真恢复）。成功则走 forkMessages 续跑。
++    let forkMessages: { role: "user" | "assistant"; content: import("../llm/types.ts").ContentBlock[] }[] | undefined;
++    let resumeMode: "transcript" | "lightweight" = "lightweight";
++    if (this.parentSessionId) {
++      try {
++        const { reconstructSidechainMessages } = await import("../session/sidechain.ts");
++        const reconstructed = reconstructSidechainMessages(this.parentSessionId, task.id);
++        if (reconstructed && reconstructed.messages.length > 0) {
++          // 在完整历史末尾追加新的续传指令（user 消息）。
++          forkMessages = [
++            ...reconstructed.messages,
++            { role: "user", content: [{ type: "text", text: `[续传指令] ${message}` }] },
++          ];
++          resumeMode = "transcript";
++          log.info("SUBAGENT", `Resume(真恢复): 从 transcript 重建 ${reconstructed.messages.length} 条消息`);
++        }
++      } catch (err: any) {
++        log.warn("SUBAGENT", `Resume transcript 重建失败，降级轻量续传: ${err?.message ?? err}`);
++      }
++    }
++
++    // 构建续传 prompt：原上下文 + 原输出 + 新指令（轻量续传路径 / transcript 路径的 description 用）
+     const originalOutput = task.result?.output ?? task.error ?? "(无输出)";
+     const resumePrompt = [
+       `[续传上下文] 你之前执行了以下任务并已完成：`,
+@@ -146,11 +175,14 @@ export class SendMessageTool implements Tool {
+     void (async () => {
+       try {
+         const subAgent = SubAgent.fromRegistry(this.providerRegistry!, this.toolRegistry!);
++        if (this.parentSessionId) subAgent.setParentSessionId(this.parentSessionId);
+         const result = await subAgent.execute(
+           {
+             type: task.agentType,
+             description: `[Resume] ${message.slice(0, 80)}`,
+-            prompt: resumePrompt,
++            // transcript 恢复：走 forkMessages（完整历史）；轻量续传：走拼接 prompt。
++            prompt: forkMessages ? message : resumePrompt,
++            forkMessages,
+           },
+           abortController.signal,
+         );
+@@ -166,15 +198,16 @@ export class SendMessageTool implements Tool {
+       }
+     })();
+ 
+-    log.info("SUBAGENT", `Resume agent: 原 ${task.id} → 新 ${newTaskId} (${task.agentType})`);
++    log.info("SUBAGENT", `Resume agent(${resumeMode}): 原 ${task.id} → 新 ${newTaskId} (${task.agentType})`);
+ 
+     return {
+       output: JSON.stringify({
+         status: "resumed",
++        resume_mode: resumeMode, // transcript=完整历史真恢复 / lightweight=轻量续传
+         original_agent_id: task.id,
+         new_task_id: newTaskId,
+         agent_type: task.agentType,
+-        message: `已恢复 Agent 执行（新 task_id: ${newTaskId}），完成后会通知你`,
++        message: `已恢复 Agent 执行（新 task_id: ${newTaskId}，模式: ${resumeMode}），完成后会通知你`,
+       }),
+     };
+   }
+diff --git a/src/tool/team-create.ts b/src/tool/team-create.ts
+index 1f9fe78..588ef56 100644
+--- a/src/tool/team-create.ts
++++ b/src/tool/team-create.ts
+@@ -23,6 +23,10 @@ const teamCreateSchema = lazySchema(() =>
+           type: z.string().describe("子代理类型（见 sub_agent 工具描述中列出的可用类型）"),
+           task: z.string().describe("分配给该成员的任务"),
+           isolated: z.boolean().optional().describe("是否在独立 Worktree 执行（会改文件的成员应为 true，默认 true）"),
++          dependsOn: z
++            .array(z.string())
++            .optional()
++            .describe("依赖的其他成员名列表：这些成员完成后本成员才开始（用于有序编排，如测试成员依赖实现成员）。不填=无依赖，立即并发"),
+         }),
+       )
+       .describe("团队成员列表"),
+@@ -104,6 +108,19 @@ export class TeamCreateTool implements Tool {
+       names.add(m.name);
+     }
+ 
++    // P2-2：校验 dependsOn 引用的成员名都存在（引用不存在的成员是明显的编排错误，早失败）。
++    for (const m of params.members) {
++      if (!m.dependsOn) continue;
++      for (const dep of m.dependsOn) {
++        if (!names.has(dep)) {
++          return { output: `错误: 成员 "${m.name}" 的依赖 "${dep}" 不是有效成员名`, isError: true };
++        }
++        if (dep === m.name) {
++          return { output: `错误: 成员 "${m.name}" 不能依赖自己`, isError: true };
++        }
++      }
++    }
++
+     try {
+       const team = new TeamManager({
+         teamName: params.team_name,
+diff --git a/src/ui/components/AgentsDialog.tsx b/src/ui/components/AgentsDialog.tsx
+index c4edeb8..b627456 100644
+--- a/src/ui/components/AgentsDialog.tsx
++++ b/src/ui/components/AgentsDialog.tsx
+@@ -4,11 +4,26 @@ import Text from "../../ink/components/Text.js";
+ import { theme } from "../semantic-colors.ts";
+ import { useKeypress, KeypressPriority, type Key } from "../contexts/KeypressContext.tsx";
+ import { ARROW_PROMPT } from "../constants/figures.ts";
++import { getActiveAgentDefinitions, type AgentDefinition } from "../../agent/agent-definition.ts";
+ 
+ interface AgentsDialogProps {
+   onClose: () => void;
+ }
+ 
++/** agent 来源 → 展示标签（built-in / 用户 / 插件）。 */
++function sourceLabel(source: AgentDefinition["source"]): string {
++  switch (source) {
++    case "built-in":
++      return "内置";
++    case "userSettings":
++      return "用户";
++    case "plugin":
++      return "插件";
++    default:
++      return "";
++  }
++}
++
+ export const AgentsDialog: React.FC<AgentsDialogProps> = ({ onClose }) => {
+   useKeypress(KeypressPriority.Critical, (key: Key) => {
+     if (key.name === "escape") {
+@@ -18,15 +33,49 @@ export const AgentsDialog: React.FC<AgentsDialogProps> = ({ onClose }) => {
+     return false;
+   });
+ 
++  // 列出当前活跃的全部 agent（built-in + custom + plugin），单一真相源。
++  const agents = getActiveAgentDefinitions();
++
+   return (
+     <Box flexDirection="column" borderStyle="round" borderColor={theme.ui.active} paddingX={1} paddingY={0}>
+-      <Text bold color={theme.ui.active}>{ARROW_PROMPT} Agents</Text>
++      <Text bold color={theme.ui.active}>{ARROW_PROMPT} Agents（{agents.length}）</Text>
++
+       <Box marginTop={1} flexDirection="column" gap={0}>
+-        <Text>Agent 类型在 <Text color={theme.ui.active}>.sid-code/agents/</Text> 或 <Text color={theme.ui.active}>~/.sid-code/agents/</Text> 目录下以 .md 文件定义</Text>
+-        <Box marginTop={1}>
+-          <Text color={theme.text.secondary}>每个 .md 文件对应一个 Agent 类型，文件内容即该 Agent 的系统提示词与配置。</Text>
+-        </Box>
++        {agents.map((a) => {
++          // 元信息标签：来源 + 可选 model / modelTier / skills 数。
++          const tags: string[] = [];
++          const src = sourceLabel(a.source);
++          if (src) tags.push(src);
++          if (a.model) tags.push(`model:${a.model}`);
++          else if (a.modelTier && a.modelTier !== "default") tags.push(`档位:${a.modelTier}`);
++          if (a.skills && a.skills.length > 0) tags.push(`skills:${a.skills.length}`);
++          if (a.color) tags.push(`色:${a.color}`);
++
++          return (
++            <Box key={a.agentType} flexDirection="row">
++              <Box flexShrink={0} width={22}>
++                <Text color={theme.ui.active}>{a.agentType}</Text>
++              </Box>
++              <Box flexGrow={1} flexDirection="column">
++                <Text wrap="truncate-end" color={theme.text.primary}>{a.description || a.whenToUse}</Text>
++                {tags.length > 0 ? (
++                  <Text color={theme.text.secondary}>{tags.join("  ·  ")}</Text>
++                ) : null}
++              </Box>
++            </Box>
++          );
++        })}
++      </Box>
++
++      <Box marginTop={1} flexDirection="column">
++        <Text color={theme.text.secondary}>
++          Agent 类型在 <Text color={theme.ui.active}>.sid-code/agents/</Text> 或 <Text color={theme.ui.active}>~/.sid-code/agents/</Text> 目录下以 .md 文件定义
++        </Text>
++        <Text color={theme.text.secondary}>
++          frontmatter 支持 model / skills / color / permissionMode / background / isolation 等字段
++        </Text>
+       </Box>
++
+       <Box marginTop={1}><Text dimColor italic>Esc 关闭</Text></Box>
+     </Box>
+   );

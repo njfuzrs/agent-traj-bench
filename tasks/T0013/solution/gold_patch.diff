@@ -1,0 +1,1389 @@
+diff --git a/src/command/mcp-enhanced.ts b/src/command/mcp-enhanced.ts
+index 25f3a1b..07730c0 100644
+--- a/src/command/mcp-enhanced.ts
++++ b/src/command/mcp-enhanced.ts
+@@ -42,6 +42,7 @@ export class MCPEnhancedCommand implements Command {
+       new MCPEnableCommand(),
+       new MCPDisableCommand(),
+       new MCPTestCommand(),
++      new MCPAuthenticateCommand(),
+       new MCPPromptsCommand(),
+       new MCPResourcesCommand(),
+     ];
+@@ -390,6 +391,47 @@ class MCPTestCommand implements Command {
+   }
+ }
+ 
++/** /mcp authenticate - 触发远程 MCP 服务器的 OAuth 授权 */
++class MCPAuthenticateCommand implements Command {
++  name() { return "authenticate"; }
++  aliases() { return ["auth", "login"]; }
++  description() { return "对配置了 OAuth 的远程 MCP 服务器发起授权"; }
++
++  async execute(args: string, ctx: AppContext): Promise<CommandResult> {
++    const parser = new ArgParser(args);
++    const name = parser.get(0);
++
++    if (!ctx.mcpManager) {
++      return { kind: "error", message: "MCP 管理器未初始化" };
++    }
++
++    const oauthServers = ctx.mcpManager.listOAuthServers();
++
++    if (!name) {
++      if (oauthServers.length === 0) {
++        return {
++          kind: "message",
++          message: "没有配置 OAuth 的 MCP 服务器\n在服务器配置中添加 \"oauth\": {} 即可启用 OAuth",
++        };
++      }
++      return {
++        kind: "message",
++        message: `用法: /mcp authenticate <name>\n可授权的服务器: ${oauthServers.join(", ")}`,
++      };
++    }
++
++    try {
++      const tools = await ctx.mcpManager.authenticate(name);
++      return {
++        kind: "message",
++        message: `${name} OAuth 授权成功，注册了 ${tools.length} 个工具`,
++      };
++    } catch (err: any) {
++      return { kind: "error", message: `授权失败: ${err.message}` };
++    }
++  }
++}
++
+ /** /mcp prompts - 列出所有提示词 */
+ class MCPPromptsCommand implements Command {
+   name() { return "prompts"; }
+diff --git a/src/config/config.ts b/src/config/config.ts
+index d1620ba..8af7b0a 100644
+--- a/src/config/config.ts
++++ b/src/config/config.ts
+@@ -28,6 +28,22 @@ export interface MCPServerConfig {
+   ideName?: string;            // IDE 名称（VS Code / Cursor / JetBrains 等）
+   ideRunningInWindows?: boolean; // IDE 是否运行在 Windows 上（WSL 场景）
+   scope?: "user" | "project" | "local" | "dynamic"; // 配置来源标记
++  // ─── OAuth 2.1 接入（远程 MCP：Linear / Sentry / claude.ai 等，对标 Claude Code auth.ts） ───
++  oauth?: MCPOAuthConfig;      // 启用/配置 OAuth；为对象（含空对象 {}）即视为启用
++}
++
++/** MCP OAuth 配置（远程 HTTP/SSE 服务器） */
++export interface MCPOAuthConfig {
++  /** 预配置 client_id（跳过动态注册，对标 CC oauth.clientId） */
++  clientId?: string;
++  /** 机密客户端的 client_secret（公共客户端留空，走 PKCE） */
++  clientSecret?: string;
++  /** 直接指定授权服务器 metadata URL，跳过 RFC 9728/8414 发现（必须 https） */
++  authServerMetadataUrl?: string;
++  /** 请求的 scope（空格分隔；留空则用授权服务器 metadata 通告的 scope） */
++  scope?: string;
++  /** 固定本地回调端口（默认随机选取空闲端口） */
++  callbackPort?: number;
+ }
+ 
+ /** Hook 配置（支持 command 和 url 两种类型） */
+diff --git a/src/config/paths.ts b/src/config/paths.ts
+index a7234d2..7288987 100644
+--- a/src/config/paths.ts
++++ b/src/config/paths.ts
+@@ -117,6 +117,11 @@ export const sidPaths = {
+   // ── IDE ──
+   ideLockDir: () => sidHomePath("ide"),
+ 
++  // ── MCP OAuth 凭据存储（access/refresh token、动态注册 client、discovery 缓存） ──
++  mcpOAuth: () => sidHomePath("mcp-oauth.json"),
++  /** MCP token 刷新跨进程互斥锁目录 */
++  mcpOAuthLocks: () => sidHomePath("state", "mcp-oauth-locks"),
++
+   // ── 持久 Shell 会话：shell 环境快照 ──
+   shellSnapshots: () => sidHomePath("shell-snapshots"),
+ 
+diff --git a/src/mcp/manager.ts b/src/mcp/manager.ts
+index a2f2295..87628d4 100644
+--- a/src/mcp/manager.ts
++++ b/src/mcp/manager.ts
+@@ -17,6 +17,12 @@ import { expandEnvVars } from "./env-expansion.ts";
+ import { getLogger } from "../debug/logger.ts";
+ import { join } from "path";
+ import { ensureSidTempDir } from "../utils/temp-dir.ts";
++import {
++  isOAuthEnabled,
++  getValidAccessToken,
++  performOAuthFlow,
++  NeedsAuthorizationError,
++} from "./oauth.ts";
+ 
+ /** 重连配置 */
+ const MAX_RECONNECT_ATTEMPTS = 5;
+@@ -185,6 +191,12 @@ export class MCPManager {
+   private serverStates = new Map<string, ServerState>();
+   /** 工具变更时的回调（供外部刷新工具列表） */
+   onToolsRefresh?: (serverName: string, tools: Tool[]) => void;
++  /**
++   * OAuth 需要用户授权时的回调（供 UI 展示授权 URL / 打开浏览器）。
++   * 返回的 Promise 由实现方决定何时 resolve（通常立即 resolve，授权在后台完成）。
++   * 未设置时，OAuth 流程会把 URL 写入日志，用户需手动打开。
++   */
++  onOAuthAuthorizationUrl?: (serverName: string, url: string) => void;
+ 
+   /** 连接所有配置的 MCP 服务器（本地/远程分流并发控制） */
+   async connectAll(servers: Record<string, MCPServerConfig>): Promise<Tool[]> {
+@@ -247,7 +259,27 @@ export class MCPManager {
+ 
+   /** 连接单个 MCP 服务器 */
+   async connect(name: string, config: MCPServerConfig): Promise<Tool[]> {
+-    const transport = this.createTransport(name, config);
++    // OAuth 服务器：连接前确保拿到有效 token；首连/凭据失效时触发交互式授权
++    if (isOAuthEnabled(config) && config.transport !== "stdio") {
++      await this.ensureOAuthToken(name, config);
++    }
++
++    try {
++      return await this.doConnect(name, config);
++    } catch (err: any) {
++      // 401 / 需授权：触发一次交互式 OAuth 后重连
++      if (isOAuthEnabled(config) && config.transport !== "stdio" && this.isAuthError(err)) {
++        getLogger().info("MCP", `${name} 返回未授权，启动 OAuth 授权流程`);
++        await this.runOAuthFlow(name, config);
++        return await this.doConnect(name, config);
++      }
++      throw err;
++    }
++  }
++
++  /** 实际建立连接（创建传输 + 初始化 + 发现工具/资源/提示词 + 健康检查） */
++  private async doConnect(name: string, config: MCPServerConfig): Promise<Tool[]> {
++    const transport = await this.createTransport(name, config);
+     const timeout = config.timeout ?? 30000;
+     const retries = config.retries ?? 2;
+     const client = new MCPClient(transport, { timeout, retries });
+@@ -282,14 +314,72 @@ export class MCPManager {
+     return tools;
+   }
+ 
++  /** 判断错误是否为「未授权」（401 / NeedsAuthorizationError） */
++  private isAuthError(err: unknown): boolean {
++    if (err instanceof NeedsAuthorizationError) return true;
++    const msg = (err as Error)?.message ?? "";
++    return /\b401\b/.test(msg) || /unauthorized/i.test(msg);
++  }
++
++  /**
++   * 确保 OAuth 服务器有可用 token。
++   * 已有有效 token（或可静默刷新）→ 直接返回；首连无凭据 → 触发交互式授权。
++   */
++  private async ensureOAuthToken(name: string, config: MCPServerConfig): Promise<void> {
++    try {
++      await getValidAccessToken(name, config);
++    } catch (err) {
++      if (err instanceof NeedsAuthorizationError) {
++        await this.runOAuthFlow(name, config);
++      } else {
++        throw err;
++      }
++    }
++  }
++
++  /** 执行交互式 OAuth 授权流程（展示/打开授权 URL，等待用户完成） */
++  private async runOAuthFlow(name: string, config: MCPServerConfig): Promise<void> {
++    const log = getLogger();
++    await performOAuthFlow(
++      name,
++      config,
++      (url) => {
++        if (this.onOAuthAuthorizationUrl) {
++          this.onOAuthAuthorizationUrl(name, url);
++        } else {
++          log.info("MCP", `请在浏览器打开以下 URL 完成 ${name} 的 OAuth 授权:\n${url}`);
++        }
++      },
++    );
++  }
++
+   /** 创建传输层 */
+-  private createTransport(name: string, config: MCPServerConfig) {
++  private async createTransport(name: string, config: MCPServerConfig) {
+     const timeout = config.timeout ?? 30000;
+ 
++    // OAuth 服务器：注入 access token 为 Authorization 头（优先于静态 authToken）
++    let oauthHeader: Record<string, string> | undefined;
++    if (isOAuthEnabled(config) && config.transport !== "stdio") {
++      try {
++        const token = await getValidAccessToken(name, config);
++        oauthHeader = { Authorization: `Bearer ${token}` };
++      } catch (err) {
++        // 拿不到 token 时不注入——交给 connect 的 401 重试逻辑触发授权
++        if (!(err instanceof NeedsAuthorizationError)) {
++          getLogger().warn("MCP", `${name} 获取 OAuth token 失败: ${(err as Error).message}`);
++        }
++      }
++    }
++
+     // IDE 动态注册场景：authToken 注入为 Authorization 头（对标 Claude Code sse-ide/ws-ide）
+-    const headers: Record<string, string> | undefined = config.authToken
+-      ? { ...config.headers, Authorization: `Bearer ${config.authToken}` }
+-      : config.headers;
++    const headers: Record<string, string> | undefined =
++      oauthHeader || config.authToken || config.headers
++        ? {
++            ...config.headers,
++            ...(config.authToken ? { Authorization: `Bearer ${config.authToken}` } : {}),
++            ...oauthHeader, // OAuth token 优先级最高
++          }
++        : undefined;
+ 
+     if (config.transport === "stdio") {
+       if (!config.command) {
+@@ -711,4 +801,46 @@ export class MCPManager {
+   getClient(serverName: string): MCPClient | undefined {
+     return this.clients.get(serverName);
+   }
++
++  /**
++   * 手动触发指定服务器的 OAuth 授权（供 /mcp authenticate 命令）。
++   * 跑完交互式授权流程后重连，把真实工具刷新出来。
++   * @returns 授权并重连后注册的工具列表
++   * @throws 服务器未配置 OAuth、或非远程传输时抛错
++   */
++  async authenticate(name: string): Promise<Tool[]> {
++    const config = this.serverConfigs.get(name);
++    if (!config) {
++      throw new Error(`未找到 MCP 服务器 "${name}"`);
++    }
++    if (!isOAuthEnabled(config)) {
++      throw new Error(`MCP 服务器 "${name}" 未配置 OAuth（在配置中添加 oauth 字段）`);
++    }
++    if (config.transport === "stdio") {
++      throw new Error(`stdio 传输的服务器 "${name}" 不支持 OAuth`);
++    }
++
++    // 先断开现有连接
++    this.disconnect(name);
++    this.serverConfigs.set(name, config);
++
++    // 跑授权流程
++    await this.runOAuthFlow(name, config);
++
++    // 重连并刷新工具
++    this.setStatus(name, MCPConnectionStatus.CONNECTING);
++    const tools = await this.doConnect(name, config);
++    this.setStatus(name, MCPConnectionStatus.CONNECTED);
++    this.onToolsRefresh?.(name, tools);
++    return tools;
++  }
++
++  /** 列出所有配置了 OAuth 的服务器名 */
++  listOAuthServers(): string[] {
++    const result: string[] = [];
++    for (const [name, config] of this.serverConfigs) {
++      if (isOAuthEnabled(config)) result.push(name);
++    }
++    return result;
++  }
+ }
+diff --git a/src/mcp/oauth-callback-server.ts b/src/mcp/oauth-callback-server.ts
+new file mode 100644
+index 0000000..a31b337
+--- /dev/null
++++ b/src/mcp/oauth-callback-server.ts
+@@ -0,0 +1,188 @@
++/**
++ * MCP OAuth 本地回调服务器
++ *
++ * 在 localhost 启动 HTTP 服务器，监听 /callback 路径接收授权码。
++ * 对标 Claude Code oauthPort.ts + performMCPOAuthFlow 中 createServer 片段。
++ *
++ * 设计：
++ * - 随机或指定端口（RFC 8252 §7.3：loopback 重定向可用任意端口）
++ * - CSRF state 校验（授权服务器回传的 state 必须匹配发出时的值）
++ * - 超时 + abort 信号清理
++ * - 仅绑定 127.0.0.1（不暴露到外网）
++ */
++
++import { createServer, type Server } from "node:http";
++import { parse as parseUrl } from "node:url";
++import { getLogger } from "../debug/logger.ts";
++
++/** 端口范围（非 Windows 平台，对标 CC） */
++const PORT_RANGE_MIN = 49152;
++const PORT_RANGE_MAX = 65535;
++const FALLBACK_PORT = 3118;
++const MAX_PORT_ATTEMPTS = 100;
++
++/** 回调服务器句柄 */
++export interface CallbackServerHandle {
++  /** 回调 redirect URI（含端口，如 http://localhost:52341/callback） */
++  redirectUri: string;
++  /** 实际监听端口 */
++  port: number;
++  /**
++   * 等待授权码到达（阻塞 Promise）。
++   * @param expectedState 发出授权请求时生成的 CSRF state
++   * @param timeoutMs 超时毫秒
++   * @param signal 外部 abort 信号
++   */
++  waitForCode(expectedState: string, timeoutMs: number, signal?: AbortSignal): Promise<string>;
++  /** 手动关闭服务器（不论是否已收到回调） */
++  close(): void;
++}
++
++/**
++ * 探测端口是否可用（用 createServer 短暂绑定后释放）。
++ * Bun 下 createServer listen(0) 可直接拿随机端口，但为了与 CC 保持一致的
++ * 「固定端口优先」行为，这里保留显式探测。
++ */
++async function isPortAvailable(port: number): Promise<boolean> {
++  return new Promise((resolve) => {
++    const server = createServer();
++    server.once("error", () => resolve(false));
++    server.listen(port, "127.0.0.1", () => {
++      server.close(() => resolve(true));
++    });
++  });
++}
++
++/** 找到一个空闲端口（配置端口 > 随机尝试 > 回退端口） */
++async function findAvailablePort(configuredPort?: number): Promise<number> {
++  if (configuredPort) {
++    if (await isPortAvailable(configuredPort)) return configuredPort;
++    getLogger().warn("MCP", `配置的 OAuth 回调端口 ${configuredPort} 不可用，回退随机选取`);
++  }
++  const range = PORT_RANGE_MAX - PORT_RANGE_MIN + 1;
++  for (let i = 0; i < MAX_PORT_ATTEMPTS; i++) {
++    const port = PORT_RANGE_MIN + Math.floor(Math.random() * range);
++    if (await isPortAvailable(port)) return port;
++  }
++  if (await isPortAvailable(FALLBACK_PORT)) return FALLBACK_PORT;
++  throw new Error("无可用端口用于 OAuth 回调");
++}
++
++/**
++ * 启动本地 OAuth 回调服务器。
++ * 返回句柄，调用方用 waitForCode 等待授权码，结束后 close。
++ */
++export async function startCallbackServer(configuredPort?: number): Promise<CallbackServerHandle> {
++  const port = await findAvailablePort(configuredPort);
++  const redirectUri = `http://localhost:${port}/callback`;
++
++  let resolveCode: ((code: string) => void) | undefined;
++  let rejectCode: ((err: Error) => void) | undefined;
++  let server: Server | null = null;
++  let closed = false;
++
++  const close = () => {
++    if (closed) return;
++    closed = true;
++    if (server) {
++      server.removeAllListeners();
++      server.on("error", () => {}); // 防 close 后的迟到错误
++      server.close();
++      server = null;
++    }
++  };
++
++  server = createServer((req, res) => {
++    const parsed = parseUrl(req.url || "", true);
++    if (parsed.pathname !== "/callback") {
++      res.writeHead(404, { "Content-Type": "text/plain" });
++      res.end("Not Found");
++      return;
++    }
++
++    const error = parsed.query.error as string | undefined;
++    const errorDesc = parsed.query.error_description as string | undefined;
++    const code = parsed.query.code as string | undefined;
++    const state = parsed.query.state as string | undefined;
++
++    if (error) {
++      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
++      res.end(`<h1>授权失败</h1><p>${escapeHtml(error)}: ${escapeHtml(errorDesc || "")}</p><p>可关闭此窗口。</p>`);
++      close();
++      rejectCode?.(new Error(`OAuth 错误: ${error} - ${errorDesc || ""}`));
++      return;
++    }
++
++    if (!code) {
++      res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
++      res.end(`<h1>缺少授权码</h1><p>可关闭此窗口并重试。</p>`);
++      return;
++    }
++
++    // state 传递给 waitForCode 做校验（这里先回复浏览器）
++    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
++    res.end(`<h1>授权成功</h1><p>可关闭此窗口，返回 sid-code。</p>`);
++
++    // resolve（state 校验在 waitForCode 中进行，这里传出 code+state 对）
++    resolveCode?.(`${code}\x00${state || ""}`);
++    close();
++  });
++
++  server.on("error", (err: NodeJS.ErrnoException) => {
++    close();
++    rejectCode?.(new Error(`OAuth 回调服务器错误: ${err.message}`));
++  });
++
++  // 绑定到 127.0.0.1（不暴露）
++  await new Promise<void>((resolve, reject) => {
++    server!.once("error", reject);
++    server!.listen(port, "127.0.0.1", () => resolve());
++  });
++  // 取消事件循环引用——不阻止进程退出
++  server.unref();
++
++  return {
++    redirectUri,
++    port,
++    waitForCode(expectedState: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
++      return new Promise((resolve, reject) => {
++        resolveCode = (raw: string) => {
++          const [code, state] = raw.split("\x00");
++          if (state !== expectedState) {
++            close();
++            reject(new Error("OAuth state 不匹配（可能是 CSRF 攻击）"));
++            return;
++          }
++          resolve(code);
++        };
++        rejectCode = reject;
++
++        // 超时
++        const timer = setTimeout(() => {
++          close();
++          reject(new Error("等待 OAuth 授权超时"));
++        }, timeoutMs);
++        (timer as any).unref?.();
++
++        // abort 信号
++        if (signal) {
++          if (signal.aborted) {
++            close();
++            reject(new Error("OAuth 授权已取消"));
++            return;
++          }
++          const onAbort = () => {
++            close();
++            reject(new Error("OAuth 授权已取消"));
++          };
++          signal.addEventListener("abort", onAbort, { once: true });
++        }
++      });
++    },
++    close,
++  };
++}
++
++function escapeHtml(s: string): string {
++  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
++}
+diff --git a/src/mcp/oauth-lock.ts b/src/mcp/oauth-lock.ts
+new file mode 100644
+index 0000000..cd7375c
+--- /dev/null
++++ b/src/mcp/oauth-lock.ts
+@@ -0,0 +1,140 @@
++/**
++ * MCP OAuth token 刷新跨进程互斥锁
++ *
++ * 对标 Claude Code refreshAuthorization 中的 proper-lockfile 用法。sid-code 无
++ * 该依赖，改用「原子 mkdir」实现跨进程锁——mkdir 在 POSIX/Windows 上都是原子的，
++ * 同一目录只能被一个进程成功创建，天然适合做锁。
++ *
++ * 目的：多个 sid-code 实例同时发现 token 过期时，避免并发刷新——并发刷新会让
++ * 先返回的那次刷新作废另一次的 refresh_token（很多授权服务器刷新即轮换）。
++ */
++
++import { mkdirSync, rmdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
++import { join } from "node:path";
++import type { MCPServerConfig } from "../config/config.ts";
++import { sidPaths } from "../config/paths.ts";
++import { getServerKey } from "./oauth-storage.ts";
++import { getLogger } from "../debug/logger.ts";
++
++/** 获取锁的最大重试次数 */
++const MAX_LOCK_RETRIES = 5;
++/** 每次重试基础等待（ms），叠加随机抖动 */
++const LOCK_RETRY_BASE_MS = 1000;
++/** 锁过期时间（ms）：超过此时长视为陈旧锁（持有进程崩溃），可强夺 */
++const LOCK_STALE_MS = 30_000;
++
++function lockDir(serverName: string, config: MCPServerConfig): string {
++  const key = getServerKey(serverName, config).replace(/[^a-zA-Z0-9]/g, "_");
++  return join(sidPaths.mcpOAuthLocks(), `${key}.lock`);
++}
++
++function sleep(ms: number): Promise<void> {
++  return new Promise((r) => setTimeout(r, ms));
++}
++
++/** 确保锁根目录存在 */
++function ensureLockRoot(): void {
++  const root = sidPaths.mcpOAuthLocks();
++  if (!existsSync(root)) {
++    mkdirSync(root, { recursive: true });
++  }
++}
++
++/** 尝试获取锁一次：原子 mkdir 成功即拿到；目录已存在且未陈旧则失败 */
++function tryAcquire(dir: string): boolean {
++  try {
++    mkdirSync(dir);
++    // 写入持有者信息（pid + 时间戳）用于陈旧判定
++    try {
++      writeFileSync(join(dir, "owner"), JSON.stringify({ pid: process.pid, ts: Date.now() }));
++    } catch {}
++    return true;
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
++      // 锁已被占——检查是否陈旧
++      if (isStale(dir)) {
++        forceRelease(dir);
++        // 陈旧锁已清，再试一次原子创建
++        try {
++          mkdirSync(dir);
++          try {
++            writeFileSync(join(dir, "owner"), JSON.stringify({ pid: process.pid, ts: Date.now() }));
++          } catch {}
++          return true;
++        } catch {
++          return false;
++        }
++      }
++      return false;
++    }
++    // 其它错误（权限等）当作拿不到锁
++    return false;
++  }
++}
++
++/** 判定锁是否陈旧（持有者超过 LOCK_STALE_MS 未释放，多半是进程崩溃） */
++function isStale(dir: string): boolean {
++  try {
++    const ownerPath = join(dir, "owner");
++    if (existsSync(ownerPath)) {
++      const owner = JSON.parse(readFileSync(ownerPath, "utf-8")) as { pid: number; ts: number };
++      return Date.now() - owner.ts > LOCK_STALE_MS;
++    }
++    // 无 owner 文件，用目录创建时间兜底
++    const st = statSync(dir);
++    return Date.now() - st.ctimeMs > LOCK_STALE_MS;
++  } catch {
++    // 读不到信息，保守视为陈旧（避免永久死锁）
++    return true;
++  }
++}
++
++/** 强制释放锁目录 */
++function forceRelease(dir: string): void {
++  try {
++    const ownerPath = join(dir, "owner");
++    if (existsSync(ownerPath)) {
++      require("node:fs").unlinkSync(ownerPath);
++    }
++    rmdirSync(dir);
++  } catch {
++    // 已被别的进程清掉，忽略
++  }
++}
++
++/**
++ * 在跨进程锁保护下执行 fn。
++ * 拿不到锁时退避重试 MAX_LOCK_RETRIES 次；仍失败则放弃锁直接执行（best-effort，
++ * 对标 CC「proceeding without lock」——宁可偶发并发刷新也不要卡死用户）。
++ */
++export async function withRefreshLock<T>(
++  serverName: string,
++  config: MCPServerConfig,
++  fn: () => Promise<T>,
++): Promise<T> {
++  const log = getLogger();
++  ensureLockRoot();
++  const dir = lockDir(serverName, config);
++
++  let acquired = false;
++  for (let retry = 0; retry < MAX_LOCK_RETRIES; retry++) {
++    if (tryAcquire(dir)) {
++      acquired = true;
++      break;
++    }
++    log.debug("MCP", `${serverName} 刷新锁被占用，等待重试 (${retry + 1}/${MAX_LOCK_RETRIES})`);
++    await sleep(LOCK_RETRY_BASE_MS + Math.random() * LOCK_RETRY_BASE_MS);
++  }
++
++  if (!acquired) {
++    log.warn("MCP", `${serverName} 获取刷新锁失败，无锁执行（best-effort）`);
++  }
++
++  try {
++    return await fn();
++  } finally {
++    if (acquired) {
++      forceRelease(dir);
++    }
++  }
++}
+diff --git a/src/mcp/oauth-storage.ts b/src/mcp/oauth-storage.ts
+new file mode 100644
+index 0000000..f4b7c24
+--- /dev/null
++++ b/src/mcp/oauth-storage.ts
+@@ -0,0 +1,204 @@
++/**
++ * MCP OAuth 凭据存储
++ *
++ * 持久化远程 MCP 服务器的 OAuth 凭据：access/refresh token、动态注册得到的
++ * client_id/client_secret、以及 discovery 状态（授权服务器 URL / 资源元数据 URL）。
++ * 对标 Claude Code SecureStorageData.mcpOAuth，但 sid-code 无 keychain 依赖，
++ * 落盘到 ~/.sid-code/mcp-oauth.json（文件权限 0600，仅当前用户可读写）。
++ *
++ * Server Key 设计（对标 CC getServerKey）：用 serverName + 配置哈希做键，
++ * 防止「同名但不同 URL/headers」的服务器复用彼此凭据。
++ */
++
++import { createHash } from "node:crypto";
++import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
++import { dirname } from "node:path";
++import type { MCPServerConfig } from "../config/config.ts";
++import { sidPaths } from "../config/paths.ts";
++import { getLogger } from "../debug/logger.ts";
++
++/** 单个 MCP 服务器的 OAuth 凭据条目 */
++export interface MCPOAuthEntry {
++  serverName: string;
++  serverUrl: string;
++  /** access token（可能为空字符串，表示已注册 client 但尚未拿到 token） */
++  accessToken: string;
++  /** refresh token（授权服务器可能不下发） */
++  refreshToken?: string;
++  /** access token 过期的绝对时间戳（ms）。0 表示无 token */
++  expiresAt: number;
++  /** 已授予的 scope（空格分隔） */
++  scope?: string;
++  /** 动态注册（RFC 7591）得到的 client_id，或预配置 client_id */
++  clientId?: string;
++  /** 机密客户端的 client_secret */
++  clientSecret?: string;
++  /** discovery 状态：缓存授权服务器 URL，避免每次刷新都重新 RFC 9728/8414 发现 */
++  discoveryState?: {
++    /** 授权服务器 issuer URL（token/authorize 端点的来源） */
++    authorizationServerUrl: string;
++    /** RFC 9728 受保护资源元数据 URL（401 WWW-Authenticate 带出的） */
++    resourceMetadataUrl?: string;
++  };
++}
++
++/** 存储文件结构 */
++interface OAuthStorageData {
++  /** serverKey → 凭据条目 */
++  mcpOAuth: Record<string, MCPOAuthEntry>;
++}
++
++/**
++ * 为服务器生成稳定的存储键：serverName | sha256(type+url+headers)[:16]。
++ * 配置变化（换 URL / 换 header）会产生新键，强制重新授权，避免凭据错配。
++ * 对标 CC getServerKey。
++ */
++export function getServerKey(serverName: string, config: MCPServerConfig): string {
++  const configJson = JSON.stringify({
++    transport: config.transport,
++    url: config.url ?? "",
++    headers: config.headers ?? {},
++  });
++  const hash = createHash("sha256").update(configJson).digest("hex").substring(0, 16);
++  return `${serverName}|${hash}`;
++}
++
++/** 读取整个存储文件（不存在或损坏时返回空结构） */
++function readStorage(): OAuthStorageData {
++  const path = sidPaths.mcpOAuth();
++  if (!existsSync(path)) {
++    return { mcpOAuth: {} };
++  }
++  try {
++    const raw = readFileSync(path, "utf-8");
++    const parsed = JSON.parse(raw) as Partial<OAuthStorageData>;
++    return { mcpOAuth: parsed.mcpOAuth ?? {} };
++  } catch (err) {
++    getLogger().warn("MCP", `OAuth 存储文件解析失败，已忽略: ${(err as Error).message}`);
++    return { mcpOAuth: {} };
++  }
++}
++
++/** 原子写入存储文件，权限收紧到 0600 */
++function writeStorage(data: OAuthStorageData): void {
++  const path = sidPaths.mcpOAuth();
++  const dir = dirname(path);
++  if (!existsSync(dir)) {
++    mkdirSync(dir, { recursive: true });
++  }
++  // 先写临时文件再 rename，避免并发写出现半截文件
++  const tmpPath = `${path}.tmp-${process.pid}`;
++  writeFileSync(tmpPath, JSON.stringify(data, null, 2), { mode: 0o600 });
++  // Bun/Node 的 renameSync 在同目录下是原子的
++  try {
++    // 用 fs.renameSync —— 同分区原子替换
++    require("node:fs").renameSync(tmpPath, path);
++  } catch {
++    // 回退：直接覆盖写
++    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
++    try { unlinkSync(tmpPath); } catch {}
++  }
++  // 双保险：确保权限位正确（部分平台 writeFile 的 mode 受 umask 影响）
++  try { chmodSync(path, 0o600); } catch {}
++}
++
++/** 读取指定服务器的 OAuth 凭据条目 */
++export function getOAuthEntry(serverName: string, config: MCPServerConfig): MCPOAuthEntry | undefined {
++  const key = getServerKey(serverName, config);
++  return readStorage().mcpOAuth[key];
++}
++
++/**
++ * 合并更新指定服务器的 OAuth 凭据条目（浅合并到现有条目）。
++ * 始终补齐 serverName / serverUrl / accessToken / expiresAt 必填字段。
++ */
++export function updateOAuthEntry(
++  serverName: string,
++  config: MCPServerConfig,
++  patch: Partial<MCPOAuthEntry>,
++): void {
++  const key = getServerKey(serverName, config);
++  const data = readStorage();
++  const existing = data.mcpOAuth[key];
++  data.mcpOAuth[key] = {
++    ...existing,
++    ...patch,
++    // 必填字段兜底：优先用 patch，其次现有值，最后默认值
++    serverName,
++    serverUrl: config.url ?? existing?.serverUrl ?? "",
++    accessToken: patch.accessToken ?? existing?.accessToken ?? "",
++    expiresAt: patch.expiresAt ?? existing?.expiresAt ?? 0,
++  };
++  writeStorage(data);
++}
++
++/** 保存 token（来自授权码交换或刷新） */
++export function saveTokens(
++  serverName: string,
++  config: MCPServerConfig,
++  tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string },
++): void {
++  updateOAuthEntry(serverName, config, {
++    accessToken: tokens.access_token,
++    refreshToken: tokens.refresh_token,
++    // expires_in 缺省按 1 小时算（OAuth 2.1 推荐但非强制下发）
++    expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
++    scope: tokens.scope,
++  });
++}
++
++/** 保存动态注册得到的 client 信息 */
++export function saveClientInformation(
++  serverName: string,
++  config: MCPServerConfig,
++  client: { client_id: string; client_secret?: string },
++): void {
++  updateOAuthEntry(serverName, config, {
++    clientId: client.client_id,
++    clientSecret: client.client_secret,
++  });
++}
++
++/** 保存 discovery 状态（授权服务器 URL 等） */
++export function saveDiscoveryState(
++  serverName: string,
++  config: MCPServerConfig,
++  state: { authorizationServerUrl: string; resourceMetadataUrl?: string },
++): void {
++  updateOAuthEntry(serverName, config, { discoveryState: state });
++}
++
++/**
++ * 清除指定服务器的凭据。
++ * - scope='tokens'：仅清 token（保留 client 注册信息与 discovery，下次免重新注册）
++ * - scope='all'：删除整个条目
++ */
++export function clearOAuthEntry(
++  serverName: string,
++  config: MCPServerConfig,
++  scope: "all" | "tokens" = "all",
++): void {
++  const key = getServerKey(serverName, config);
++  const data = readStorage();
++  const entry = data.mcpOAuth[key];
++  if (!entry) return;
++
++  if (scope === "all") {
++    delete data.mcpOAuth[key];
++  } else {
++    entry.accessToken = "";
++    entry.refreshToken = undefined;
++    entry.expiresAt = 0;
++  }
++  writeStorage(data);
++}
++
++/**
++ * 判断「已探测过 OAuth 但当前无任何可用凭据」的状态。
++ * 这种状态下连接必定 401，唯一出路是用户重新走授权流程。
++ * 对标 CC hasMcpDiscoveryButNoToken。
++ */
++export function hasDiscoveryButNoToken(serverName: string, config: MCPServerConfig): boolean {
++  const entry = getOAuthEntry(serverName, config);
++  return entry !== undefined && !entry.accessToken && !entry.refreshToken;
++}
+diff --git a/src/mcp/oauth.ts b/src/mcp/oauth.ts
+new file mode 100644
+index 0000000..120d694
+--- /dev/null
++++ b/src/mcp/oauth.ts
+@@ -0,0 +1,547 @@
++/**
++ * MCP OAuth 2.1 全链路实现
++ *
++ * 对标 Claude Code services/mcp/auth.ts，但 CC 把重活委托给
++ * @modelcontextprotocol/sdk；sid-code 自研传输层、不依赖该 SDK，因此本模块
++ * 从零实现 OAuth 标准流程：
++ *
++ *   RFC 9728  受保护资源元数据发现（/.well-known/oauth-protected-resource）
++ *   RFC 8414  授权服务器元数据发现（/.well-known/oauth-authorization-server）
++ *   RFC 7591  动态客户端注册（无预配置 client_id 时自动注册）
++ *   RFC 7636  PKCE（S256 code_challenge）
++ *   OAuth 2.1 授权码流程 + refresh_token 刷新 + RFC 7009 token 撤销
++ *
++ * 公共客户端（token_endpoint_auth_method=none）+ PKCE 是默认姿态；
++ * 若配置/注册带回 client_secret 则走机密客户端。
++ */
++
++import { createHash, randomBytes } from "node:crypto";
++import type { MCPServerConfig } from "../config/config.ts";
++import { getLogger } from "../debug/logger.ts";
++import {
++  getOAuthEntry,
++  saveTokens,
++  saveClientInformation,
++  saveDiscoveryState,
++  clearOAuthEntry,
++  type MCPOAuthEntry,
++} from "./oauth-storage.ts";
++import { startCallbackServer } from "./oauth-callback-server.ts";
++import { withRefreshLock } from "./oauth-lock.ts";
++
++/** OAuth 请求超时（ms），对标 CC AUTH_REQUEST_TIMEOUT_MS */
++const AUTH_REQUEST_TIMEOUT_MS = 30_000;
++/** 授权流程整体超时（ms）：等待用户在浏览器完成授权 */
++const AUTH_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
++/** token 过期提前刷新阈值（秒）：剩余不足此值即主动刷新 */
++const PROACTIVE_REFRESH_THRESHOLD_S = 300;
++
++/** 授权服务器元数据（RFC 8414 子集，仅取我们需要的字段） */
++export interface AuthServerMetadata {
++  issuer: string;
++  authorization_endpoint: string;
++  token_endpoint: string;
++  registration_endpoint?: string;
++  revocation_endpoint?: string;
++  scopes_supported?: string[];
++  code_challenge_methods_supported?: string[];
++  token_endpoint_auth_methods_supported?: string[];
++  grant_types_supported?: string[];
++}
++
++/** 受保护资源元数据（RFC 9728 子集） */
++interface ProtectedResourceMetadata {
++  resource?: string;
++  authorization_servers?: string[];
++}
++
++/** token 端点返回的 token 集 */
++export interface OAuthTokens {
++  access_token: string;
++  refresh_token?: string;
++  expires_in?: number;
++  scope?: string;
++  token_type?: string;
++}
++
++/** 授权流程取消错误（用户 ESC / abort） */
++export class AuthenticationCancelledError extends Error {
++  constructor() {
++    super("OAuth 授权已取消");
++    this.name = "AuthenticationCancelledError";
++  }
++}
++
++/** 需要交互式授权的信号（无有效 token 且无法静默刷新） */
++export class NeedsAuthorizationError extends Error {
++  constructor(public readonly serverName: string) {
++    super(`MCP 服务器 ${serverName} 需要 OAuth 授权`);
++    this.name = "NeedsAuthorizationError";
++  }
++}
++
++// ─── 带超时的 fetch ───
++
++/** 在外部 signal 基础上叠加请求超时；POST 失败时规范化 OAuth 错误体 */
++async function authFetch(url: string, init?: RequestInit & { signal?: AbortSignal }): Promise<Response> {
++  const timeoutSignal = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
++  const signals: AbortSignal[] = [timeoutSignal];
++  if (init?.signal) signals.push(init.signal);
++  const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
++  return fetch(url, { ...init, signal });
++}
++
++// ─── PKCE ───
++
++/** 生成 PKCE code_verifier（43-128 字符的 base64url 随机串，RFC 7636 §4.1） */
++function generateCodeVerifier(): string {
++  return randomBytes(32).toString("base64url");
++}
++
++/** 由 verifier 派生 S256 code_challenge（RFC 7636 §4.2） */
++function deriveCodeChallenge(verifier: string): string {
++  return createHash("sha256").update(verifier).digest("base64url");
++}
++
++/** 生成 CSRF state（防授权码注入） */
++function generateState(): string {
++  return randomBytes(32).toString("base64url");
++}
++
++// ─── Discovery ───
++
++/** 拼接 .well-known 路径，保留服务器原始 path（兼容把元数据托管在子路径的服务器） */
++function wellKnownUrl(base: URL, wellKnown: string): string {
++  const path = base.pathname === "/" ? "" : base.pathname.replace(/\/$/, "");
++  return `${base.origin}/.well-known/${wellKnown}${path}`;
++}
++
++/**
++ * 发现授权服务器元数据。
++ * 顺序对标 CC fetchAuthServerMetadata：
++ * 1. 配置直指 metadata URL → 直接拉取（强制 https）
++ * 2. RFC 9728：探测受保护资源元数据，取 authorization_servers[0]，再 RFC 8414
++ * 3. 回退：直接对 MCP 服务器 URL 做 RFC 8414（path-aware + root 两种探测）
++ */
++export async function discoverAuthServerMetadata(
++  serverName: string,
++  serverUrl: string,
++  config: MCPServerConfig,
++  signal?: AbortSignal,
++  resourceMetadataUrl?: string,
++): Promise<AuthServerMetadata | undefined> {
++  const log = getLogger();
++  const configuredUrl = config.oauth?.authServerMetadataUrl;
++
++  // 1. 配置直指
++  if (configuredUrl) {
++    if (!configuredUrl.startsWith("https://")) {
++      throw new Error(`authServerMetadataUrl 必须使用 https://（当前: ${configuredUrl}）`);
++    }
++    const resp = await authFetch(configuredUrl, { headers: { Accept: "application/json" }, signal });
++    if (resp.ok) return (await resp.json()) as AuthServerMetadata;
++    throw new Error(`拉取配置的授权服务器元数据失败 HTTP ${resp.status}`);
++  }
++
++  // 2. RFC 9728 受保护资源元数据 → authorization_servers[0]
++  try {
++    const prmUrl = resourceMetadataUrl ?? wellKnownUrl(new URL(serverUrl), "oauth-protected-resource");
++    const prmResp = await authFetch(prmUrl, { headers: { Accept: "application/json" }, signal });
++    if (prmResp.ok) {
++      const prm = (await prmResp.json()) as ProtectedResourceMetadata;
++      const asUrl = prm.authorization_servers?.[0];
++      if (asUrl) {
++        log.debug("MCP", `${serverName} RFC 9728 发现授权服务器: ${asUrl}`);
++        const meta = await fetchAS8414(asUrl, signal);
++        if (meta) return meta;
++      }
++    }
++  } catch (err) {
++    log.debug("MCP", `${serverName} RFC 9728 发现失败，回退: ${(err as Error).message}`);
++  }
++
++  // 3. 回退：直接对 MCP 服务器 URL 做 RFC 8414
++  const meta = await fetchAS8414(serverUrl, signal);
++  if (meta) return meta;
++
++  log.warn("MCP", `${serverName} 无法发现 OAuth 授权服务器元数据`);
++  return undefined;
++}
++
++/** 对给定 URL 做 RFC 8414 授权服务器元数据探测（先 path-aware 再 root） */
++async function fetchAS8414(asUrl: string, signal?: AbortSignal): Promise<AuthServerMetadata | undefined> {
++  const base = new URL(asUrl);
++  const candidates = new Set<string>([
++    wellKnownUrl(base, "oauth-authorization-server"),
++    `${base.origin}/.well-known/oauth-authorization-server`,
++    // OIDC 回退（部分授权服务器只暴露 OIDC discovery）
++    wellKnownUrl(base, "openid-configuration"),
++    `${base.origin}/.well-known/openid-configuration`,
++  ]);
++
++  for (const url of candidates) {
++    try {
++      const resp = await authFetch(url, { headers: { Accept: "application/json" }, signal });
++      if (resp.ok) {
++        const meta = (await resp.json()) as AuthServerMetadata;
++        if (meta.authorization_endpoint && meta.token_endpoint) {
++          return meta;
++        }
++      }
++    } catch {
++      // 试下一个候选
++    }
++  }
++  return undefined;
++}
++
++// ─── RFC 7591 动态客户端注册 ───
++
++/**
++ * 动态注册公共客户端（RFC 7591）。返回 client_id（及可能的 client_secret）。
++ * 授权服务器无 registration_endpoint 时抛错——调用方需引导用户预配置 client_id。
++ */
++async function registerClient(
++  serverName: string,
++  metadata: AuthServerMetadata,
++  redirectUri: string,
++  signal?: AbortSignal,
++): Promise<{ client_id: string; client_secret?: string }> {
++  const log = getLogger();
++  if (!metadata.registration_endpoint) {
++    throw new Error(
++      `授权服务器不支持动态注册（无 registration_endpoint）。请在配置中预设 oauth.clientId。`,
++    );
++  }
++
++  const body = {
++    client_name: `sid-code (${serverName})`,
++    redirect_uris: [redirectUri],
++    grant_types: ["authorization_code", "refresh_token"],
++    response_types: ["code"],
++    token_endpoint_auth_method: "none", // 公共客户端
++    ...(metadata.scopes_supported ? { scope: metadata.scopes_supported.join(" ") } : {}),
++  };
++
++  const resp = await authFetch(metadata.registration_endpoint, {
++    method: "POST",
++    headers: { "Content-Type": "application/json", Accept: "application/json" },
++    body: JSON.stringify(body),
++    signal,
++  });
++
++  if (!resp.ok) {
++    const text = await resp.text().catch(() => "");
++    throw new Error(`动态客户端注册失败 HTTP ${resp.status}: ${text.slice(0, 200)}`);
++  }
++
++  const registered = (await resp.json()) as { client_id: string; client_secret?: string };
++  if (!registered.client_id) {
++    throw new Error("动态注册响应缺少 client_id");
++  }
++  log.debug("MCP", `${serverName} 动态注册成功，client_id=${registered.client_id.slice(0, 8)}…`);
++  return registered;
++}
++
++// ─── token 端点交互 ───
++
++/** 用授权码换取 token（PKCE 校验） */
++async function exchangeCodeForTokens(
++  metadata: AuthServerMetadata,
++  params: {
++    code: string;
++    redirectUri: string;
++    codeVerifier: string;
++    clientId: string;
++    clientSecret?: string;
++    resource: string;
++  },
++  signal?: AbortSignal,
++): Promise<OAuthTokens> {
++  const body = new URLSearchParams({
++    grant_type: "authorization_code",
++    code: params.code,
++    redirect_uri: params.redirectUri,
++    code_verifier: params.codeVerifier,
++    client_id: params.clientId,
++    // RFC 8707 资源指示器：把 token 受众绑定到本 MCP 服务器
++    resource: params.resource,
++  });
++  if (params.clientSecret) {
++    body.set("client_secret", params.clientSecret);
++  }
++
++  const resp = await authFetch(metadata.token_endpoint, {
++    method: "POST",
++    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
++    body: body.toString(),
++    signal,
++  });
++
++  if (!resp.ok) {
++    const text = await resp.text().catch(() => "");
++    throw new Error(`授权码换 token 失败 HTTP ${resp.status}: ${text.slice(0, 200)}`);
++  }
++  return (await resp.json()) as OAuthTokens;
++}
++
++/** 用 refresh_token 刷新 access_token */
++async function refreshTokens(
++  metadata: AuthServerMetadata,
++  params: { refreshToken: string; clientId: string; clientSecret?: string; resource: string; scope?: string },
++  signal?: AbortSignal,
++): Promise<OAuthTokens> {
++  const body = new URLSearchParams({
++    grant_type: "refresh_token",
++    refresh_token: params.refreshToken,
++    client_id: params.clientId,
++    resource: params.resource,
++  });
++  if (params.clientSecret) body.set("client_secret", params.clientSecret);
++  if (params.scope) body.set("scope", params.scope);
++
++  const resp = await authFetch(metadata.token_endpoint, {
++    method: "POST",
++    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
++    body: body.toString(),
++    signal,
++  });
++
++  if (!resp.ok) {
++    const text = await resp.text().catch(() => "");
++    // invalid_grant 表示 refresh_token 已失效/撤销，调用方应清 token 并重新授权
++    if (resp.status === 400 && text.includes("invalid_grant")) {
++      const err = new Error("refresh_token 已失效");
++      err.name = "InvalidGrantError";
++      throw err;
++    }
++    throw new Error(`刷新 token 失败 HTTP ${resp.status}: ${text.slice(0, 200)}`);
++  }
++  return (await resp.json()) as OAuthTokens;
++}
++
++// ─── 公开 API ───
++
++/**
++ * 完整的交互式 OAuth 授权流程：
++ *   发现元数据 → (动态注册) → 启本地回调服务器 → 打开授权 URL →
++ *   等待回调拿授权码 → PKCE 换 token → 持久化。
++ *
++ * @param onAuthorizationUrl 拿到授权 URL 时回调（供 UI 展示 / 打开浏览器）
++ * @returns 成功换取的 token
++ */
++export async function performOAuthFlow(
++  serverName: string,
++  config: MCPServerConfig,
++  onAuthorizationUrl: (url: string) => void,
++  signal?: AbortSignal,
++): Promise<OAuthTokens> {
++  const log = getLogger();
++  if (!config.url) {
++    throw new Error(`MCP 服务器 ${serverName} 缺少 url，无法进行 OAuth`);
++  }
++  const serverUrl = config.url;
++
++  // 清掉旧 token（保留可能存在的 client 注册），确保流程从干净状态开始
++  clearOAuthEntry(serverName, config, "tokens");
++
++  // 1. 发现授权服务器元数据
++  const metadata = await discoverAuthServerMetadata(serverName, serverUrl, config, signal);
++  if (!metadata) {
++    throw new Error(
++      `无法发现 ${serverName} 的 OAuth 授权服务器。该服务器可能不支持 OAuth，或需在配置中指定 oauth.authServerMetadataUrl。`,
++    );
++  }
++  // 持久化 discovery 状态，后续刷新免重新发现
++  saveDiscoveryState(serverName, config, { authorizationServerUrl: metadata.issuer });
++
++  // 2. 拿到 client_id：优先配置 / 已注册，否则动态注册
++  const { clientId, clientSecret, redirectUri, callback } = await prepareClient(
++    serverName,
++    config,
++    metadata,
++    signal,
++  );
++
++  try {
++    // 3. 构造 PKCE + state，拼授权 URL
++    const codeVerifier = generateCodeVerifier();
++    const codeChallenge = deriveCodeChallenge(codeVerifier);
++    const state = generateState();
++    const scope = config.oauth?.scope ?? metadata.scopes_supported?.join(" ");
++
++    const authUrl = new URL(metadata.authorization_endpoint);
++    authUrl.searchParams.set("response_type", "code");
++    authUrl.searchParams.set("client_id", clientId);
++    authUrl.searchParams.set("redirect_uri", redirectUri);
++    authUrl.searchParams.set("code_challenge", codeChallenge);
++    authUrl.searchParams.set("code_challenge_method", "S256");
++    authUrl.searchParams.set("state", state);
++    authUrl.searchParams.set("resource", serverUrl); // RFC 8707
++    if (scope) authUrl.searchParams.set("scope", scope);
++
++    log.info("MCP", `${serverName} 等待用户在浏览器完成 OAuth 授权…`);
++    onAuthorizationUrl(authUrl.toString());
++
++    // 4. 等待回调拿授权码（带 CSRF state 校验 + 超时 + abort）
++    const code = await callback.waitForCode(state, AUTH_FLOW_TIMEOUT_MS, signal);
++
++    // 5. PKCE 换 token
++    const tokens = await exchangeCodeForTokens(
++      metadata,
++      { code, redirectUri, codeVerifier, clientId, clientSecret, resource: serverUrl },
++      signal,
++    );
++
++    // 6. 持久化
++    saveTokens(serverName, config, tokens);
++    log.info("MCP", `${serverName} OAuth 授权成功`);
++    return tokens;
++  } finally {
++    callback.close();
++  }
++}
++
++/**
++ * 准备 client：决定 client_id 来源并启动回调服务器（回调服务器先于授权 URL 启动，
++ * 因为 redirect_uri 的端口要写进授权 URL）。
++ */
++async function prepareClient(
++  serverName: string,
++  config: MCPServerConfig,
++  metadata: AuthServerMetadata,
++  signal?: AbortSignal,
++): Promise<{
++  clientId: string;
++  clientSecret?: string;
++  redirectUri: string;
++  callback: Awaited<ReturnType<typeof startCallbackServer>>;
++}> {
++  // 启动本地回调服务器（固定端口或随机空闲端口）
++  const callback = await startCallbackServer(config.oauth?.callbackPort);
++  const redirectUri = callback.redirectUri;
++
++  try {
++    // a. 配置预设 client_id
++    if (config.oauth?.clientId) {
++      return { clientId: config.oauth.clientId, clientSecret: config.oauth.clientSecret, redirectUri, callback };
++    }
++    // b. 已动态注册过（存储里有 client_id）
++    const existing = getOAuthEntry(serverName, config);
++    if (existing?.clientId) {
++      return { clientId: existing.clientId, clientSecret: existing.clientSecret, redirectUri, callback };
++    }
++    // c. 动态注册（注册时要带本次的 redirect_uri）
++    const registered = await registerClient(serverName, metadata, redirectUri, signal);
++    saveClientInformation(serverName, config, registered);
++    return { clientId: registered.client_id, clientSecret: registered.client_secret, redirectUri, callback };
++  } catch (err) {
++    callback.close();
++    throw err;
++  }
++}
++
++/**
++ * 取得用于请求的有效 access token。逻辑对标 CC ClaudeAuthProvider.tokens()：
++ *   - 无凭据 → 抛 NeedsAuthorizationError
++ *   - 未过期 → 直接返回
++ *   - 即将过期/已过期且有 refresh_token → 跨进程加锁后刷新
++ *   - 已过期且无 refresh_token → 抛 NeedsAuthorizationError
++ *
++ * 不触发交互式流程（那需要 UI/浏览器）；交互由 performOAuthFlow 负责。
++ */
++export async function getValidAccessToken(
++  serverName: string,
++  config: MCPServerConfig,
++  signal?: AbortSignal,
++): Promise<string> {
++  const log = getLogger();
++  const entry = getOAuthEntry(serverName, config);
++
++  if (!entry || (!entry.accessToken && !entry.refreshToken)) {
++    throw new NeedsAuthorizationError(serverName);
++  }
++
++  const expiresInS = (entry.expiresAt - Date.now()) / 1000;
++
++  // 未过期且不在提前刷新窗口内 → 直接用
++  if (entry.accessToken && expiresInS > PROACTIVE_REFRESH_THRESHOLD_S) {
++    return entry.accessToken;
++  }
++
++  // 需要刷新但无 refresh_token
++  if (!entry.refreshToken) {
++    if (entry.accessToken && expiresInS > 0) {
++      // 还没过期，凑合用（无法刷新，等真正 401 再说）
++      return entry.accessToken;
++    }
++    throw new NeedsAuthorizationError(serverName);
++  }
++
++  // 跨进程加锁刷新（避免多实例并发刷新互相作废 refresh_token）
++  const refreshed = await withRefreshLock(serverName, config, async () => {
++    // 拿到锁后重读，可能别的进程已刷新
++    const fresh = getOAuthEntry(serverName, config);
++    if (fresh && fresh.accessToken && (fresh.expiresAt - Date.now()) / 1000 > PROACTIVE_REFRESH_THRESHOLD_S) {
++      log.debug("MCP", `${serverName} token 已被其它进程刷新，复用`);
++      return fresh.accessToken;
++    }
++    const refreshToken = fresh?.refreshToken ?? entry.refreshToken!;
++    return await doRefresh(serverName, config, refreshToken, signal);
++  });
++
++  return refreshed;
++}
++
++/** 执行一次刷新：发现/复用 metadata → 调 token 端点 → 持久化新 token */
++async function doRefresh(
++  serverName: string,
++  config: MCPServerConfig,
++  refreshToken: string,
++  signal?: AbortSignal,
++): Promise<string> {
++  const log = getLogger();
++  const entry = getOAuthEntry(serverName, config);
++
++  // 复用 discovery 状态拿 metadata（免每次刷新都重新发现）
++  const asUrl = entry?.discoveryState?.authorizationServerUrl ?? config.url!;
++  const metadata = await fetchAS8414(asUrl, signal)
++    ?? await discoverAuthServerMetadata(serverName, config.url!, config, signal);
++  if (!metadata) {
++    throw new Error(`刷新 token 时无法发现授权服务器元数据`);
++  }
++
++  const clientId = config.oauth?.clientId ?? entry?.clientId;
++  if (!clientId) {
++    throw new NeedsAuthorizationError(serverName);
++  }
++  const clientSecret = config.oauth?.clientSecret ?? entry?.clientSecret;
++
++  try {
++    const tokens = await refreshTokens(
++      metadata,
++      { refreshToken, clientId, clientSecret, resource: config.url!, scope: entry?.scope },
++      signal,
++    );
++    // 部分授权服务器刷新时不回 refresh_token —— 保留旧的
++    if (!tokens.refresh_token) tokens.refresh_token = refreshToken;
++    saveTokens(serverName, config, tokens);
++    log.info("MCP", `${serverName} token 刷新成功`);
++    return tokens.access_token;
++  } catch (err) {
++    if ((err as Error).name === "InvalidGrantError") {
++      // refresh_token 失效，清 token，需重新授权
++      log.warn("MCP", `${serverName} refresh_token 失效，需重新授权`);
++      clearOAuthEntry(serverName, config, "tokens");
++      throw new NeedsAuthorizationError(serverName);
++    }
++    throw err;
++  }
++}
++
++/** 该服务器是否配置了 OAuth（oauth 字段存在即视为启用） */
++export function isOAuthEnabled(config: MCPServerConfig): boolean {
++  return config.oauth !== undefined;
++}
++
++export type { MCPOAuthEntry };

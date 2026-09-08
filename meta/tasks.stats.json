@@ -1,0 +1,27 @@
+{
+  "task": "T3",
+  "n_tasks": 65,
+  "files_per_task": 12,
+  "reward_file": "reward.json",
+  "reward_keys": [
+    "reward",
+    "f2p",
+    "p2p"
+  ],
+  "filter_mode": "path",
+  "by_band": {
+    "S": 5,
+    "M": 22,
+    "L": 38
+  },
+  "f2p": {
+    "min": 1,
+    "max": 11,
+    "total": 154
+  },
+  "p2p": {
+    "min": 30,
+    "max": 30,
+    "total": 1950
+  }
+}

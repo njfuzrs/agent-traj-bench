@@ -1,0 +1,653 @@
+diff --git a/tests/agent/sub-agent-model-whitelist.test.ts b/tests/agent/sub-agent-model-whitelist.test.ts
+new file mode 100644
+index 0000000..38562b3
+--- /dev/null
++++ b/tests/agent/sub-agent-model-whitelist.test.ts
+@@ -0,0 +1,190 @@
++/**
++ * 回归测试：sub_agent 的 model 参数白名单校验（2026-08-01 生产事故）
++ *
++ * 事故：`model` 参数此前只有 `z.string()`，无任何校验。gpt-5.6-luna 臆造了一个不存在的
++ * 模型名 `"deepseek"`（用户实配的是 ali-deepseek-v4-pro / ali-deepseek-v4-flash），
++ * 直接透传到网关得 `503 model_not_found`。连带两处内部状态被污染：
++ *   - AGENT_LOOP 把这个根本不存在的模型名"跨路径拉黑"
++ *   - SESSION 用兜底价（input $2/M）给它估算成本
++ *
++ * 修复：在 execute() 里与已有的 type 校验同一位置、同一范式做白名单校验——
++ * 非法值当场退回可用清单让模型自纠，不透传给网关。
++ *
++ * fail-open 是本修复的硬性约束：清单为空（用户没配 availableModels）时必须放行，
++ * 否则会把所有用户合法配置的模型全部误拦——那比原缺陷更糟。
++ */
++import { describe, test, expect } from "bun:test";
++import { ProviderRegistry } from "../../src/llm/registry.ts";
++import { SubAgentTool } from "../../src/agent/tool.ts";
++import { Registry } from "../../src/tool/registry.ts";
++import type { Config } from "../../src/config/config.ts";
++import { defaultConfig } from "../../src/config/config.ts";
++
++/** 复刻事故当时的真实用户配置（settings.json 关键字段） */
++function incidentConfig(overrides: Partial<Config> = {}): Config {
++  return {
++    ...defaultConfig(),
++    provider: "openai",
++    model: "gpt-5.6-luna",
++    fallbackModel: "ali-deepseek-v4-flash",
++    baseURL: "https://uniapi.example.com/v1",
++    availableModels: [
++      { name: "gpt-5.4", provider: "openai" },
++      { name: "ali-deepseek-v4-pro", provider: "openai" },
++      { name: "ali-deepseek-v4-flash", provider: "openai" },
++      { name: "gpt-5.6-luna", provider: "openai" },
++    ],
++    ...overrides,
++  };
++}
++
++describe("getKnownModelNames（sub_agent model 白名单的数据源）", () => {
++  test("事故复现：臆造的裸名 deepseek 不在白名单里", () => {
++    const registry = new ProviderRegistry(incidentConfig(), {
++      default: "ali-deepseek-v4-flash",
++      task: "ali-deepseek-v4-pro",
++      verify: "ali-deepseek-v4-pro",
++    });
++    const known = registry.getKnownModelNames();
++
++    // 这是事故的直接断言：模型臆造的名字必须被判为非法
++    expect(known).not.toContain("deepseek");
++    // 而用户真实配置的相似名必须合法（避免修复过度、把真名也拦了）
++    expect(known).toContain("ali-deepseek-v4-pro");
++    expect(known).toContain("ali-deepseek-v4-flash");
++  });
++
++  test("白名单覆盖 availableModels + 主模型 + 降级模型 + subAgentModels", () => {
++    const config = incidentConfig({
++      model: "main-only-model",
++      fallbackModel: "fallback-only-model",
++      availableModels: [{ name: "listed-model", provider: "openai" }],
++    });
++    const registry = new ProviderRegistry(config, { explore: "subagent-only-model" });
++    const known = registry.getKnownModelNames();
++
++    // 后三类即便没写进 availableModels，也是用户有意指定的合法目标，不能判非法
++    expect(known).toContain("listed-model");
++    expect(known).toContain("main-only-model");
++    expect(known).toContain("fallback-only-model");
++    expect(known).toContain("subagent-only-model");
++  });
++
++  test("去重且保序（清单要直接展示给模型，不能有重复噪音）", () => {
++    const config = incidentConfig({
++      model: "dup-model",
++      fallbackModel: "dup-model",
++      availableModels: [{ name: "dup-model", provider: "openai" }, { name: "other", provider: "openai" }],
++    });
++    const registry = new ProviderRegistry(config, { default: "dup-model" });
++    const known = registry.getKnownModelNames();
++
++    expect(known.filter((n) => n === "dup-model")).toHaveLength(1);
++    expect(known[0]).toBe("dup-model"); // availableModels 顺序优先
++  });
++
++  test("fail-open：无任何模型配置时返回空数组（调用方据此放行一切）", () => {
++    const config = incidentConfig({ model: "", fallbackModel: "", availableModels: [] });
++    const registry = new ProviderRegistry(config, {});
++    // 空数组是"无从判断"的信号，绝不能被解读成"没有任何模型合法"
++    expect(registry.getKnownModelNames()).toEqual([]);
++  });
++
++  test("空串 / 纯空白配置不污染白名单", () => {
++    const config = incidentConfig({
++      model: "   ",
++      fallbackModel: "",
++      availableModels: [{ name: "", provider: "openai" }, { name: "real", provider: "openai" }],
++    });
++    const registry = new ProviderRegistry(config, { default: "  " });
++    expect(registry.getKnownModelNames()).toEqual(["real"]);
++  });
++
++  test("模型名两端空白被归一（模型偶发多打空格不应判非法）", () => {
++    const config = incidentConfig({
++      model: "  padded-model  ",
++      availableModels: [],
++      fallbackModel: "",
++    });
++    const registry = new ProviderRegistry(config, {});
++    expect(registry.getKnownModelNames()).toEqual(["padded-model"]);
++  });
++});
++
++describe("SubAgentTool.execute 的 model 拦截（真实修复面）", () => {
++  /** 构造一个只到「参数校验」为止就能返回的 SubAgentTool */
++  function makeTool(config: Config, subAgentModels: Record<string, string> = {}) {
++    const registry = new ProviderRegistry(config, subAgentModels);
++    // toolRegistry 只在真正 spawn 子代理后才被用到；本组测试全部在参数校验阶段返回，
++    // 所以传一个空 Registry 足够，不需要 mock provider/网络。
++    return new SubAgentTool(registry, new Registry() as never);
++  }
++
++  const validCall = {
++    type: "explore",
++    description: "d",
++    prompt: "p",
++  };
++
++  test("事故复现：model=deepseek 被当场拦下，不透传给网关", async () => {
++    const tool = makeTool(incidentConfig(), { default: "ali-deepseek-v4-flash" });
++    const result = await tool.execute({ ...validCall, model: "deepseek" });
++
++    expect(result.isError).toBe(true);
++    expect(result.output).toContain("deepseek");
++    // 报错必须列出可选清单，模型才能自纠（对齐 type 校验的既有范式）
++    expect(result.output).toContain("ali-deepseek-v4-pro");
++    expect(result.output).toContain("ali-deepseek-v4-flash");
++  });
++
++  // ── 「放行」类断言不走 execute() ──
++  //
++  // 放行意味着继续往下真正 spawn 子代理 → 发起真实网络请求。在单测里那既慢又不确定
++  // （实测打出 "Unable to connect" 噪音），且**断言不到点**：网络失败与 model 被拦
++  // 都表现为 isError=true，只能靠 output 文案区分，等于在测文案而非测行为。
++  //
++  // 所以放行侧改为断言「白名单包含该模型」——这正是 execute() 里那个 if 的判据本身，
++  // 拦截侧则走完整 execute()（它在校验阶段就返回，不触网）。两侧合起来覆盖分支全集。
++  test("合法模型名不在拦截集合内", () => {
++    const registry = new ProviderRegistry(incidentConfig(), {});
++    expect(registry.getKnownModelNames()).toContain("ali-deepseek-v4-pro");
++  });
++
++  test("省略 model 不触发校验（params.model 为空即短路）", async () => {
++    // 用一个白名单里必然不存在的值验证「非空才校验」的短路逻辑：
++    // 传空串应被 ?.trim() 短路放行、而非报"不在可用模型列表中"。
++    const tool = makeTool(incidentConfig());
++    const result = await tool.execute({ ...validCall, model: "   ", type: "__nonexistent__" });
++    // 故意给非法 type，让 execute() 在 model 校验**之前**就返回，
++    // 从而确认空白 model 没有抢先触发拦截、也不触网。
++    expect(result.isError).toBe(true);
++    expect(result.output).toContain("无效的子代理类型");
++  });
++
++  test("fail-open：白名单为空时不产生拦截判据", () => {
++    const registry = new ProviderRegistry(
++      incidentConfig({ model: "", fallbackModel: "", availableModels: [] }),
++      {},
++    );
++    // 空清单 → execute() 里 `known.length > 0` 为假 → 无条件放行
++    expect(registry.getKnownModelNames()).toHaveLength(0);
++  });
++
++  test("大小写敏感：错误大小写被拦（网关区分大小写）", async () => {
++    const tool = makeTool(incidentConfig());
++    const result = await tool.execute({ ...validCall, model: "ALI-DeepSeek-V4-Pro" });
++    expect(result.isError).toBe(true);
++    expect(result.output).toContain("不在可用模型列表中");
++  });
++});
++
++describe("sub_agent 的 model 参数 schema 描述", () => {
++  test("描述里明确要求用完整准确名、不要臆造", async () => {
++    // 白名单是"事后拦截"，描述是"事前引导"——两者都要有，否则模型每次都得靠报错学习
++    const src = Bun.file(new URL("../../src/agent/tool.ts", import.meta.url).pathname);
++    const text = await src.text();
++    const modelFieldBlock = text.slice(text.indexOf("model: z"), text.indexOf("cwd: z"));
++    expect(modelFieldBlock).toMatch(/完整模型名|准确名称/);
++    expect(modelFieldBlock).toMatch(/臆造|不要凭印象/);
++  });
++});
+diff --git a/tests/llm/strict-wire-contract-reconciliation.test.ts b/tests/llm/strict-wire-contract-reconciliation.test.ts
+new file mode 100644
+index 0000000..44a0f10
+--- /dev/null
++++ b/tests/llm/strict-wire-contract-reconciliation.test.ts
+@@ -0,0 +1,241 @@
++/**
++ * 对账测试：wire schema 允许的输入，必须能通过本地 zod 校验（2026-08-01 生产事故）
++ *
++ * ## 事故
++ *
++ * gpt-5.6-luna 会话全程刷屏「参数校验失败」。根因不是模型也不是网关，而是 sid-code
++ * **自己给了模型一份契约，又拒绝按这份契约填写的参数**：
++ *
++ *   1. registry.ts 给内置工具默认打 strict:true
++ *   2. gpt-5.6-luna 声明 protocolKind=openai-responses → 走 Responses API
++ *   3. toStrictJsonSchema() 把 optional 字段塞进 required、类型改成 ["string","null"]
++ *      → 发给模型的契约是「pages 必填，不想给就传 null」
++ *   4. 模型照做传 pages:null
++ *   5. validateToolInput 用**原始** zod schema 校验，`.optional()` 不接受 null → 报错
++ *
++ * 模型无路可走：遵守 wire 契约被拒，不遵守则违反 strict 的 required。
++ * 实测 40 个带 zodSchema 的内置工具里 23 个中招（read/edit/bash/grep/glob/ls 等）。
++ *
++ * ## 为什么要写成"全量对账"而不是逐工具单测
++ *
++ * 这类缺陷的本质是**两个模块各自演进导致的契约漂移**：协议层（openai-responses-request）
++ * 改造 schema 的规则，与工具层（input-validator）校验输入的规则，没有任何机制保证一致。
++ * 只测 read/grep 几个当时中招的工具，挡不住下一个新增 `.optional()` 字段的工具复发。
++ *
++ * 所以这里遍历**全部**带 zodSchema 的内置工具，对每个工具做一次端到端对账：
++ *   按 wire schema 生成一份「合法但极端」的输入（所有 optional 字段填 null）
++ *   → 喂给真实的 validateToolInput
++ *   → 断言不报「received null」，且不被 coerce 静默污染
++ *
++ * 任何人新增工具或改 schema，只要破坏了这个不变量，这个测试就会红。
++ */
++import { describe, test, expect } from "bun:test";
++import { readdirSync } from "node:fs";
++import { join } from "node:path";
++import { z } from "zod/v4";
++import { buildResponsesRequest } from "../../src/llm/openai-responses-request.ts";
++import { validateToolInput } from "../../src/tool/input-validator.ts";
++import type { SendParams, ToolDefinition } from "../../src/llm/types.ts";
++import type { LegacyTool } from "../../src/tool/types.ts";
++
++const TOOL_DIR = join(import.meta.dir, "../../src/tool");
++
++/** 按 JSON Schema 的类型给一个"最小合法值"，用于填必需字段 */
++function sampleForSchema(schema: unknown): unknown {
++  if (!schema || typeof schema !== "object") return "x";
++  const node = schema as Record<string, unknown>;
++  if (Array.isArray(node.enum) && node.enum.length > 0) return node.enum[0];
++  if (node.const !== undefined) return node.const;
++  const rawType = Array.isArray(node.type)
++    ? (node.type as string[]).find((t) => t !== "null")
++    : node.type;
++  switch (rawType) {
++    case "string": return "x";
++    case "number":
++    case "integer": return 1;
++    case "boolean": return true;
++    case "array": return [];
++    case "object": {
++      const props = (node.properties ?? {}) as Record<string, unknown>;
++      const required = Array.isArray(node.required) ? (node.required as string[]) : [];
++      const out: Record<string, unknown> = {};
++      for (const k of required) out[k] = sampleForSchema(props[k]);
++      return out;
++    }
++    default: return "x";
++  }
++}
++
++interface DiscoveredTool {
++  tool: LegacyTool;
++  name: string;
++  jsonSchema: Record<string, unknown>;
++}
++
++/** 实例化 src/tool 下所有导出的、带 zodSchema 的工具类 */
++async function discoverTools(): Promise<DiscoveredTool[]> {
++  const found: DiscoveredTool[] = [];
++  const seen = new Set<string>();
++  const files = readdirSync(TOOL_DIR).filter((f) => f.endsWith(".ts") && !f.includes(".test."));
++
++  for (const file of files) {
++    let mod: Record<string, unknown>;
++    try {
++      mod = (await import(join(TOOL_DIR, file))) as Record<string, unknown>;
++    } catch {
++      continue; // 个别模块有副作用/依赖，跳过不影响对账覆盖面
++    }
++    for (const exported of Object.values(mod)) {
++      if (typeof exported !== "function") continue;
++      let inst: LegacyTool;
++      try {
++        inst = new (exported as new () => LegacyTool)();
++      } catch {
++        continue; // 需要构造参数的工具（如 SubAgentTool）在此路径不实例化
++      }
++      if (typeof inst?.name !== "function" || !inst.zodSchema) continue;
++      const name = inst.name();
++      if (seen.has(name)) continue;
++      let jsonSchema: Record<string, unknown>;
++      try {
++        jsonSchema = z.toJSONSchema(inst.zodSchema as never) as Record<string, unknown>;
++      } catch {
++        continue;
++      }
++      seen.add(name);
++      found.push({ tool: inst, name, jsonSchema });
++    }
++  }
++  return found.sort((a, b) => a.name.localeCompare(b.name));
++}
++
++function wireToolDef(t: DiscoveredTool): ToolDefinition {
++  return { name: t.name, description: "d", input_schema: t.jsonSchema, strict: true } as ToolDefinition;
++}
++
++function buildWire(t: DiscoveredTool) {
++  const params = {
++    model: "gpt-5.6-luna",
++    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
++    maxTokens: 1024,
++    tools: [wireToolDef(t)],
++  } as SendParams;
++  return buildResponsesRequest(params, "gpt-5.6-luna").tools![0];
++}
++
++const TOOLS = await discoverTools();
++
++describe("strict wire 契约与本地校验对账", () => {
++  test("发现到足量内置工具（防止 discover 静默失效导致测试空跑）", () => {
++    expect(TOOLS.length).toBeGreaterThan(30);
++  });
++
++  describe("模型按 wire schema 给 optional 字段传 null → 本地校验必须接受", () => {
++    for (const t of TOOLS) {
++      test(t.name, () => {
++        const wire = buildWire(t);
++        // 降级为非 strict 的工具（record/z.unknown()）不产生"传 null"契约，跳过
++        if (wire.strict !== true) return;
++
++        const wireProps = (wire.parameters.properties ?? {}) as Record<string, unknown>;
++        const originalRequired = new Set(
++          Array.isArray(t.jsonSchema.required) ? (t.jsonSchema.required as string[]) : [],
++        );
++        const optionalKeys = Object.keys(wireProps).filter((k) => !originalRequired.has(k));
++        if (optionalKeys.length === 0) return;
++
++        // 构造一份「完全符合 wire 契约」的极端输入：必需字段给最小合法值，
++        // 所有 optional 字段按契约允许的方式显式传 null。
++        const input: Record<string, unknown> = {};
++        for (const k of originalRequired) {
++          input[k] = sampleForSchema((t.jsonSchema.properties as Record<string, unknown>)?.[k]);
++        }
++        for (const k of optionalKeys) input[k] = null;
++
++        const result = validateToolInput(t.tool, input);
++
++        // 核心断言：绝不能因为 null 报「期望 X，实际收到 null」。
++        // 其他校验失败（如 sampleForSchema 给的占位值不满足业务 refine）不在本测试关注范围，
++        // 只要不是 null 引起的即可。
++        if (!result.ok) {
++          expect(result.message).not.toMatch(/received null|实际收到 null/);
++        }
++      });
++    }
++  });
++
++  describe("coerce 字段的 null 不得被静默污染成 0/空串/false", () => {
++    for (const t of TOOLS) {
++      test(t.name, () => {
++        const wire = buildWire(t);
++        if (wire.strict !== true) return;
++
++        const wireProps = (wire.parameters.properties ?? {}) as Record<string, unknown>;
++        const originalRequired = new Set(
++          Array.isArray(t.jsonSchema.required) ? (t.jsonSchema.required as string[]) : [],
++        );
++        const optionalKeys = Object.keys(wireProps).filter((k) => !originalRequired.has(k));
++        if (optionalKeys.length === 0) return;
++
++        const input: Record<string, unknown> = {};
++        for (const k of originalRequired) {
++          input[k] = sampleForSchema((t.jsonSchema.properties as Record<string, unknown>)?.[k]);
++        }
++        for (const k of optionalKeys) input[k] = null;
++
++        const result = validateToolInput(t.tool, input);
++        if (!result.ok) return;
++
++        // z.coerce.number().optional() 遇 null 会静默返回 0——对 grep.head_limit
++        // （"0 表示无限制"）这类字段是**语义反转**，比报错更危险：无报错、无日志，
++        // 只是行为不对。归一层必须在 coerce 之前把 null 摘掉。
++        const data = result.data as Record<string, unknown>;
++        for (const k of optionalKeys) {
++          expect(data?.[k]).toBeUndefined();
++        }
++      });
++    }
++  });
++
++  describe("strict=true 的工具 schema 不得残留 OpenAI 会 400 的关键字", () => {
++    for (const t of TOOLS) {
++      test(t.name, () => {
++        const wire = buildWire(t);
++        if (wire.strict !== true) return;
++
++        // propertyNames / patternProperties / additionalProperties!=false 描述的是
++        // 动态 key 字典，strict 模式一律 400（2026-08-01 task_create 每轮 400 事故）。
++        // 注意那是**整个请求** 400，该轮所有工具定义都发不出去。
++        const violations: string[] = [];
++        const walk = (node: unknown, path: string) => {
++          if (!node || typeof node !== "object") return;
++          if (Array.isArray(node)) return node.forEach((n, i) => walk(n, `${path}[${i}]`));
++          const obj = node as Record<string, unknown>;
++          if (obj.propertyNames !== undefined) violations.push(`${path}.propertyNames`);
++          if (obj.patternProperties !== undefined) violations.push(`${path}.patternProperties`);
++          if (obj.additionalProperties !== undefined && obj.additionalProperties !== false) {
++            violations.push(`${path}.additionalProperties=${JSON.stringify(obj.additionalProperties)}`);
++          }
++          for (const [k, v] of Object.entries(obj)) walk(v, `${path}.${k}`);
++        };
++        walk(wire.parameters, t.name);
++        expect(violations).toEqual([]);
++      });
++    }
++  });
++
++  test("record 类型工具被正确降级为非 strict（不硬编码工具名，按 schema 特征判定）", () => {
++    // 反向断言：凡原始 schema 里带动态 key 关键字的工具，都必须降级；
++    // 凡不带的，都应保留 strict（否则是降级判定过度激进，白丢 Constrained Decoding）。
++    for (const t of TOOLS) {
++      const raw = JSON.stringify(t.jsonSchema);
++      const hasDynamicKey = raw.includes("propertyNames") || raw.includes("patternProperties");
++      const wire = buildWire(t);
++      if (hasDynamicKey) {
++        expect(wire.strict, `${t.name} 含动态 key 关键字，应降级为非 strict`).toBe(false);
++        // 降级后必须发原始 schema（而非改造过的半成品）
++        expect(wire.parameters).toEqual(t.jsonSchema);
++      }
++    }
++  });
++});
+diff --git a/tests/tool/nullish-normalize.test.ts b/tests/tool/nullish-normalize.test.ts
+new file mode 100644
+index 0000000..9939e44
+--- /dev/null
++++ b/tests/tool/nullish-normalize.test.ts
+@@ -0,0 +1,204 @@
++/**
++ * normalizeStrictNulls 单元测试
++ *
++ * 配套 tests/llm/strict-wire-contract-reconciliation.test.ts：那个测全量工具的
++ * 端到端契约对账（防漂移），这个测归一逻辑本身的边界（防语义误伤）。
++ *
++ * 最关键的两条边界，反了就会引入新缺陷：
++ *   1. `.nullable()` / `.nullish()` 的 null 是**业务值**，绝不能吞
++ *   2. `z.coerce.*` 会把 null 静默转成 0/""/false，所以判定"能否接受 null"
++ *      必须走 schema 结构内省，不能用 safeParse(null) 试探
++ */
++import { describe, test, expect } from "bun:test";
++import { z } from "zod/v4";
++import { normalizeStrictNulls } from "../../src/tool/nullish-normalize.ts";
++
++describe("normalizeStrictNulls", () => {
++  describe("optional 字段的 null → 摘掉（等价于未提供）", () => {
++    test("顶层 optional string", () => {
++      const s = z.object({ a: z.string(), b: z.string().optional() });
++      const out = normalizeStrictNulls(s, { a: "x", b: null }) as Record<string, unknown>;
++      expect("b" in out).toBe(false);
++      expect(s.safeParse(out).success).toBe(true);
++    });
++
++    test("optional array（hypothesis_register.supporting_evidence 形态）", () => {
++      const s = z.object({
++        statement: z.string(),
++        supporting_evidence: z.array(z.object({ note: z.string() })).optional(),
++      });
++      const out = normalizeStrictNulls(s, { statement: "s", supporting_evidence: null });
++      expect(s.safeParse(out).success).toBe(true);
++    });
++
++    test("optional enum / boolean / number 一并覆盖", () => {
++      const s = z.object({
++        mode: z.enum(["a", "b"]).optional(),
++        flag: z.boolean().optional(),
++        n: z.number().optional(),
++      });
++      const out = normalizeStrictNulls(s, { mode: null, flag: null, n: null });
++      expect(out).toEqual({});
++      expect(s.safeParse(out).success).toBe(true);
++    });
++  });
++
++  describe("显式可空字段的 null → 保留（业务值，不得吞）", () => {
++    test(".nullable() 保留 null", () => {
++      const s = z.object({ a: z.string().nullable() });
++      const out = normalizeStrictNulls(s, { a: null }) as Record<string, unknown>;
++      expect("a" in out).toBe(true);
++      expect(out.a).toBeNull();
++    });
++
++    test(".nullish() 保留 null（既 optional 又 nullable，nullable 优先）", () => {
++      const s = z.object({ a: z.string().nullish() });
++      const out = normalizeStrictNulls(s, { a: null }) as Record<string, unknown>;
++      expect(out.a).toBeNull();
++    });
++
++    test(".nullable().optional() 顺序颠倒也保留", () => {
++      const s = z.object({ a: z.string().nullable().optional() });
++      const out = normalizeStrictNulls(s, { a: null }) as Record<string, unknown>;
++      expect(out.a).toBeNull();
++    });
++  });
++
++  describe("coerce 字段：必须在 coerce 之前摘掉 null（防语义反转）", () => {
++    test("z.coerce.number().optional() 的 null 不得变成 0", () => {
++      // 直接 safeParse(null) 会静默返回 0——这正是 grep.head_limit（"0 表示无限制"）
++      // 被污染成"不限制输出"的根因。
++      const raw = z.object({ head_limit: z.coerce.number().int().min(0).optional() });
++      expect(raw.safeParse({ head_limit: null }).data).toEqual({ head_limit: 0 });
++
++      const out = normalizeStrictNulls(raw, { head_limit: null });
++      expect(out).toEqual({});
++      expect(raw.safeParse(out).data).toEqual({});
++    });
++
++    test("grep 的多个 coerce 字段全部不被污染", () => {
++      const s = z.object({
++        pattern: z.string(),
++        context: z.coerce.number().int().min(0).optional(),
++        head_limit: z.coerce.number().int().min(0).optional(),
++        offset: z.coerce.number().int().min(0).optional(),
++      });
++      const parsed = s.safeParse(normalizeStrictNulls(s, {
++        pattern: "x", context: null, head_limit: null, offset: null,
++      }));
++      expect(parsed.success).toBe(true);
++      expect(parsed.data).toEqual({ pattern: "x" });
++    });
++  });
++
++  describe("递归深度与 toStrictJsonSchema 对齐", () => {
++    test("嵌套 object 里的 optional 字段", () => {
++      const s = z.object({
++        outer: z.object({ keep: z.string(), drop: z.string().optional() }),
++      });
++      const out = normalizeStrictNulls(s, { outer: { keep: "k", drop: null } }) as any;
++      expect("drop" in out.outer).toBe(false);
++      expect(s.safeParse(out).success).toBe(true);
++    });
++
++    test("数组元素内的 optional 字段", () => {
++      const s = z.object({
++        items: z.array(z.object({ note: z.string(), source: z.string().optional() })),
++      });
++      const out = normalizeStrictNulls(s, {
++        items: [{ note: "n1", source: null }, { note: "n2", source: "s" }],
++      }) as any;
++      expect("source" in out.items[0]).toBe(false);
++      expect(out.items[1].source).toBe("s");
++      expect(s.safeParse(out).success).toBe(true);
++    });
++
++    test("tuple 按位置递归", () => {
++      const s = z.object({
++        pair: z.tuple([z.object({ a: z.string().optional() }), z.string()]),
++      });
++      const out = normalizeStrictNulls(s, { pair: [{ a: null }, "x"] }) as any;
++      expect("a" in out.pair[0]).toBe(false);
++      expect(s.safeParse(out).success).toBe(true);
++    });
++
++    test("optional 包裹的嵌套 object 内部也递归", () => {
++      const s = z.object({
++        cfg: z.object({ x: z.string().optional() }).optional(),
++      });
++      const out = normalizeStrictNulls(s, { cfg: { x: null } }) as any;
++      expect("x" in out.cfg).toBe(false);
++      expect(s.safeParse(out).success).toBe(true);
++    });
++  });
++
++  describe("不越权：只做归一，不做裁剪或改写", () => {
++    test("非 null 值一律原样保留（含 falsy）", () => {
++      const s = z.object({
++        a: z.string().optional(),
++        b: z.number().optional(),
++        c: z.boolean().optional(),
++      });
++      const input = { a: "", b: 0, c: false };
++      expect(normalizeStrictNulls(s, input)).toEqual(input);
++    });
++
++    test("schema 未声明的未识别字段保持原样（交给 zod 自己报错）", () => {
++      const s = z.object({ a: z.string() });
++      const out = normalizeStrictNulls(s, { a: "x", bogus: null }) as Record<string, unknown>;
++      expect("bogus" in out).toBe(true);
++      expect(out.bogus).toBeNull();
++    });
++
++    test("required 字段的 null 保留（必须让 zod 如实报错，不能掩盖）", () => {
++      const s = z.object({ a: z.string() });
++      const out = normalizeStrictNulls(s, { a: null }) as Record<string, unknown>;
++      expect(out.a).toBeNull();
++      expect(s.safeParse(out).success).toBe(false);
++    });
++
++    test("无改动时返回同一引用（便于调用方判断）", () => {
++      const s = z.object({ a: z.string().optional() });
++      const input = { a: "x" };
++      expect(normalizeStrictNulls(s, input)).toBe(input);
++    });
++
++    test("不修改传入对象（纯函数）", () => {
++      const s = z.object({ a: z.string().optional() });
++      const input = { a: null };
++      normalizeStrictNulls(s, input);
++      expect(input.a).toBeNull();
++    });
++  });
++
++  describe("健壮性：异常输入永不抛错", () => {
++    test.each([
++      ["null", null],
++      ["undefined", undefined],
++      ["字符串", "hi"],
++      ["数字", 42],
++      ["数组", [1, 2]],
++    ])("input 为 %s 时原样返回", (_label, input) => {
++      const s = z.object({ a: z.string().optional() });
++      expect(() => normalizeStrictNulls(s, input)).not.toThrow();
++      expect(normalizeStrictNulls(s, input)).toEqual(input as never);
++    });
++
++    test("schema 非 zod 对象时原样返回", () => {
++      const input = { a: null };
++      expect(normalizeStrictNulls({}, input)).toBe(input);
++      expect(normalizeStrictNulls(null, input)).toBe(input);
++    });
++
++    test("z.lazy 自引用不死循环", () => {
++      type Node = { name: string; child?: Node | null };
++      const nodeSchema: z.ZodType<Node> = z.lazy(() =>
++        z.object({ name: z.string(), child: nodeSchema.optional() }),
++      );
++      const s = z.object({ root: nodeSchema });
++      expect(() =>
++        normalizeStrictNulls(s, { root: { name: "a", child: null } }),
++      ).not.toThrow();
++    });
++  });
++});

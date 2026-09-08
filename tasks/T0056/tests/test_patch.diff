@@ -1,0 +1,785 @@
+diff --git a/tests/telemetry/provider-health.test.ts b/tests/telemetry/provider-health.test.ts
+index 5516d83..b5ac9f5 100644
+--- a/tests/telemetry/provider-health.test.ts
++++ b/tests/telemetry/provider-health.test.ts
+@@ -150,4 +150,193 @@ describe("T15: Provider 健康度聚合", () => {
+     const text = renderHealthText(report);
+     expect(text).toContain("无数据");
+   });
++
++  /**
++   * P2-3：TTFT × 缓存命中分桶。
++   *
++   * ⚠️ 这组用例是**补的回归网**：方案 §P2-3 明写"消费侧 digest.ts 与
++   * provider-health.ts 两处必须同步改（刻意同口径）"，但第一版只改了 digest，
++   * 本文件此前对 `ttftByCache` **零断言** —— 于是漏改在两个入口都不可见地存在了一天，
++   * 而验收表与博客都写着"`trace-digest --health` 输出 hit/miss 两组分位数"。
++   *
++   * **教训："两处必须同口径"这种约束只靠注释是拦不住的，得有一条测试站在两边。**
++   * 下面最后一个用例就是那条对账测试。
++   */
++  describe("P2-3 TTFT 缓存分桶", () => {
++    const now = new Date().toISOString();
++
++    it("Anthropic 族：first_content 自带 cache_hit → 直接分桶，零配对风险", () => {
++      writeSession("s-anthropic", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "anthropic", model: "claude", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-anthropic", data: { phase: "first_content", index: 1, model: "claude", ttft_ms: 800, cache_hit: true, cache_read: 4096 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-anthropic", data: { phase: "first_content", index: 2, model: "claude", ttft_ms: 2400, cache_hit: false, cache_read: 0 } },
++      ]);
++
++      const report = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir });
++      const anthropic = report.providers.find((p) => p.provider === "anthropic")!;
++      expect(anthropic.latency.ttftByCache).toBeDefined();
++      expect(anthropic.latency.ttftByCache!.hit.count).toBe(1);
++      expect(anthropic.latency.ttftByCache!.hit.p50).toBe(800);
++      expect(anthropic.latency.ttftByCache!.miss.count).toBe(1);
++      expect(anthropic.latency.ttftByCache!.miss.p50).toBe(2400);
++      // 自带维度 → 不该有任何弃用/空档
++      expect(anthropic.latency.ttftBucketDropped).toBeUndefined();
++      expect(anthropic.latency.ttftNoDimension).toBeUndefined();
++    });
++
++    it("OpenAI 族：维度在 completed 上，同组数量相等时按顺序配对", () => {
++      writeSession("s-openai", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "openai", model: "deepseek", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-openai", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 1200 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-openai", data: { phase: "completed", index: 1, model: "deepseek", cache_hit: true, cache_read: 8192 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-openai", data: { phase: "first_content", index: 2, model: "deepseek", ttft_ms: 3600 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-openai", data: { phase: "completed", index: 2, model: "deepseek", cache_hit: false, cache_read: 0 } },
++      ]);
++
++      const report = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir });
++      const openai = report.providers.find((p) => p.provider === "openai")!;
++      expect(openai.latency.ttftByCache!.hit.p50).toBe(1200);
++      expect(openai.latency.ttftByCache!.miss.p50).toBe(3600);
++      expect(openai.latency.ttftBucketDropped).toBeUndefined();
++    });
++
++    it("★ 数量不等 → 整组弃用而不是猜（猜错会反转\"缓存是否更快\"的结论）", () => {
++      // 同一 (session,index) 里 2 条 first_content 只有 1 条 completed：
++      // 说明有一次 fetch 没走到 completed（超时/abort/error）。
++      // 任何配法都可能把 A 次的 ttft 配到 B 次的命中状态上 → 宁可整组丢。
++      writeSession("s-mismatch", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "openai", model: "deepseek", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-mismatch", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 1000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-mismatch", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 9000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-mismatch", data: { phase: "completed", index: 1, model: "deepseek", cache_hit: true, cache_read: 4096 } },
++      ]);
++
++      const report = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir });
++      const openai = report.providers.find((p) => p.provider === "openai")!;
++      // 两桶都空 → 整个字段不落（不是落一个 count 全 0 的结构）
++      expect(openai.latency.ttftByCache).toBeUndefined();
++      expect(openai.latency.ttftBucketDropped).toBe(2);
++      // 有带维度的 completed，所以这是真的配对失败，不是历史空档
++      expect(openai.latency.ttftNoDimension).toBeUndefined();
++    });
++
++    it("★ 老轨迹（completed 不带 cache_hit）记入 noDimension，不混进 dropped", () => {
++      // cache_hit 维度 2026-08-08 才上线。之前的轨迹一条都没有这个字段。
++      // 把它算进 dropped 会让"这批数据还没有这个维度"显示成"命中状态无法判定"，
++      // 读起来像埋点坏了 —— 实测本机 7 天窗口 512 个样本全属此类。
++      writeSession("s-legacy", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "openai", model: "deepseek", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-legacy", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 1500 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-legacy", data: { phase: "completed", index: 1, model: "deepseek", chunks: 42 } },
++      ]);
++
++      const report = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir });
++      const openai = report.providers.find((p) => p.provider === "openai")!;
++      expect(openai.latency.ttftNoDimension).toBe(1);
++      expect(openai.latency.ttftBucketDropped).toBeUndefined();
++      // 总 TTFT 仍照常统计 —— 分桶失败不该让样本从 p50 里消失
++      expect(openai.latency.ttft_p50).toBe(1500);
++    });
++
++    it("跨会话不串味：同 index 不同 session 不得互相配对", () => {
++      // 本聚合器跨多个会话读 events.jsonl。分组键不含 session_id 时，
++      // A 会话 index=1 的 ttft 会配到 B 会话 index=1 的命中状态上。
++      writeSession("s-a", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "openai", model: "deepseek", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-a", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 500 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-a", data: { phase: "completed", index: 1, model: "deepseek", cache_hit: true } },
++      ]);
++      writeSession("s-b", [
++        { event: "StreamPhase", timestamp: now, session_id: "s-b", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 7000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-b", data: { phase: "completed", index: 1, model: "deepseek", cache_hit: false } },
++      ]);
++
++      const report = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir });
++      const openai = report.providers.find((p) => p.provider === "openai")!;
++      // 正确：500 进命中桶、7000 进未命中桶。串味则会得到相反结论（"缓存更慢"）
++      expect(openai.latency.ttftByCache!.hit.p50).toBe(500);
++      expect(openai.latency.ttftByCache!.miss.p50).toBe(7000);
++      expect(openai.latency.ttftBucketDropped).toBeUndefined();
++    });
++
++    it("子代理不串味：同 session 同 index 但 agent_id 不同要分开配对", () => {
++      // stream-observer.ts 的 B4 注释：子代理与主循环共享 index 空间。
++      writeSession("s-agent", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "openai", model: "deepseek", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-agent", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 600 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-agent", data: { phase: "completed", index: 1, model: "deepseek", cache_hit: true } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-agent", data: { phase: "first_content", index: 1, agent_id: "sub-1", model: "deepseek", ttft_ms: 8000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-agent", data: { phase: "completed", index: 1, agent_id: "sub-1", model: "deepseek", cache_hit: false } },
++      ]);
++
++      const report = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir });
++      const openai = report.providers.find((p) => p.provider === "openai")!;
++      expect(openai.latency.ttftByCache!.hit.p50).toBe(600);
++      expect(openai.latency.ttftByCache!.miss.p50).toBe(8000);
++      // 不分 agent 会让这两条落进同一组 → 数量对得上但配错（2 vs 2），
++      // 得到"命中 600/8000 混在一起"的假分桶。分开后各组 1:1 且无弃用。
++      expect(openai.latency.ttftBucketDropped).toBeUndefined();
++    });
++
++    it("renderHealthText: 分桶行渲染，且两桶都有样本才给差值", () => {
++      writeSession("s-render-bucket", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "anthropic", model: "claude", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-render-bucket", data: { phase: "first_content", index: 1, model: "claude", ttft_ms: 1000, cache_hit: true } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-render-bucket", data: { phase: "first_content", index: 2, model: "claude", ttft_ms: 3000, cache_hit: false } },
++      ]);
++
++      const text = renderHealthText(aggregateProviderHealth({ periodMs: 3600_000, sessionsDir }));
++      expect(text).toContain("TTFT 命中:1.0s(n=1)");
++      expect(text).toContain("未命中:3.0s(n=1)");
++      expect(text).toContain("提速 2.0s");
++      // 命令面板固定纯文本
++      expect(/\x1b\[/.test(text)).toBe(false);
++    });
++
++    it("renderHealthText: 单侧无样本时明确说\"不给差值\"，不拿空气做对照", () => {
++      writeSession("s-one-side", [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "anthropic", model: "claude", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-one-side", data: { phase: "first_content", index: 1, model: "claude", ttft_ms: 1000, cache_hit: true } },
++      ]);
++
++      const text = renderHealthText(aggregateProviderHealth({ periodMs: 3600_000, sessionsDir }));
++      expect(text).toContain("未命中:无样本");
++      expect(text).toContain("不给差值");
++      expect(text).not.toContain("提速");
++    });
++
++    /**
++     * 对账测试：`provider-health` 与 `digest` 必须对同一份事件给出同一个分桶结论。
++     *
++     * 这条测试的存在本身就是修复的一部分：两处"刻意同口径"此前只写在注释里，
++     * 没有任何机制保证。现在两边都走 `ttft-cache-buckets.ts`，这里再站一道 ——
++     * 将来谁把其中一处的逻辑改成第二份实现，这条会红。
++     */
++    it("★ 与 digest.aggregateProviderStats 同口径（对账，防止再次只改一处）", async () => {
++      const { aggregateProviderStats } = await import("../../src/trace/digest.ts");
++      const events = [
++        { event: "AfterModelRaw", timestamp: now, data: { provider: "openai", model: "deepseek", elapsed_ms: 3000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "first_content", index: 1, model: "deepseek", ttft_ms: 1100 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "completed", index: 1, model: "deepseek", cache_hit: true } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "first_content", index: 2, model: "deepseek", ttft_ms: 4200 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "completed", index: 2, model: "deepseek", cache_hit: false } },
++        // 一组数量不等的，确保 dropped 也参与对账
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "first_content", index: 3, model: "deepseek", ttft_ms: 2000 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "first_content", index: 3, model: "deepseek", ttft_ms: 2100 } },
++        { event: "StreamPhase", timestamp: now, session_id: "s-x", data: { phase: "completed", index: 3, model: "deepseek", cache_hit: true } },
++      ];
++      writeSession("s-x", events);
++
++      const health = aggregateProviderHealth({ periodMs: 3600_000, sessionsDir })
++        .providers.find((p) => p.provider === "openai")!;
++      const dig = aggregateProviderStats(events).find((p) => p.provider === "openai")!;
++
++      expect(health.latency.ttftByCache).toEqual(dig.ttftByCache);
++      expect(health.latency.ttftBucketDropped).toBe(dig.ttftBucketDropped);
++      expect(health.latency.ttftNoDimension).toBe(dig.ttftNoDimension);
++      // 断言这次对账不是"两边都是 undefined"的空对账
++      expect(dig.ttftByCache).toBeDefined();
++      expect(dig.ttftBucketDropped).toBe(2);
++    });
++  });
+ });
+diff --git a/tests/telemetry/usage-aggregator.test.ts b/tests/telemetry/usage-aggregator.test.ts
+new file mode 100644
+index 0000000..ed7066e
+--- /dev/null
++++ b/tests/telemetry/usage-aggregator.test.ts
+@@ -0,0 +1,343 @@
++/**
++ * usage-aggregator 单测 —— 周期聚合 + P0-4 渠道可信度排除。
++ *
++ * ⚠️ 本文件是**补的**：`usage-aggregator.ts` 此前零测试覆盖，而它是 `/cache` 的
++ * 唯一数据源。后果是 P0-4（不可信渠道排除出总计）只做在 `src/trace/cache-report.ts`
++ * 里、`/cache` 完全没接，却没有任何机制发现 —— 方案的验收项写着
++ * "`/cache` 输出里 ppchat 的行带警示且不进总计"，实际产品内看不到。
++ *
++ * **教训：一个模块是某条对外数字的唯一来源，就必须有测试站在它后面。**
++ * 「另一个模块已经实现了这个语义」不代表这个入口也实现了。
++ *
++ * 隔离：本文件调用 `readUsageLedger`（读侧）与 `readChannelTrust`（读侧），
++ * 两者都不落盘，但仍显式设 SID_CODE_USAGE_LEDGER / SID_CODE_CHANNEL_TRUST 到 tmpdir ——
++ * 否则测试会读用户真实账本，变成"只在本机数据恰好合适时才通过"。
++ * 存/恢复原值而非无条件 delete（见 CLAUDE.md 测试约定：同批多文件跑在同一进程）。
++ */
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++import type { UsageLedgerEntry } from "../../src/telemetry/usage-ledger.ts";
++import type { ChannelTrustRegistry } from "../../src/telemetry/channel-trust.ts";
++import {
++  aggregateEntries,
++  aggregateOverall,
++  aggregateUsage,
++  periodKey,
++} from "../../src/telemetry/usage-aggregator.ts";
++
++let tmpDir: string;
++const savedLedger = process.env.SID_CODE_USAGE_LEDGER;
++const savedTrust = process.env.SID_CODE_CHANNEL_TRUST;
++
++beforeEach(() => {
++  tmpDir = mkdtempSync(join(tmpdir(), "sid-aggregator-"));
++  process.env.SID_CODE_USAGE_LEDGER = join(tmpDir, "usage-ledger.jsonl");
++  process.env.SID_CODE_CHANNEL_TRUST = join(tmpDir, "channel-trust.json");
++});
++
++afterEach(() => {
++  if (savedLedger === undefined) delete process.env.SID_CODE_USAGE_LEDGER;
++  else process.env.SID_CODE_USAGE_LEDGER = savedLedger;
++  if (savedTrust === undefined) delete process.env.SID_CODE_CHANNEL_TRUST;
++  else process.env.SID_CODE_CHANNEL_TRUST = savedTrust;
++  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
++});
++
++function entry(over: Partial<UsageLedgerEntry> = {}): UsageLedgerEntry {
++  return {
++    ts: 1786000000,
++    sessionId: `s-${Math.round(over.ts ?? 1786000000)}-${over.model ?? "m"}`,
++    model: "glm-5.2",
++    promptTotal: 10000,
++    cacheHit: 8000,
++    cacheWrite: 0,
++    uncachedInput: 2000,
++    output: 500,
++    costUSD: 0.01,
++    savingsUSD: 0.02,
++    durationMs: 1000,
++    ...over,
++  } as UsageLedgerEntry;
++}
++
++/** 只含一个 untrusted 渠道的登记表（判据与真实探针产出同形状） */
++function registry(): ChannelTrustRegistry {
++  return {
++    channels: {
++      "code.ppchat.vip": {
++        host: "code.ppchat.vip",
++        verdict: "untrusted",
++        failedCriteria: ["A", "B", "C"],
++        reason: "全新前缀首次请求即报命中（服务端从未见过该前缀）",
++        probedAt: 1786177861,
++      },
++      "uniapi.ruijie.com.cn": {
++        host: "uniapi.ruijie.com.cn",
++        verdict: "trusted",
++        probedAt: 1786177883,
++      },
++    },
++  };
++}
++
++describe("periodKey", () => {
++  test("day / month 按 UTC 切分", () => {
++    expect(periodKey(1786000000, "day")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
++    expect(periodKey(1786000000, "month")).toMatch(/^\d{4}-\d{2}$/);
++  });
++
++  test("week 用 ISO 8601 周数（周一为周首）", () => {
++    expect(periodKey(1786000000, "week")).toMatch(/^\d{4}-W\d{2}$/);
++  });
++});
++
++describe("aggregateEntries：基础聚合", () => {
++  test("加权命中率的分母是 promptTotal 而非会话数", () => {
++    // 两个会话命中率差很多但输入量也差很多 —— 按会话平均会得出错误答案
++    const r = aggregateEntries(
++      [
++        entry({ model: "a", promptTotal: 1000, cacheHit: 100 }),   // 10%
++        entry({ model: "a", promptTotal: 99000, cacheHit: 90000 }), // 90.9%
++      ],
++      "p",
++      registry(),
++    );
++    // 正确：90100/100000 = 90.1%。按会话平均会得到 (10+90.9)/2 ≈ 50.5%
++    expect(r.totalHitRate).toBeCloseTo(0.901, 3);
++  });
++
++  test("promptTotal=0 时命中率为 0 而不是 NaN", () => {
++    const r = aggregateEntries([entry({ promptTotal: 0, cacheHit: 0 })], "p", registry());
++    expect(r.totalHitRate).toBe(0);
++    expect(Number.isNaN(r.totalHitRate)).toBe(false);
++  });
++
++  test("空输入不崩，且各总量为 0", () => {
++    const r = aggregateEntries([], "p", registry());
++    expect(r.totalSessions).toBe(0);
++    expect(r.totalHitRate).toBe(0);
++    expect(r.excludedUntrustedRows).toBe(0);
++    expect(r.untrustedHosts).toEqual([]);
++  });
++});
++
++describe("P0-4：不可信渠道排除出统计", () => {
++  test("★ untrusted 行既不进 byModel 也不进总计", () => {
++    const r = aggregateEntries(
++      [
++        entry({ model: "claude-sonnet-5", endpointHost: "code.ppchat.vip", promptTotal: 100000, cacheHit: 99000, costUSD: 5, savingsUSD: 9 }),
++        entry({ model: "glm-5.2", endpointHost: "uniapi.ruijie.com.cn", promptTotal: 10000, cacheHit: 5000, costUSD: 1, savingsUSD: 2 }),
++      ],
++      "p",
++      registry(),
++    );
++
++    // 假数字完全不参与：命中率 = 5000/10000，不是 104000/110000（94.5%）
++    expect(r.totalHitRate).toBeCloseTo(0.5, 6);
++    expect(r.totalCostUSD).toBeCloseTo(1, 6);
++    expect(r.totalSavingsUSD).toBeCloseTo(2, 6);
++    // 被排除的模型不出现在 byModel —— 出现了就会被渲染层当正常行打印
++    expect(Object.keys(r.byModel)).toEqual(["glm-5.2"]);
++  });
++
++  test("★ 覆盖盲区：无 host 的行按可信计入，但必须单独计数可上报", () => {
++    // 这条锚死本轮发现的真实状况：ppchat 判为 untrusted，但账本里 ppchat 的行
++    // 一条都没有 endpointHost（该字段 2026-08-08 才落地），于是排除了 **0 行**。
++    // 若只暴露 excludedUntrustedRows，"排除 0"会被读成"总计干净" —— 而脏数据还在里面。
++    const r = aggregateEntries(
++      [
++        entry({ endpointHost: undefined }),
++        entry({ endpointHost: undefined }),
++        entry({ endpointHost: "uniapi.ruijie.com.cn" }),
++      ],
++      "p",
++      registry(),
++    );
++    expect(r.excludedUntrustedRows).toBe(0);   // 什么都没排掉
++    expect(r.sessionsWithoutHost).toBe(2);     // 但有 2 个会话压根没被判定
++    expect(r.totalSessions).toBe(3);           // 三行都计入了
++  });
++
++  test("全部带 host 且可信时，盲区计数为 0（不误报）", () => {
++    const r = aggregateEntries(
++      [entry({ endpointHost: "uniapi.ruijie.com.cn" })],
++      "p",
++      registry(),
++    );
++    expect(r.sessionsWithoutHost).toBe(0);
++  });
++
++  test("★ 排除必须留痕：行数 + host + 理由都可读", () => {
++    const r = aggregateEntries(
++      [
++        entry({ endpointHost: "code.ppchat.vip" }),
++        entry({ endpointHost: "code.ppchat.vip" }),
++        entry({ endpointHost: "uniapi.ruijie.com.cn" }),
++      ],
++      "p",
++      registry(),
++    );
++    expect(r.excludedUntrustedRows).toBe(2);
++    // 同一渠道多行只报一次 host
++    expect(r.untrustedHosts).toHaveLength(1);
++    expect(r.untrustedHosts[0]!.host).toBe("code.ppchat.vip");
++    expect(r.untrustedHosts[0]!.reason).toContain("全新前缀");
++  });
++
++  test("★ totalSessions 与三个总量同口径：只数计入的行", () => {
++    // 若这里用 entries.length，就会出现"3 会话"配上"排除 2 行后的命中率"，分母对不上
++    const r = aggregateEntries(
++      [
++        entry({ endpointHost: "code.ppchat.vip" }),
++        entry({ endpointHost: "code.ppchat.vip" }),
++        entry({ endpointHost: "uniapi.ruijie.com.cn" }),
++      ],
++      "p",
++      registry(),
++    );
++    expect(r.totalSessions).toBe(1);
++  });
++
++  test("unknown 渠道按可信处理（含旧账本行无 endpointHost）", () => {
++    // 把没探测过的一律排除，会让 /cache 在探针跑之前显示空表 —— 比不排除更糟。
++    // 判据链见 channel-trust.ts 头注释。
++    const r = aggregateEntries(
++      [
++        entry({ endpointHost: undefined, promptTotal: 10000, cacheHit: 6000 }),
++        entry({ endpointHost: "never-probed.example.com", promptTotal: 10000, cacheHit: 4000 }),
++      ],
++      "p",
++      registry(),
++    );
++    expect(r.excludedUntrustedRows).toBe(0);
++    expect(r.totalSessions).toBe(2);
++    expect(r.totalHitRate).toBeCloseTo(0.5, 6);
++  });
++
++  test("trusted 渠道正常计入（判据是 untrusted，不是「有 endpointHost 就排除」）", () => {
++    const r = aggregateEntries(
++      [entry({ endpointHost: "uniapi.ruijie.com.cn" })],
++      "p",
++      registry(),
++    );
++    expect(r.excludedUntrustedRows).toBe(0);
++    expect(r.totalSessions).toBe(1);
++  });
++
++  test("空登记表时全部计入（探针还没跑过的机器不该看到空表）", () => {
++    const r = aggregateEntries(
++      [entry({ endpointHost: "code.ppchat.vip" })],
++      "p",
++      { channels: {} },
++    );
++    expect(r.excludedUntrustedRows).toBe(0);
++    expect(r.totalSessions).toBe(1);
++  });
++});
++
++describe("P0-4：模型行带渠道标注", () => {
++  test("单渠道模型记一个 host", () => {
++    const r = aggregateEntries(
++      [entry({ model: "glm-5.2", endpointHost: "uniapi.ruijie.com.cn" })],
++      "p",
++      registry(),
++    );
++    expect(r.byModel["glm-5.2"]!.hosts).toEqual(["uniapi.ruijie.com.cn"]);
++  });
++
++  test("★ 同模型跨渠道：两个 host 都保留，不合并", () => {
++    // 合并成一个百分比恰恰掩盖了渠道差异 —— 而"这个数能不能信"取决于渠道
++    const r = aggregateEntries(
++      [
++        entry({ model: "glm-5.2", endpointHost: "uniapi.ruijie.com.cn" }),
++        entry({ model: "glm-5.2", endpointHost: "gw-b.example.com" }),
++        entry({ model: "glm-5.2", endpointHost: "uniapi.ruijie.com.cn" }),
++      ],
++      "p",
++      registry(),
++    );
++    // 去重且保持首次出现顺序
++    expect(r.byModel["glm-5.2"]!.hosts).toEqual(["uniapi.ruijie.com.cn", "gw-b.example.com"]);
++    expect(r.byModel["glm-5.2"]!.sessions).toBe(3);
++  });
++
++  test("旧账本行（无 endpointHost）hosts 为空数组，不是 [undefined]", () => {
++    const r = aggregateEntries([entry({ endpointHost: undefined })], "p", registry());
++    expect(r.byModel["glm-5.2"]!.hosts).toEqual([]);
++  });
++});
++
++describe("aggregateUsage / aggregateOverall：从账本读", () => {
++  function writeLedger(entries: UsageLedgerEntry[]): void {
++    writeFileSync(
++      process.env.SID_CODE_USAGE_LEDGER!,
++      entries.map((e) => JSON.stringify(e)).join("\n") + "\n",
++    );
++  }
++  function writeTrust(reg: ChannelTrustRegistry): void {
++    writeFileSync(process.env.SID_CODE_CHANNEL_TRUST!, JSON.stringify(reg));
++  }
++
++  test("★ 端到端：账本 + 登记表 → /cache 的总计已排除不可信渠道", () => {
++    writeTrust(registry());
++    writeLedger([
++      entry({ sessionId: "s1", model: "claude-sonnet-5", endpointHost: "code.ppchat.vip", promptTotal: 100000, cacheHit: 99000 }),
++      entry({ sessionId: "s2", model: "glm-5.2", endpointHost: "uniapi.ruijie.com.cn", promptTotal: 10000, cacheHit: 5000 }),
++    ]);
++
++    const overall = aggregateOverall();
++    expect(overall.excludedUntrustedRows).toBe(1);
++    expect(overall.totalHitRate).toBeCloseTo(0.5, 6);
++    expect(Object.keys(overall.byModel)).toEqual(["glm-5.2"]);
++  });
++
++  test("按周期分组时每组各自统计排除数", () => {
++    writeTrust(registry());
++    const day1 = 1786000000;
++    const day2 = day1 + 86400 * 2;
++    writeLedger([
++      entry({ sessionId: "a1", ts: day1, endpointHost: "code.ppchat.vip" }),
++      entry({ sessionId: "a2", ts: day1, endpointHost: "uniapi.ruijie.com.cn" }),
++      entry({ sessionId: "b1", ts: day2, endpointHost: "uniapi.ruijie.com.cn" }),
++    ]);
++
++    const periods = aggregateUsage({ granularity: "day" });
++    expect(periods).toHaveLength(2);
++    expect(periods[0]!.excludedUntrustedRows).toBe(1);
++    expect(periods[1]!.excludedUntrustedRows).toBe(0);
++    // 周期按键升序
++    expect(periods[0]!.period < periods[1]!.period).toBe(true);
++  });
++
++  test("登记表文件损坏时全部计入而不是抛错（度量绝不阻断）", () => {
++    writeFileSync(process.env.SID_CODE_CHANNEL_TRUST!, "{ 这不是 JSON");
++    writeLedger([entry({ sessionId: "s1", endpointHost: "code.ppchat.vip" })]);
++    const overall = aggregateOverall();
++    expect(overall.totalSessions).toBe(1);
++    expect(overall.excludedUntrustedRows).toBe(0);
++  });
++
++  test("model 过滤支持精确与前缀", () => {
++    writeTrust({ channels: {} });
++    writeLedger([
++      entry({ sessionId: "s1", model: "glm-5.2" }),
++      entry({ sessionId: "s2", model: "origin-deepseek-v4-pro" }),
++    ]);
++    expect(Object.keys(aggregateOverall({ model: "glm-5.2" }).byModel)).toEqual(["glm-5.2"]);
++    expect(Object.keys(aggregateOverall({ model: "origin-deepseek" }).byModel))
++      .toEqual(["origin-deepseek-v4-pro"]);
++  });
++
++  test("sinceDays 按 ts 过滤", () => {
++    writeTrust({ channels: {} });
++    const now = 1786000000;
++    writeLedger([
++      entry({ sessionId: "old", ts: now - 86400 * 10 }),
++      entry({ sessionId: "new", ts: now - 3600 }),
++    ]);
++    const r = aggregateOverall({ sinceDays: 2, nowSeconds: now });
++    expect(r.totalSessions).toBe(1);
++  });
++});
+diff --git a/tests/trace/prefix-break-probe.test.ts b/tests/trace/prefix-break-probe.test.ts
+index cbb2a1d..4592665 100644
+--- a/tests/trace/prefix-break-probe.test.ts
++++ b/tests/trace/prefix-break-probe.test.ts
+@@ -209,3 +209,233 @@ describe("P1-2 健壮性：埋点绝不因异常数据抛错", () => {
+     expect(d.broken).toBe(false);
+   });
+ });
++
++/**
++ * P1-3 解锁条件：字符级判据。
++ *
++ * ## 为什么必须有这一层
++ *
++ * 上面那套段判据是 **message 级**的，而**服务端按 token 前缀匹配，不按 message 对象匹配**。
++ * 判据与目标不在同一层，这道缝隙让 P1-3 的第一次尝试整体翻车（2026-08-09）：
++ * 候选方案 A 把 ambient reminder 改走独立尾部消息，探针报 `msg[0]` 断裂 4→0、
++ * 26 个测试全绿、机理讲得通 —— 真实命中率却降了最多 11.2pp，已整体回滚。
++ * 根因是 OpenAI 族把多 text block `join("\n")` 成单 string，"独立 block"与
++ * "独立 message"在 wire 上塌缩成同一串字节，理论收益为零；`msg[0]→0` 只是
++ * 所有下标平移一位造成的**度量假象**。
++ *
++ * 所以这组用例的职责不是"覆盖新字段"，而是**锚死两层判据的分歧方向**：
++ * 哪些形态下 message 级会高估、哪些会低估。下面两个 ★ 就是实测出的那两处。
++ */
++describe("P1-3 字符级判据（贴近计费口径）", () => {
++  const SYS = "S".repeat(1000);
++
++  test("分母是上一轮长度：纯尾部追加作废 0%（第一版把分母写成本轮，健康形态误报 2.91%）", () => {
++    // 用本轮长度做分母会把新增内容算成"浪费"，而新增内容从未被缓存过。
++    // 后果是每一轮正常请求都被标成"判据矛盾"，噪声淹没真信号。
++    const d = diagnosePrefixBreak(
++      fp(SYS, TOOLS, [{ r: "u", t: "AAAA" }]),
++      fp(SYS, TOOLS, [{ r: "u", t: "AAAA" }, { r: "a", t: "BBBB" }]),
++    );
++    expect(d.broken).toBe(false);
++    expect(d.charWastedRatio).toBe(0);
++    expect(d.judgeDisagreement).toBe(false);
++    // 共同前缀 == 上一轮全长，即"上轮建立的前缀全部仍可用"
++    expect(d.commonPrefixChars).toBe(d.prevTotalChars);
++  });
++
++  test("完全不变 → 共同前缀 = 全长，作废 0%", () => {
++    const msgs = [{ r: "u", t: "1" }];
++    const d = diagnosePrefixBreak(fp(SYS, TOOLS, msgs), fp(SYS, TOOLS, msgs));
++    expect(d.commonPrefixChars).toBe(d.prevTotalChars);
++    expect(d.charWastedRatio).toBe(0);
++  });
++
++  test("首条改写 → 字符级与 message 级都报接近一半作废（两层一致）", () => {
++    const d = diagnosePrefixBreak(
++      fp(SYS, TOOLS, [{ r: "u", t: "AAAA" }, { r: "u", t: "B".repeat(900) }]),
++      fp(SYS, TOOLS, [{ r: "u", t: "ZZZZ" }, { r: "u", t: "B".repeat(900) }]),
++    );
++    expect(d.broken).toBe(true);
++    expect(d.charWastedRatio).toBeGreaterThan(0.4);
++    // 两层判据方向一致 → 不算矛盾。这类形态下 message 级数字是可信的
++    expect(d.judgeDisagreement).toBe(false);
++  });
++
++  test("★ reminder 滚动迁移：message 级高估约 4 倍（T4 那份分布就建在被高估的数上）", () => {
++    // T4 实测的真实病灶：reminder 挂在"最后一条 user 消息"，而 tool_result 也是
++    // role:"user"，于是锚点每轮后移 —— 上一轮加的 reminder 这一轮没了。
++    // message 级把整条 msg[0] 之后全算作废；字符级只算真正变了的那几十字节。
++    const d = diagnosePrefixBreak(
++      fp(SYS, TOOLS, [
++        { role: "user", content: [{ type: "text", text: "指令" }, { type: "text", text: "<reminder>" }] },
++      ]),
++      fp(SYS, TOOLS, [
++        { role: "user", content: [{ type: "text", text: "指令" }] },
++        { role: "assistant", content: "答" },
++        { role: "user", content: [{ type: "text", text: "tr" }, { type: "text", text: "<reminder>" }] },
++      ]),
++    );
++    expect(d.broken).toBe(true);
++    // 两个数都不为 0，但差着数倍 —— 这就是"该修哪里"与"改了省多少"的口径差
++    expect(d.wastedRatio!).toBeGreaterThan(d.charWastedRatio * 2);
++    // 断言具体量级，防止将来某次改动悄悄把这个差距抹平却没人注意
++    expect(d.charWastedRatio).toBeLessThan(0.1);
++    expect(d.wastedRatio!).toBeGreaterThan(0.1);
++  });
++
++  test("★ compact 截短：message 级严重低估（2.9% vs 60.2%），字符级才反映真实作废", () => {
++    // 历史被压缩成一条摘要。段级只看到"段数变少了"，wastedRatio 恒落 0 附近；
++    // 而实际上整条前缀几乎全废 —— 这是段判据的盲区，且方向与上一条相反。
++    // 两个方向都得有用例，只防上次踩过的那一个不够。
++    const d = diagnosePrefixBreak(
++      fp(SYS, TOOLS, [
++        { r: "u", t: "A".repeat(500) },
++        { r: "a", t: "B".repeat(500) },
++        { r: "u", t: "C".repeat(500) },
++      ]),
++      fp(SYS, TOOLS, [{ r: "u", t: "摘要" }]),
++    );
++    expect(d.broken).toBe(true);
++    expect(d.charWastedRatio).toBeGreaterThan(0.5);
++    // message 级在这个形态下几乎无信息量（截短分支 wastedRatio 恒为 0）
++    expect(d.wastedRatio!).toBeLessThan(0.1);
++  });
++
++  /**
++   * ★★ 这是整组用例里最重要的一条：**离线复现 2026-08-09 回滚的那次假收益**，
++   * 并断言字符级判据能把它标出来。
++   *
++   * 方案 A 做的事：把 ambient reminder 从"msg[0] 的第二个 text block"改成
++   * "一条独立的尾部 message"。OpenAI 族把多 block `join("\n")` 成单 string，
++   * 所以这两种形态在 wire 上**是同一串字节**，真实收益为零 —— 实测命中率反降 11.2pp。
++   *
++   * 但 message 级判据看到的是"content 数组从 2 元素变 1 元素、多出一个 message"，
++   * 于是报出一个巨大的"改善"。这条用例锚死：**字符级必须看穿这个结构变化。**
++   *
++   * ⚠️ 也正因如此，`flattenTextForWire` 绝不能用 `JSON.stringify` ——
++   * 那样字符级就只是把段判据的假象换个单位重演，这一层白加。
++   */
++  test("★★ 复现 P1-3 假收益：block 拆成独立 message → 字节没变，判据矛盾=true", () => {
++    const long = "A".repeat(2000);
++    // 修复前：reminder 是 msg[0] 的第二个 block
++    const asBlocks = [
++      { role: "user", content: [{ type: "text", text: long }, { type: "text", text: "<reminder>R</reminder>" }] },
++    ];
++    // 方案 A（已回滚）：reminder 改走独立尾部消息
++    const asMsgs = [
++      { role: "user", content: [{ type: "text", text: long }] },
++      { role: "user", content: [{ type: "text", text: "<reminder>R</reminder>" }] },
++    ];
++    const d = diagnosePrefixBreak(fp(SYS, TOOLS, asBlocks), fp(SYS, TOOLS, asMsgs));
++
++    // 段级：报大幅断裂（这就是当初被当成"改善"的那个数）
++    expect(d.broken).toBe(true);
++    expect(d.wastedRatio!).toBeGreaterThan(0.5);
++    // 字符级：wire 字节几乎没动 —— 真实收益接近零
++    expect(d.charWastedRatio).toBeLessThan(0.01);
++    // 两层判据矛盾 → 该轮 message 级数字不可用于评估优化收益
++    expect(d.judgeDisagreement).toBe(true);
++    // 差距至少 50 倍：断言量级而非仅方向，防止将来某次改动把这个差距悄悄抹平
++    expect(d.wastedRatio!).toBeGreaterThan(d.charWastedRatio * 50);
++  });
++
++  test("对照组：真实的中部插入（有实际字节）不该被标成矛盾", () => {
++    // 与上一条形成对照 —— 判据矛盾必须是"结构变而字节未变"的专属信号，
++    // 不能变成"只要段级报断裂就标矛盾"的噪声。
++    const long = "A".repeat(2000);
++    const d = diagnosePrefixBreak(
++      fp(SYS, TOOLS, [{ role: "u", content: "x" }, { role: "u", content: long }]),
++      fp(SYS, TOOLS, [
++        { role: "u", content: "x" },
++        { role: "y", content: "B".repeat(1000) },
++        { role: "u", content: long },
++      ]),
++    );
++    expect(d.broken).toBe(true);
++    expect(d.charWastedRatio).toBeGreaterThan(0.01);
++    expect(d.judgeDisagreement).toBe(false);
++  });
++
++  test("flattenTextForWire：block 拆分与不拆分产出同一串（复刻 OpenAI join 行为）", () => {
++    // 直接锚死塌缩语义本身，而不只是通过 diagnose 间接验证。
++    // 这条挂了说明 flattenTextForWire 被改回结构序列化了。
++    const a = fp(SYS, TOOLS, [
++      { role: "user", content: [{ type: "text", text: "前半" }, { type: "text", text: "后半" }] },
++    ]);
++    const b = fp(SYS, TOOLS, [
++      { role: "user", content: [{ type: "text", text: "前半\n后半" }] },
++    ]);
++    // 段判据能区分（结构不同），字符级判据看不出差别（wire 相同）—— 这正是设计意图
++    expect(diagnosePrefixBreak(a, b).broken).toBe(true);
++    expect(diagnosePrefixBreak(a, b).charWastedRatio).toBe(0);
++  });
++
++  test("tool_result 形状（content 为字符串的块）也计入 wire 文本", () => {
++    // 漏掉这类块会让共同前缀被高估 —— tool_result 在真实会话里占大头
++    const a = fp(SYS, TOOLS, [{ role: "user", content: [{ type: "tool_result", content: "结果A".repeat(200) }] }]);
++    const b = fp(SYS, TOOLS, [{ role: "user", content: [{ type: "tool_result", content: "结果B".repeat(200) }] }]);
++    const d = diagnosePrefixBreak(a, b);
++    // 内容真的变了 → 字符级必须察觉（若 tool_result 被跳过，这里会是 0）
++    expect(d.charWastedRatio).toBeGreaterThan(0.1);
++  });
++
++  test("非常规形状退回结构序列化，不静默返回空串", () => {
++    // 返回空串会让这条消息在字符级判据里"消失"，共同前缀凭空变长 → 假的零作废
++    const a = fp(SYS, TOOLS, [{ role: "user" } as unknown]);
++    const b = fp(SYS, TOOLS, [{ role: "assistant" } as unknown]);
++    const d = diagnosePrefixBreak(a, b);
++    expect(d.commonPrefixChars).toBeLessThan(d.prevTotalChars);
++  });
++
++  test("空前缀不产生除零 NaN", () => {
++    const d = diagnosePrefixBreak(fp(undefined, "", []), fp(undefined, "", []));
++    expect(Number.isNaN(d.charWastedRatio)).toBe(false);
++    expect(d.charWastedRatio).toBe(0);
++  });
++
++  test("flat 不落盘契约：diagnosis 里没有任何原文字段", () => {
++    // flat 含用户代码与对话内容。它只在内存里活到比较完，落盘的只能是长度数字。
++    // 这条测试站在这里是因为"顺手把 flat 也 emit 出去"是极容易犯的错。
++    const d = diagnosePrefixBreak(
++      fp(SYS, TOOLS, [{ r: "u", t: "秘密内容" }]),
++      fp(SYS, TOOLS, [{ r: "u", t: "秘密内容2" }]),
++    );
++    const serialized = JSON.stringify(d);
++    expect(serialized).not.toContain("秘密内容");
++    expect(Object.keys(d)).not.toContain("flat");
++  });
++});
++
++describe("P1-3 字符级判据在 digest 聚合层", () => {
++  test("字符级按全轮平均（含未断裂轮），与 avgWastedRatio 口径不同", () => {
++    const stats = aggregatePrefixBreakStats([
++      { event: "prefix_break", data: { broken: false, char_wasted_ratio: 0 } },
++      { event: "prefix_break", data: { broken: false, char_wasted_ratio: 0 } },
++      { event: "prefix_break", data: { broken: true, wasted_ratio: 0.4, first_changed_kind: "message", char_wasted_ratio: 0.2 } },
++    ])!;
++    // message 级只在 broken 轮平均 → 0.4
++    expect(stats.avgWastedRatio).toBeCloseTo(0.4, 6);
++    // 字符级在全部 3 轮平均 → 0.2/3
++    expect(stats.avgCharWastedRatio).toBeCloseTo(0.2 / 3, 6);
++    expect(stats.maxCharWastedRatio).toBeCloseTo(0.2, 6);
++  });
++
++  test("矛盾轮次可计数（> 0 时整会话的 message 级数字都不该用来评估收益）", () => {
++    const stats = aggregatePrefixBreakStats([
++      { event: "prefix_break", data: { broken: true, wasted_ratio: 0.5, first_changed_kind: "message", char_wasted_ratio: 0.001, judge_disagreement: true } },
++      { event: "prefix_break", data: { broken: true, wasted_ratio: 0.5, first_changed_kind: "message", char_wasted_ratio: 0.4 } },
++    ])!;
++    expect(stats.disagreementTurns).toBe(1);
++  });
++
++  test("老轨迹（无字符级字段）记入 charJudgeMissingTurns，不拉低平均值", () => {
++    // 把无该字段的轮次当分母会把平均值凭空拉低，读成"字节浪费很小"
++    const stats = aggregatePrefixBreakStats([
++      { event: "prefix_break", data: { broken: true, wasted_ratio: 0.3, first_changed_kind: "message" } },
++      { event: "prefix_break", data: { broken: true, wasted_ratio: 0.3, first_changed_kind: "message", char_wasted_ratio: 0.6 } },
++    ])!;
++    expect(stats.charJudgeMissingTurns).toBe(1);
++    // 分母是 1（只有一轮有数据），不是 2
++    expect(stats.avgCharWastedRatio).toBeCloseTo(0.6, 6);
++  });
++});

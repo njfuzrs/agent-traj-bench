@@ -1,0 +1,535 @@
+diff --git a/src/app.ts b/src/app.ts
+index b18c35a..94c2333 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -89,6 +89,12 @@ import { resolveSideCallTimeouts } from "./config/network-profile.ts";
+ interface AtExpansionResult {
+   displayText: string;
+   injectedContent: string | null;
++  /**
++   * 被路径校验拦下、未注入的 @ 提及（审计第 20 条）。
++   * 调用方据此给**用户**一条可见提示——原实现的 `catch {}` 是静默的，
++   * 修复时不能延续：拦截必须 fail-closed 且可观测，否则用户以为文件已给到模型。
++   */
++  blockedPaths?: Array<{ path: string; reason: string }>;
+ }
+ 
+ /** vision 支持的图片扩展名（与 tool/read.ts 严格一致）。图片走 Read 工具而非文本内联。 */
+@@ -120,11 +126,14 @@ function parseAgentHookVerdict(output: string): { ok?: boolean; reason?: string
+   return null;
+ }
+ 
+-async function expandAtReferences(
++export async function expandAtReferences(
+   input: string,
+   mcpManager?: MCPManager,
++  permissionChecker?: Checker | null,
+ ): Promise<AtExpansionResult> {
+   const parts: string[] = [];
++  /** 被路径校验拦下的 @ 提及，用于向用户显式告知"没注入"（不能静默） */
++  const blocked: Array<{ path: string; reason: string }> = [];
+ 
+   // G1：先抽取 MCP 资源提及 @server:uri（uri 含冒号，如 @filesystem:file:///tmp/a.txt）。
+   // 正则对齐 CC extractMcpResourceMentions：@ 后跟「非空白且含冒号」的 token。
+@@ -176,8 +185,26 @@ async function expandAtReferences(
+       imagePaths.push(resolve(process.cwd(), filePath));
+       continue;
+     }
++    const absPath = resolve(process.cwd(), filePath);
++    // 审计第 20 条：接工具层同一道路径防线（敏感文件 / 系统目录 / symlink 逃逸 /
++    // Unicode 混淆 / 目录黑白名单）。此前这里直接 readFile 零校验，一个 `@.env`
++    // 就能把密钥明文注入上下文并发往模型服务端，而同路径经 read 工具会被拦下
++    // （checker.ts Step 4）——用户对"哪些文件不会被读"的心智模型与实际行为不一致。
++    //
++    // 复用 checker 内部的 PathValidator 实例（非新建），以继承 /add-dir 的运行时授权。
++    // checker 缺席时（无头/测试路径）不做校验：此处是"补上工具层已有的校验"，
++    // 而非新增一道独立防线，没有 checker 就意味着整个权限体系未装配。
++    const validator = permissionChecker?.getPathValidator?.();
++    if (validator) {
++      const verdict = validator.validateAccess(absPath, "read");
++      if (!verdict.allowed) {
++        // fail-closed 且可观测：不注入，并记账供下面告知用户。
++        blocked.push({ path: filePath, reason: verdict.reason || "路径校验未通过" });
++        getLogger().info("AT_REF", `@${filePath} 被路径校验拦截，未注入: ${verdict.reason}`);
++        continue;
++      }
++    }
+     try {
+-      const absPath = resolve(process.cwd(), filePath);
+       const content = await readFile(absPath, "utf-8");
+       fileContents.push(`以下是文件 \`${filePath}\` 的内容：\n\`\`\`${extname(filePath).slice(1)}\n${content}\n\`\`\``);
+     } catch {
+@@ -186,6 +213,14 @@ async function expandAtReferences(
+   }
+ 
+   if (fileContents.length > 0) parts.push(fileContents.join("\n\n"));
++  if (blocked.length > 0) {
++    // 告知**模型**这些提及未注入——否则模型会以为用户给了文件却看不到内容，
++    // 转而用 read 工具重试（同样会被拦），白烧一轮。用户侧的可见提示由调用方给。
++    const list = blocked.map((b) => `- \`${b.path}\`：${b.reason}`).join("\n");
++    parts.push(
++      `以下 @ 提及的文件被权限规则拦截，内容**未注入**（请勿假设已读到，也不要改用 Read 工具绕行）：\n${list}`,
++    );
++  }
+   if (imagePaths.length > 0) {
+     // 引导模型主动 Read 图片：Read 工具读图会产出 mediaBlocks，交给支持 vision 的 provider。
+     const list = imagePaths.map((p) => `- ${p}`).join("\n");
+@@ -197,6 +232,7 @@ async function expandAtReferences(
+     injectedContent: parts.length > 0
+       ? `<system-reminder>\n${parts.join("\n\n")}\n</system-reminder>`
+       : null,
++    blockedPaths: blocked.length > 0 ? blocked : undefined,
+   };
+ }
+ 
+@@ -5671,7 +5707,21 @@ export class App {
+           this.abortController = new AbortController();
+           // @ 文件注入：展开用户输入中的 @path 引用
+           // 文件内容用 <system-reminder> 包裹，TUI 渲染时剥离，模型正常读取
+-          const { displayText, injectedContent } = await expandAtReferences(text, this.mcpManager);
++          const { displayText, injectedContent, blockedPaths } = await expandAtReferences(
++            text,
++            this.mcpManager,
++            this.permissionChecker,
++          );
++          // 审计第 20 条：被路径校验拦下的 @ 提及必须让用户看见——静默跳过会让用户
++          // 以为文件已给到模型，而模型侧只收到"未注入"说明，两边认知错位。
++          if (blockedPaths && blockedPaths.length > 0) {
++            const summary = blockedPaths.map((b) => `@${b.path}`).join("、");
++            addTransientStatusMessage(
++              "at_ref_blocked",
++              `⚠ ${summary} 被权限规则拦截，未注入（${blockedPaths[0]!.reason}）`,
++              5000,
++            );
++          }
+           const finalInput = injectedContent ? `${displayText}\n\n${injectedContent}` : displayText;
+           await tuiAgentLoop(finalInput, opts?.displayCommand);
+           // 正常完成 → 丢弃暂存,不回填
+diff --git a/src/extension/frontmatter.ts b/src/extension/frontmatter.ts
+index a1293ce..43ef813 100644
+--- a/src/extension/frontmatter.ts
++++ b/src/extension/frontmatter.ts
+@@ -8,17 +8,32 @@ import YAML from "yaml";
+ export interface FrontmatterResult {
+   frontmatter: Record<string, unknown>;
+   body: string;
++  /**
++   * 审计第 4 条：**畸形** frontmatter 的错误说明（正常解析 / 本来就没有 frontmatter 时为 undefined）。
++   *
++   * 关键区分：「文件不以 `---` 开头」= 用户本就没写 frontmatter，是合法的，`error` 为空；
++   * 「以 `---` 开头但找不到闭合 / YAML 完全解析不出来」= 用户**意图**写 frontmatter 但写错了，
++   * 此时旧实现把原始 YAML 当正文返回，造成两个后果：
++   *   ① `allowed-tools` / `model` 等安全约束随解析失败一起消失，且降级方向**更宽松**
++   *      （自定义命令从"fork 子代理受限执行"退化成"inline 注入主对话、无工具限制"）；
++   *   ② 原始 YAML 文本被当自然语言指令喂给模型。
++   * 两者都是静默的。消费方**必须**检查此字段并 fail-closed（跳过该文件），
++   * 不能把"用户的笔误"解释成"另一种合法语义"。
++   */
++  error?: string;
+ }
+ 
+ /**
+  * 解析 markdown 文件的 frontmatter
+  * 检测 `---\n` 开头，找到第二个 `---\n`，中间部分用 yaml.parse() 解析
+- * 解析失败返回空 frontmatter + 完整内容作为 body
++ *
++ * 返回的 `error` 非空表示 frontmatter 畸形（详见 `FrontmatterResult.error`）——
++ * 消费方须据此跳过该文件，而不是当作"无 frontmatter"继续加载。
+  */
+ export function parseFrontmatter(content: string): FrontmatterResult {
+   const trimmed = content.trimStart();
+ 
+-  // 必须以 --- 开头（后面紧跟换行或文件结束）
++  // 必须以 --- 开头（后面紧跟换行或文件结束）。不以 --- 开头 = 合法的"无 frontmatter"，非错误。
+   if (!trimmed.startsWith("---")) {
+     return { frontmatter: {}, body: content };
+   }
+@@ -26,7 +41,8 @@ export function parseFrontmatter(content: string): FrontmatterResult {
+   // 找第二个 ---
+   const firstNewline = trimmed.indexOf("\n");
+   if (firstNewline === -1) {
+-    return { frontmatter: {}, body: content };
++    // 整个文件只有一行 `---`：以 --- 开头却没有闭合，属畸形
++    return { frontmatter: {}, body: content, error: "frontmatter 以 `---` 开头但缺少闭合分隔符" };
+   }
+ 
+   const rest = trimmed.slice(firstNewline + 1);
+@@ -43,7 +59,12 @@ export function parseFrontmatter(content: string): FrontmatterResult {
+   } else {
+     closingIndex = rest.indexOf("\n---");
+     if (closingIndex === -1) {
+-      return { frontmatter: {}, body: content };
++      // 最常见的笔误形态：少写一行 `---`、写成 `--`、或闭合行末无换行
++      return {
++        frontmatter: {},
++        body: content,
++        error: "frontmatter 以 `---` 开头但缺少闭合分隔符",
++      };
+     }
+     yamlStr = rest.slice(0, closingIndex);
+     body = rest.slice(closingIndex + 4).replace(/^\n/, "");
+@@ -62,8 +83,13 @@ export function parseFrontmatter(content: string): FrontmatterResult {
+     if (simpleFrontmatter && Object.keys(simpleFrontmatter).length > 0) {
+       return { frontmatter: simpleFrontmatter, body };
+     }
+-    // 简单解析也失败，返回完整内容作为 body
+-    return { frontmatter: {}, body: content };
++    // 简单解析也失败：分隔符齐全但里面完全不是 key-value，同属畸形——
++    // 原始 YAML 会被当正文喂给模型，且约束全丢。
++    return {
++      frontmatter: {},
++      body: content,
++      error: `frontmatter YAML 解析失败: ${(error as Error)?.message ?? String(error)}`,
++    };
+   }
+ }
+ 
+diff --git a/src/extension/loader.ts b/src/extension/loader.ts
+index c9c1d2f..dc23ff9 100644
+--- a/src/extension/loader.ts
++++ b/src/extension/loader.ts
+@@ -276,7 +276,17 @@ export class ExtensionLoader {
+ 
+           try {
+             const rawContent = await readFile(filePath, "utf-8");
+-            const { frontmatter, body } = parseFrontmatter(rawContent);
++            const { frontmatter, body, error: fmError } = parseFrontmatter(rawContent);
++
++            // 审计第 4 条：frontmatter 畸形时 fail-closed 跳过该文件，不再静默降级。
++            // 旧行为把原始 YAML 当正文返回，导致 allowed-tools/model/tools 白名单
++            // 随解析失败一起消失（降级方向更宽松），且 YAML 原文被当指令喂给模型。
++            if (fmError) {
++              const errorMsg = `扩展文件 frontmatter 格式错误，已跳过: ${filePath} - ${fmError}`;
++              errors.push({ filePath, message: errorMsg });
++              log.warn("EXTENSION", errorMsg);
++              continue;
++            }
+ 
+             results.push({
+               name,
+@@ -302,7 +312,15 @@ export class ExtensionLoader {
+ 
+               try {
+                 const rawContent = await readFile(candidatePath, "utf-8");
+-                const { frontmatter, body } = parseFrontmatter(rawContent);
++                const { frontmatter, body, error: fmError } = parseFrontmatter(rawContent);
++
++                // 审计第 4 条：同扁平文件分支，畸形 frontmatter fail-closed 跳过。
++                if (fmError) {
++                  const errorMsg = `扩展文件 frontmatter 格式错误，已跳过: ${candidatePath} - ${fmError}`;
++                  errors.push({ filePath: candidatePath, message: errorMsg });
++                  log.warn("EXTENSION", errorMsg);
++                  break;
++                }
+ 
+                 results.push({
+                   name,
+diff --git a/src/mcp/skill-discovery.ts b/src/mcp/skill-discovery.ts
+index d62778d..9355b22 100644
+--- a/src/mcp/skill-discovery.ts
++++ b/src/mcp/skill-discovery.ts
+@@ -52,7 +52,14 @@ export async function discoverMcpSkills(
+   for (const { serverName, resource } of skillResources) {
+     try {
+       const text = await provider.readResource(serverName, resource.uri);
+-      const { frontmatter: fm, body } = parseFrontmatter(text);
++      const { frontmatter: fm, body, error: fmError } = parseFrontmatter(text);
++
++      // 审计第 4 条：畸形 frontmatter fail-closed 跳过。MCP Skill 来自外部 server，
++      // 更不能因解析失败就丢掉 allowed-tools/context 约束（fork 会退化成 inline）。
++      if (fmError) {
++        log.warn("MCP", `跳过 frontmatter 格式错误的 MCP Skill: ${serverName}:${resource.name} - ${fmError}`);
++        continue;
++      }
+ 
+       const rawName = (fm.name as string) || resource.name;
+       const name = `${serverName}:${rawName}`;
+diff --git a/src/memory/paths.ts b/src/memory/paths.ts
+index bea5424..c70b8bc 100644
+--- a/src/memory/paths.ts
++++ b/src/memory/paths.ts
+@@ -34,10 +34,10 @@ function agentsMemRoot(): string {
+ }
+ 
+ /**
+- * 把项目根路径转成文件系统安全的目录名。
+- * 用 git canonical root 派生，去掉分隔符与特殊字符。
++ * 纯 sanitize（有损）：去掉分隔符与不安全字符。**不要直接用它做目录键**，
++ * 见 `sanitizeProjectKey` 的单射性说明。仅供内部与迁移期识别「旧键」使用。
+  */
+-export function sanitizeProjectKey(raw: string): string {
++function sanitizeProjectKeyLossy(raw: string): string {
+   // 去掉首尾分隔符，把路径分隔符与不安全字符替换为 -
+   const cleaned = raw
+     .replace(/^[\\/]+|[\\/]+$/g, "")
+@@ -48,6 +48,69 @@ export function sanitizeProjectKey(raw: string): string {
+   return cleaned || "default";
+ }
+ 
++/**
++ * 该键的**有损**程度判定：sanitize 是否丢掉了区分两个不同路径所必需的信息。
++ *
++ * 判据：把路径按分隔符切段后，是否存在含「非 `[a-zA-Z0-9._-]` 字符」的段
++ * （中文/日文/空格/括号…）。有这种段，就可能与另一个 ASCII 骨架相同的路径撞键。
++ * 反过来，全段都是安全字符的路径经 sanitize 是单射的，无需加后缀。
++ *
++ * 不检查「连续分隔符被 `-+` 折叠」：`//` 与 `/` 指向磁盘上同一个目录，而入参恒经
++ * `resolveProjectRoot`（git toplevel 或 `resolve()`）归一化，重复分隔符不会出现；
++ * 即便出现，折叠成同一个键也是正确行为，不是碰撞。
++ */
++function isKeyLossy(raw: string): boolean {
++  const trimmed = raw.replace(/^[\\/]+|[\\/]+$/g, "");
++  return trimmed.split(/[\\/]+/).some((s) => /[^a-zA-Z0-9._-]/.test(s));
++}
++
++/**
++ * 短哈希（6 位十六进制），用于给有损键补足单射性。
++ *
++ * 用 FNV-1a：无需引入 crypto、同步、稳定跨平台。这里只要求「不同输入极少碰撞」，
++ * 不是密码学用途——键碰撞的后果是隔离失效，而 6 位 hex（约 1677 万）对
++ * 「同一台机器上 ASCII 骨架相同的项目数」这个量级远够用。
++ */
++function shortHash(raw: string): string {
++  let h = 0x811c9dc5;
++  for (let i = 0; i < raw.length; i++) {
++    h ^= raw.charCodeAt(i);
++    h = Math.imul(h, 0x01000193) >>> 0;
++  }
++  return h.toString(16).padStart(8, "0").slice(0, 6);
++}
++
++/**
++ * 把项目根路径转成文件系统安全的目录名。
++ * 用 git canonical root 派生，去掉分隔符与特殊字符。
++ *
++ * 审计第 3 条：键派生必须是**单射**的。旧实现把「任意非 ASCII 字符」与「分隔符」
++ * 都映射成 `-` 再折叠连续 `-`，是双重有损——`~/工作/app` 与 `~/文档/app` 派生出
++ * **完全相同**的键，两个私有项目的记忆/会话/团队记忆目录重合，互相可读。
++ * 中文用户的常见目录习惯极易命中，不是构造出来的边界场景。
++ *
++ * 修法：**仅当** sanitize 真的丢了信息时，追加原始路径的短哈希后缀（`-a3f9c1`）。
++ * 纯 ASCII 路径（绝大多数用户）的键保持**逐字节不变**——这一点是刻意的：该键同时
++ * 决定 `projects/<key>/memory`、`projects/<key>/team-memory`、`sessions/<key>/`、
++ * `projects/<key>/mcp.local.json` 四处已落盘数据的位置，无条件改键会让所有存量
++ * 用户的记忆与历史会话凭空「消失」。有损路径的用户本来就在共用一个错误目录，
++ * 换键是必要代价（旧目录仍在磁盘上，未删除，见 `findLegacyProjectKey`）。
++ */
++export function sanitizeProjectKey(raw: string): string {
++  const cleaned = sanitizeProjectKeyLossy(raw);
++  if (!isKeyLossy(raw)) return cleaned;
++  return `${cleaned}-${shortHash(raw)}`;
++}
++
++/**
++ * 取该项目在**旧（有损）算法**下的键，用于读取存量数据做兼容回退。
++ * 键本来就无损时返回 undefined（新旧键相同，无需回退）。
++ */
++export function findLegacyProjectKey(raw: string): string | undefined {
++  if (!isKeyLossy(raw)) return undefined;
++  return sanitizeProjectKeyLossy(raw);
++}
++
+ /**
+  * 解析项目的 canonical root。
+  * 优先取 git 顶层目录（同仓库多 worktree 共享记忆），失败时回退传入路径。
+diff --git a/src/migrations/relocate-lossy-project-key.ts b/src/migrations/relocate-lossy-project-key.ts
+new file mode 100644
+index 0000000..4dca990
+--- /dev/null
++++ b/src/migrations/relocate-lossy-project-key.ts
+@@ -0,0 +1,90 @@
++/**
++ * 迁移 v2：把「有损项目键」下的存量数据迁到新的单射键（审计第 3 条善后）
++ *
++ * 背景：`sanitizeProjectKey` 旧实现把所有非 `[a-zA-Z0-9._-]` 字符（含全部中文）与路径
++ * 分隔符都映射成 `-` 再折叠连续 `-`，是双重有损——`~/工作/app` 与 `~/文档/app` 派生出
++ * 完全相同的键，两个私有项目的 memory / team-memory / sessions / mcp.local.json 目录
++ * 重合，互相可读（发现清单第 3 条，有端到端复现）。修复后有损路径的键会追加短哈希后缀。
++ *
++ * 本迁移负责让**当前项目**的存量数据跟着换到新键下，否则用户的记忆与历史会话在升级后
++ * 凭空「消失」（数据还在磁盘上，只是程序不再去那个目录找）。
++ *
++ * ⚠ 关键安全约束：**只在能确定旧目录唯一属于当前项目时才搬**。旧目录之所以有问题，
++ * 恰恰是因为它**可能被多个项目共用**——若 A、B 都撞到同一个旧键，把它整体搬给"恰好先
++ * 启动的那个项目"就等于把另一个项目的私有记忆送给它，那是把第 3 条的隐私泄漏换了个
++ * 方向重演一遍，比不迁移更糟。因此这里采取**复制而非移动**（旧目录原样保留），
++ * 且仅在新目录尚不存在时执行，任何歧义都宁可不动 + 提示用户手工处理。
++ *
++ * 幂等：靠 runner 的版本水位线；额外靠"新目录已存在就跳过"兜第二层。
++ */
++
++import { existsSync, cpSync, readdirSync } from "fs";
++import { join } from "path";
++import { sidPaths } from "../config/paths.ts";
++import { resolveProjectRoot, sanitizeProjectKey, findLegacyProjectKey } from "../memory/paths.ts";
++
++/** 需要跟着换键的 per-project 数据位置（相对 projects/<key>/ 或 sessions/<key>/） */
++const PROJECT_SUBPATHS = ["memory", "team-memory", ".session_memory.md", "mcp.local.json"];
++
++/** 目录/文件存在且非空（空目录不值得搬，也不值得提示） */
++function hasContent(p: string): boolean {
++  if (!existsSync(p)) return false;
++  try {
++    // 文件：存在即有内容；目录：至少一个条目
++    return readdirSync(p).length > 0;
++  } catch {
++    // readdirSync 对普通文件抛错 → 说明是文件且存在
++    return true;
++  }
++}
++
++export function migrate(): void {
++  const root = resolveProjectRoot(process.cwd());
++  const legacyKey = findLegacyProjectKey(root);
++  // 键本来就无损（纯 ASCII 路径，绝大多数用户）→ 新旧键相同，无事可做
++  if (!legacyKey) return;
++
++  const newKey = sanitizeProjectKey(root);
++  if (newKey === legacyKey) return;
++
++  const projectsDir = sidPaths.projects();
++  const sessionsDir = sidPaths.sessions();
++  const moved: string[] = [];
++
++  // 1) projects/<key>/ 下的各项 per-project 数据
++  for (const sub of PROJECT_SUBPATHS) {
++    const from = join(projectsDir, legacyKey, sub);
++    const to = join(projectsDir, newKey, sub);
++    if (!hasContent(from)) continue;
++    if (existsSync(to)) continue; // 新位置已有数据 → 不覆盖，跳过
++    try {
++      cpSync(from, to, { recursive: true });
++      moved.push(sub);
++    } catch {
++      // 迁移失败不阻塞启动（runner 语义），下条继续
++    }
++  }
++
++  // 2) sessions/<key>/ 会话历史
++  const sessFrom = join(sessionsDir, legacyKey);
++  const sessTo = join(sessionsDir, newKey);
++  if (hasContent(sessFrom) && !existsSync(sessTo)) {
++    try {
++      cpSync(sessFrom, sessTo, { recursive: true });
++      moved.push("sessions");
++    } catch {
++      /* 同上，不阻塞 */
++    }
++  }
++
++  if (moved.length > 0) {
++    // 必须告知用户：① 数据换了位置；② 旧目录**可能**混有别的项目的数据，需人工确认。
++    // 静默搬运会让"我的记忆里怎么有别的项目的内容"变成无法追溯的怪现象。
++    console.log(
++      `项目目录键已升级（修复非 ASCII 路径的跨项目串目录问题）：${legacyKey} → ${newKey}\n` +
++        `  已复制: ${moved.join(", ")}（旧目录保留未删除）\n` +
++        `  ⚠ 若旧目录曾被多个项目共用，请人工检查新目录下是否混入了其他项目的记忆：\n` +
++        `     ${join(projectsDir, newKey)}`,
++    );
++  }
++}
+diff --git a/src/migrations/runner.ts b/src/migrations/runner.ts
+index 9ec68d5..b55139a 100644
+--- a/src/migrations/runner.ts
++++ b/src/migrations/runner.ts
+@@ -12,6 +12,7 @@
+ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+ import { sidPaths } from "../config/paths.ts";
+ import { migrate as backfillTeamDefaults } from "./backfill-team-defaults.ts";
++import { migrate as relocateLossyProjectKey } from "./relocate-lossy-project-key.ts";
+ 
+ interface Migration {
+   version: number;
+@@ -26,6 +27,11 @@ const migrations: Migration[] = [
+     name: "backfill-team-defaults",
+     migrate: backfillTeamDefaults,
+   },
++  {
++    version: 2,
++    name: "relocate-lossy-project-key",
++    migrate: relocateLossyProjectKey,
++  },
+ ];
+ 
+ const CURRENT_VERSION = migrations.length;
+diff --git a/src/permission/checker.ts b/src/permission/checker.ts
+index 1e9bc4f..a00afd2 100644
+--- a/src/permission/checker.ts
++++ b/src/permission/checker.ts
+@@ -334,6 +334,16 @@ export class PermissionChecker implements Checker {
+     return this.pathValidator.getAllowedDirectories();
+   }
+ 
++  /**
++   * 获取内部路径校验器实例（供工具层之外的读路径复用同一道防线，如 `@文件` 提及展开）。
++   *
++   * 返回实例本身而非副本：`addAllowedDirectory`（/add-dir）改的是这个实例，
++   * 复制一份会让消费方看不到本会话的运行时授权。
++   */
++  getPathValidator(): PathValidator {
++    return this.pathValidator;
++  }
++
+   /** 获取配置（只读，供子代理 checker 工厂复制配置） */
+   getConfig(): Readonly<Config> {
+     return this.config;
+diff --git a/src/permission/types.ts b/src/permission/types.ts
+index 0f6ed34..0787219 100644
+--- a/src/permission/types.ts
++++ b/src/permission/types.ts
+@@ -58,6 +58,17 @@ export interface Checker {
+    * 而非在 check() 内同步串行等待。返回 null 表示未配置分类器。
+    */
+   getBashClassifier?(): import("./bash-classifier.ts").BashClassifier | null;
++  /**
++   * 获取内部路径校验器（可选）。
++   *
++   * 供**工具层之外**的读文件路径复用同一道路径防线——目前唯一消费方是 `@文件` 提及展开
++   * （`src/app.ts` expandAtReferences）。它此前直接 `readFile` 零校验，等于给敏感文件
++   * 开了一条绕过 FILE_TOOLS 校验（checker.ts Step 4）的侧门。
++   *
++   * 必须暴露**同一个实例**而非新建：`/add-dir` 等运行时授权改的是这个实例的白名单，
++   * 新建一个会丢掉本会话的用户授权。
++   */
++  getPathValidator?(): import("./path-validator.ts").PathValidator;
+ }
+ 
+ /** 权限规则配置 */
+diff --git a/src/plugin/loadPluginAgents.ts b/src/plugin/loadPluginAgents.ts
+index d557712..218acf7 100644
+--- a/src/plugin/loadPluginAgents.ts
++++ b/src/plugin/loadPluginAgents.ts
+@@ -77,7 +77,14 @@ async function loadAgentFile(
+ ): Promise<void> {
+   try {
+     const raw = await readFile(filePath, "utf-8");
+-    const { frontmatter, body } = parseFrontmatter(raw);
++    const { frontmatter, body, error: fmError } = parseFrontmatter(raw);
++    // 审计第 4 条：畸形 frontmatter fail-closed 跳过。此处后果与自定义命令同构——
++    // 实测闭合符缺失时 frontmatter={}、`tools` 白名单丢失（子代理拿到全部工具）、
++    // YAML 原文进 agent prompt。降级方向更宽松，必须拒绝加载而非静默放行。
++    if (fmError) {
++      getLogger().warn("PLUGIN", `插件 Agent frontmatter 格式错误，已跳过 ${filePath}: ${fmError}`);
++      return;
++    }
+     const name = getAgentName(filePath, baseDir, pluginName);
+     out.push({
+       name,
+diff --git a/src/plugin/loadPluginCommands.ts b/src/plugin/loadPluginCommands.ts
+index 2535e60..1611309 100644
+--- a/src/plugin/loadPluginCommands.ts
++++ b/src/plugin/loadPluginCommands.ts
+@@ -70,7 +70,12 @@ async function scanCommandFiles(
+     } else if (entry.isFile() && entry.name.endsWith(".md")) {
+       try {
+         const raw = await readFile(fullPath, "utf-8");
+-        const { frontmatter, body } = parseFrontmatter(raw);
++        const { frontmatter, body, error: fmError } = parseFrontmatter(raw);
++        // 审计第 4 条：畸形 frontmatter fail-closed 跳过，避免 YAML 原文被当指令喂给模型。
++        if (fmError) {
++          getLogger().warn("PLUGIN", `插件命令 frontmatter 格式错误，已跳过 ${fullPath}: ${fmError}`);
++          continue;
++        }
+         const name = getCommandName(fullPath, baseDir, pluginName);
+         const description =
+           (frontmatter.description as string) || extractDescription(body) || `插件命令: ${name}`;

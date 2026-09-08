@@ -1,0 +1,537 @@
+diff --git a/tests/api/cache-detection.test.ts b/tests/api/cache-detection.test.ts
+index c930e93..628b3b7 100644
+--- a/tests/api/cache-detection.test.ts
++++ b/tests/api/cache-detection.test.ts
+@@ -3,7 +3,7 @@
+  * 两阶段检测 / 双重阈值 / 归因（模型/system/工具增删改/TTL）
+  */
+ 
+-import { describe, test, expect, beforeEach } from "bun:test";
++import { describe, test, expect, beforeEach, beforeAll, afterAll } from "bun:test";
+ import {
+   CacheBreakDetector,
+   formatCacheBreakReport,
+@@ -14,6 +14,34 @@ import {
+   type CacheCheckParams,
+   type CacheBreakRecord,
+ } from "../../src/api/cache-detection.ts";
++import { mkdtempSync, rmSync } from "node:fs";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++
++// ─── 遥测隔离：recordCacheBreak 会同步落盘，必须重定向到 tmp ───
++//
++// recordCacheBreak 除了推内存环形缓冲（本文件真正要断言的东西），还会
++// emitCacheBreakTelemetryFireAndForget 落盘（src/api/cache-detection.ts:428）。
++// 不重定向就会写进用户真实的 ~/.sid-code/cache-breaks.jsonl —— 历史上已污染
++// 6 万余行假数据，把 `/cache --history` 冲成"一条真记录都看不到"。
++// 与 tests/telemetry/cache-telemetry-rotation.test.ts:38 同构。
++let tmpDir: string;
++let savedEnv: string | undefined;
++
++beforeAll(() => {
++  savedEnv = process.env.SID_CODE_CACHE_BREAKS;
++  tmpDir = mkdtempSync(join(tmpdir(), "cache-detection-"));
++  process.env.SID_CODE_CACHE_BREAKS = join(tmpDir, "cache-breaks.jsonl");
++});
++
++afterAll(async () => {
++  // 落盘走 dynamic import().then()（cache-detection.ts:451-457），是待处理微任务。
++  // 同步恢复 env 会与它赛跑，让最后几条漏写到真实路径 —— 先让微任务队列跑干。
++  await new Promise((r) => setTimeout(r, 0));
++  if (savedEnv === undefined) delete process.env.SID_CODE_CACHE_BREAKS;
++  else process.env.SID_CODE_CACHE_BREAKS = savedEnv;
++  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
++});
+ 
+ const TOOLS = [
+   { name: "read", description: "read file" },
+diff --git a/tests/command/clear-resets-cache-state.test.ts b/tests/command/clear-resets-cache-state.test.ts
+index 80a849b..d249239 100644
+--- a/tests/command/clear-resets-cache-state.test.ts
++++ b/tests/command/clear-resets-cache-state.test.ts
+@@ -8,7 +8,7 @@
+  * app.ts 中两处 case "clear" 已补调这三个函数——构建通过即证明调用链完整。
+  */
+ 
+-import { describe, test, expect, beforeEach } from "bun:test";
++import { describe, test, expect, beforeEach, beforeAll, afterAll } from "bun:test";
+ import {
+   resetCacheDetection,
+   clearCacheBreaks,
+@@ -18,6 +18,31 @@ import {
+ } from "../../src/api/cache-detection.ts";
+ import { resetCircuitBreaker } from "../../src/query/auto-compact.ts";
+ import { AutoCompactCircuitBreaker } from "../../src/query/circuit-breaker.ts";
++import { mkdtempSync, rmSync } from "node:fs";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++
++// ─── 遥测隔离：recordCacheBreak 会同步落盘，必须重定向到 tmp ───
++//
++// 见 src/api/cache-detection.ts:428 —— recordCacheBreak 除推内存缓冲外还落盘遥测。
++// 不重定向就会污染用户真实的 ~/.sid-code/cache-breaks.jsonl。
++// 与 tests/telemetry/cache-telemetry-rotation.test.ts:38 同构。
++let tmpDir: string;
++let savedEnv: string | undefined;
++
++beforeAll(() => {
++  savedEnv = process.env.SID_CODE_CACHE_BREAKS;
++  tmpDir = mkdtempSync(join(tmpdir(), "clear-resets-cache-"));
++  process.env.SID_CODE_CACHE_BREAKS = join(tmpDir, "cache-breaks.jsonl");
++});
++
++afterAll(async () => {
++  // 落盘走 dynamic import().then()，是待处理微任务；同步恢复 env 会与它赛跑。
++  await new Promise((r) => setTimeout(r, 0));
++  if (savedEnv === undefined) delete process.env.SID_CODE_CACHE_BREAKS;
++  else process.env.SID_CODE_CACHE_BREAKS = savedEnv;
++  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
++});
+ 
+ describe("resetCacheDetection — 缓存检测基线清除", () => {
+   beforeEach(() => {
+diff --git a/tests/config/patch-settings.test.ts b/tests/config/patch-settings.test.ts
+index 51adc64..e24e614 100644
+--- a/tests/config/patch-settings.test.ts
++++ b/tests/config/patch-settings.test.ts
+@@ -16,6 +16,8 @@ import { join } from "path";
+ // 用 SID_CONFIG_DIR 隔离测试，不碰真实用户配置
+ const TEST_HOME = join("/tmp", `sid-code-patch-test-${process.pid}`);
+ const SETTINGS_PATH = join(TEST_HOME, "settings.json");
++/** 进程原有的 SID_CONFIG_DIR（可能是 preload 设的隔离兜底），afterEach 要还回去 */
++const prevConfigDir = process.env.SID_CONFIG_DIR;
+ 
+ // 含 snake_case 密钥的典型配置（用户常见写法）
+ const ORIGINAL_SETTINGS = {
+@@ -48,7 +50,10 @@ describe("patchSettingsFile", () => {
+   });
+ 
+   afterEach(() => {
+-    delete process.env.SID_CONFIG_DIR;
++    // 恢复原值而非无条件 delete（见 tests/preload-isolate-sid-home.ts）：
++    // 同进程后续测试文件会依赖 preload 设的隔离兜底，删了就写进真实 HOME。
++    if (prevConfigDir === undefined) delete process.env.SID_CONFIG_DIR;
++    else process.env.SID_CONFIG_DIR = prevConfigDir;
+     rmSync(TEST_HOME, { recursive: true, force: true });
+   });
+ 
+diff --git a/tests/guard/test-isolation-guard.test.ts b/tests/guard/test-isolation-guard.test.ts
+index c035595..06646af 100644
+--- a/tests/guard/test-isolation-guard.test.ts
++++ b/tests/guard/test-isolation-guard.test.ts
+@@ -8,9 +8,16 @@
+  *
+  *   测试进程内若 sidHomePath() 解析到真实 $HOME，直接 fail。
+  *
+- * 项目无全局 preload（bun test 每文件独立进程），无法做"跨所有文件的自动守卫"。
+  * 本测试验证 tests/helpers/assert-isolated.ts 提供的可复用工具函数 assertIsolated()
+  * 行为正确，供其他需要在 beforeEach 里调用的测试参考。
++ *
++ * ⚠ 订正（2026-08-04 实测）：原注释称"bun test 每文件独立进程，无法做跨文件自动守卫"，
++ * **这是错的**。bun test 同一批多个文件跑在**同一个进程**里，env 会跨文件泄漏——
++ * 实测 `bun test tests/permission` 单跑 delta=0，而 `bun test tests/migrations tests/permission`
++ * 同批跑 delta=84（migrations 里无条件 `delete process.env.SID_CONFIG_DIR`，
++ * 把隔离抹掉后 permission 的审计日志就写进了真实 HOME）。
++ * 正因为同进程，全局 preload 是可行的，见 tests/preload-isolate-sid-home.ts。
++ * 这个错误认知本身就是那道兜底长期缺失的原因。
+  */
+ 
+ import { describe, test, expect, afterEach } from "bun:test";
+diff --git a/tests/migrations/backfill-team-defaults.test.ts b/tests/migrations/backfill-team-defaults.test.ts
+index 09744d2..d345d49 100644
+--- a/tests/migrations/backfill-team-defaults.test.ts
++++ b/tests/migrations/backfill-team-defaults.test.ts
+@@ -33,6 +33,9 @@ const LEGACY_SETTINGS = {
+   language: "en",
+ };
+ 
++/** 进程原有的 SID_CONFIG_DIR（可能是 preload 设的隔离兜底），afterEach 要还回去 */
++const prevConfigDir = process.env.SID_CONFIG_DIR;
++
+ describe("mergeMissingTopLevelKeys（单次浅合并）", () => {
+   beforeEach(() => {
+     process.env.SID_CONFIG_DIR = TEST_HOME;
+@@ -41,7 +44,11 @@ describe("mergeMissingTopLevelKeys（单次浅合并）", () => {
+   });
+ 
+   afterEach(() => {
+-    delete process.env.SID_CONFIG_DIR;
++    // 恢复原值而非无条件 delete：bun test 同进程跑多文件，直接删会把
++    // preload 设的隔离兜底（tests/preload-isolate-sid-home.ts）一起抹掉，
++    // 导致后续测试文件写进用户真实 ~/.sid-code。实测曾因此泄漏 84 行审计日志。
++    if (prevConfigDir === undefined) delete process.env.SID_CONFIG_DIR;
++    else process.env.SID_CONFIG_DIR = prevConfigDir;
+     rmSync(TEST_HOME, { recursive: true, force: true });
+   });
+ 
+@@ -146,7 +153,11 @@ describe("runMigrations 水位线（只补一次）", () => {
+   });
+ 
+   afterEach(() => {
+-    delete process.env.SID_CONFIG_DIR;
++    // 恢复原值而非无条件 delete：bun test 同进程跑多文件，直接删会把
++    // preload 设的隔离兜底（tests/preload-isolate-sid-home.ts）一起抹掉，
++    // 导致后续测试文件写进用户真实 ~/.sid-code。实测曾因此泄漏 84 行审计日志。
++    if (prevConfigDir === undefined) delete process.env.SID_CONFIG_DIR;
++    else process.env.SID_CONFIG_DIR = prevConfigDir;
+     rmSync(TEST_HOME, { recursive: true, force: true });
+   });
+ 
+diff --git a/tests/migrations/relocate-lossy-project-key.test.ts b/tests/migrations/relocate-lossy-project-key.test.ts
+index 7031c67..27f23ff 100644
+--- a/tests/migrations/relocate-lossy-project-key.test.ts
++++ b/tests/migrations/relocate-lossy-project-key.test.ts
+@@ -24,6 +24,8 @@ const PROJ_A = join(TEST_ROOT, "工作", "app");
+ const PROJ_B = join(TEST_ROOT, "文档", "app");
+ 
+ let originalCwd: string;
++/** 进程原有的 SID_CONFIG_DIR（可能是 preload 设的隔离兜底），afterEach 要还回去 */
++const prevConfigDir = process.env.SID_CONFIG_DIR;
+ 
+ function initRepo(dir: string): void {
+   mkdirSync(dir, { recursive: true });
+@@ -41,7 +43,10 @@ beforeEach(() => {
+ 
+ afterEach(() => {
+   process.chdir(originalCwd);
+-  delete process.env.SID_CONFIG_DIR;
++  // 恢复原值而非无条件 delete（见 tests/preload-isolate-sid-home.ts）：
++  // 同进程后续测试文件会依赖 preload 设的隔离兜底，删了就写进真实 HOME。
++  if (prevConfigDir === undefined) delete process.env.SID_CONFIG_DIR;
++  else process.env.SID_CONFIG_DIR = prevConfigDir;
+   rmSync(TEST_ROOT, { recursive: true, force: true });
+ });
+ 
+diff --git a/tests/migrations/runner-fs-failure.test.ts b/tests/migrations/runner-fs-failure.test.ts
+index 84f9c7a..d0068d0 100644
+--- a/tests/migrations/runner-fs-failure.test.ts
++++ b/tests/migrations/runner-fs-failure.test.ts
+@@ -18,6 +18,8 @@ const TEST_HOME = join("/tmp", `sid-code-migration-fs-fail-${process.pid}-${Date
+ const STATE_DIR = join(TEST_HOME, "state");
+ const SETTINGS_PATH = join(TEST_HOME, "settings.json");
+ const MIGRATION_STATE_PATH = join(STATE_DIR, "migrations.json");
++/** 进程原有的 SID_CONFIG_DIR（可能是 preload 设的隔离兜底），afterEach 要还回去 */
++const prevConfigDir = process.env.SID_CONFIG_DIR;
+ 
+ describe("runMigrations 失败不阻塞（建议2 门禁）", () => {
+   beforeEach(() => {
+@@ -35,7 +37,10 @@ describe("runMigrations 失败不阻塞（建议2 门禁）", () => {
+     try { chmodSync(STATE_DIR, 0o755); } catch { /* ignore */ }
+     try { chmodSync(TEST_HOME, 0o755); } catch { /* ignore */ }
+     try { rmSync(TEST_HOME, { recursive: true, force: true }); } catch { /* ignore */ }
+-    delete process.env.SID_CONFIG_DIR;
++    // 恢复原值而非无条件 delete（见 tests/preload-isolate-sid-home.ts）：
++    // 同进程后续测试文件会依赖 preload 设的隔离兜底，删了就写进真实 HOME。
++    if (prevConfigDir === undefined) delete process.env.SID_CONFIG_DIR;
++    else process.env.SID_CONFIG_DIR = prevConfigDir;
+   });
+ 
+   test("state 目录只读时 runMigrations 不抛、不 exit(1)", async () => {
+diff --git a/tests/preload-isolate-sid-home.ts b/tests/preload-isolate-sid-home.ts
+new file mode 100644
+index 0000000..541abfc
+--- /dev/null
++++ b/tests/preload-isolate-sid-home.ts
+@@ -0,0 +1,36 @@
++/**
++ * 测试全局隔离预载：把配置根目录默认指向临时目录。
++ *
++ * ## 为什么需要这个
++ *
++ * 很多写 `~/.sid-code/` 的组件是在调用链深处被**无参构造**的，测试作者根本看不见它。
++ * 典型例子：`PermissionChecker` 构造函数里 `new AuditLogger()`（`src/permission/checker.ts:360`），
++ * 而 `AuditLogger` 无参时落 `sidPaths.log("permissions-audit.log")`（`src/permission/audit.ts:21`）。
++ * 于是 `tests/permission/` 下 5 个**从没提到过 audit 字样**的测试，每跑一次就往用户真实的
++ * 审计日志追加几十行。
++ *
++ * 这类污染靠"测试作者记得隔离"是防不住的——他要隔离的东西在他的视野之外。
++ * 所以把隔离做成**默认值**：进程启动时先把 `SID_CONFIG_DIR` 指向临时目录，
++ * 任何忘记显式隔离的落盘都掉进临时目录，而不是用户家目录。
++ *
++ * ## 为什么这样是安全的
++ *
++ * - `getSidHome()` 每次调用都重新读 env、不缓存（`src/config/paths.ts:27`），
++ *   所以预载期设置即对全部后续调用生效。
++ * - 已显式设 `SID_CONFIG_DIR` 的测试（39 个文件）在自己的 `beforeEach` 里覆盖本默认值，
++ *   行为不变。
++ * - **尊重外部显式设置**：若运行者已经在环境里设了 `SID_CONFIG_DIR`（比如 CI 想指定位置），
++ *   这里不覆盖。
++ *
++ * 注：这是**兜底**，不是"不用再写隔离了"。专用重定向变量（如 `SID_CODE_CACHE_BREAKS`）
++ * 仍应在需要断言落盘内容的测试里显式设置——兜底只保证"写错地方不会伤到用户"，
++ * 不保证"每个测试拿到互不干扰的干净文件"。
++ */
++import { mkdtempSync } from "node:fs";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++
++const existing = process.env.SID_CONFIG_DIR;
++if (!existing || existing.trim() === "") {
++  process.env.SID_CONFIG_DIR = mkdtempSync(join(tmpdir(), "sid-code-test-home-"));
++}
+diff --git a/tests/telemetry/cache-telemetry-rotation.test.ts b/tests/telemetry/cache-telemetry-rotation.test.ts
+index c24e0bb..b7651cf 100644
+--- a/tests/telemetry/cache-telemetry-rotation.test.ts
++++ b/tests/telemetry/cache-telemetry-rotation.test.ts
+@@ -12,8 +12,10 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+ import {
+   emitCacheBreakTelemetry,
+   queryCacheBreakHistory,
++  summarizeCacheBreakHistory,
+   cacheBreaksPath,
+ } from "../../src/telemetry/cache-telemetry.ts";
++import { CacheBreakDetector, type CacheCheckParams } from "../../src/api/cache-detection.ts";
+ import { mkdtempSync, rmSync, writeFileSync, existsSync, statSync, appendFileSync, readFileSync } from "node:fs";
+ import { join } from "node:path";
+ import { tmpdir } from "node:os";
+@@ -153,3 +155,77 @@ describe("cache-breaks 尾部读取", () => {
+     expect(queryCacheBreakHistory(10)).toEqual([]);
+   });
+ });
++
++/**
++ * 归因聚合与检测器实际产出的文案对账。
++ *
++ * 缺陷背景：summarizeCacheBreakHistory 的分类分支是照"模型/工具/TTL"这类归因写的，
++ * 而 P2-1 新增的两条前缀 hash 归因（cache-detection.ts:264-268）没有对应分支，
++ * 全部落进 unknown。清理污染数据后实测：632 条真实记录里 631 条是"服务端缓存波动"，
++ * 聚合却报 unknown —— 这个命令的聚合视图等于失效，且因为假数据长期霸占读取窗口而没被发现。
++ *
++ * 本测试不手抄文案常量，而是让**真实检测器**产出归因再喂给聚合器，
++ * 这样任一侧改文案都会被抓到（手抄两份必然漂移，见 CLAUDE.md 六点五 d 项的同类教训）。
++ */
++describe("归因聚合 ↔ 检测器文案对账", () => {
++  function detectorParams(over: Partial<CacheCheckParams> = {}): CacheCheckParams {
++    return {
++      cacheReadTokens: 50000,
++      systemPrompt: "you are helpful",
++      toolSchemas: [{ name: "read", description: "read file" }],
++      model: "test-model",
++      ...over,
++    };
++  }
++
++  test("前缀未变的服务端波动归入 server_fluctuation，不落 unknown", () => {
++    const d = new CacheBreakDetector();
++    d.checkResponse(detectorParams());
++    // 只降命中、不动 prompt/tools → 前缀 hash 不变 → 检测器输出"服务端缓存波动"
++    const report = d.checkResponse(detectorParams({ cacheReadTokens: 5000 }))!;
++    expect(report).not.toBeNull();
++    emitCacheBreakTelemetry({ ...report, ts: 1_700_000_100, model: "test-model" });
++
++    const s = summarizeCacheBreakHistory(10);
++    expect(s.byCategory.server_fluctuation).toBe(1);
++    expect(s.byCategory.unknown).toBeUndefined();
++  });
++
++  test("前缀变化的本地断裂归入已有类别，同样不落 unknown", () => {
++    const d = new CacheBreakDetector();
++    d.checkResponse(detectorParams());
++    // 改 systemPrompt → 前缀 hash 变化，检测器会给出 System prompt 归因
++    const report = d.checkResponse(
++      detectorParams({ cacheReadTokens: 5000, systemPrompt: "CHANGED" }),
++    )!;
++    emitCacheBreakTelemetry({ ...report, ts: 1_700_000_200, model: "test-model" });
++
++    const s = summarizeCacheBreakHistory(10);
++    expect(s.byCategory.unknown).toBeUndefined();
++    expect(s.total).toBe(1);
++  });
++
++  test("检测器产出的每一种归因都有对应分类分支（防新增归因漏配）", () => {
++    // 覆盖检测器的主要归因路径，逐条落盘后断言零 unknown
++    const cases: Array<[string, Partial<CacheCheckParams>]> = [
++      ["模型变化", { model: "other-model" }],
++      ["System prompt", { systemPrompt: "DIFFERENT" }],
++      ["工具变化", { toolSchemas: [{ name: "read" }, { name: "bash" }] }],
++      ["Beta headers", { betaHeaders: ["token-efficient-tools-2025-02-19"] }],
++      ["服务端波动", {}],
++    ];
++    let ts = 1_700_001_000;
++    for (const [, over] of cases) {
++      const d = new CacheBreakDetector();
++      d.checkResponse(detectorParams({ betaHeaders: [] }));
++      const report = d.checkResponse(detectorParams({ cacheReadTokens: 5000, betaHeaders: [], ...over }));
++      if (!report) continue;
++      emitCacheBreakTelemetry({ ...report, ts: ts++, model: "test-model" });
++    }
++
++    const s = summarizeCacheBreakHistory(100);
++    expect(s.total).toBeGreaterThanOrEqual(cases.length);
++    // 任一归因文案没有分类分支 → unknown 非空 → 本测试失败并暴露漏配
++    expect(s.byCategory.unknown ?? 0).toBe(0);
++  });
++});
+diff --git a/tests/telemetry/no-real-path-writes.test.ts b/tests/telemetry/no-real-path-writes.test.ts
+new file mode 100644
+index 0000000..9887701
+--- /dev/null
++++ b/tests/telemetry/no-real-path-writes.test.ts
+@@ -0,0 +1,121 @@
++/**
++ * 遥测隔离防复发哨兵（C1）
++ *
++ * 背景：`recordCacheBreak()` 除了推内存环形缓冲，还会**同步落盘**到
++ * ~/.sid-code/cache-breaks.jsonl（src/api/cache-detection.ts:428）。落盘是
++ * fire-and-forget 且吞异常，所以调它的测试不做隔离时——测试全绿、断言全过、
++ * 数据静静灌进用户真实文件。实测污染 6 万余行假数据（ts=1700000000 等测试字面量），
++ * 把 `/cache --history` 冲成"尾部 20 条里一条真记录都看不到"。
++ *
++ * 靠"下一个人记得设环境变量"是靠不住的：机制存在（SID_CODE_CACHE_BREAKS 早在
++ * cache-telemetry.ts:15 的文件头注释里写明"测试隔离用"），但三个写入方测试里
++ * 只有一个用了。本哨兵把这条判据从"人记住"变成"门禁挡住"。
++ *
++ * 两道防线：
++ *  1. 运行时契约：未设环境变量时 cacheBreaksPath() 落在配置根目录下（默认路径没被改坏），
++ *     设了则严格采纳——即隔离机制本身有效。
++ *  2. 静态扫描（核心）：扫 tests/ 下所有 import 了落盘类导出的文件，断言每个都声明了
++ *     隔离（SID_CODE_CACHE_BREAKS 或 SID_CONFIG_DIR）。新增测试漏设 → 本测试失败并点名文件。
++ *
++ * 判据（源自 docs/bugfixes/todo/20260803-单测污染用户遥测数据-隔离缺口根治方案.md §2.4）：
++ *   只要一个函数除返回值外还有「写用户家目录」这种进程外副作用，
++ *   调它的测试就必须显式隔离。
++ */
++
++import { describe, test, expect, afterEach } from "bun:test";
++import { readdirSync, readFileSync, statSync } from "node:fs";
++import { join } from "node:path";
++import { cacheBreaksPath } from "../../src/telemetry/cache-telemetry.ts";
++import { getSidHome } from "../../src/config/paths.ts";
++
++/**
++ * 会触发落盘的导出。import 了其中任意一个的测试文件都必须声明隔离。
++ *
++ * - recordCacheBreak：内存缓冲 + 落盘（cache-detection.ts:421-432）
++ * - emitCacheBreakTelemetry：直接落盘（cache-telemetry.ts:50）
++ *
++ * 注：checkResponseForCacheBreak 刻意**不在**此列——它只做检测与归因，
++ * 落盘由主循环（query/loop.ts:2453）另行调 recordCacheBreak 完成，
++ * 实测调它不写盘。把它加进来会制造假阳性。
++ */
++const WRITING_EXPORTS = ["recordCacheBreak", "emitCacheBreakTelemetry"] as const;
++
++/** 认可的隔离手段：专用重定向，或整体改写配置根目录 */
++const ISOLATION_MARKERS = ["SID_CODE_CACHE_BREAKS", "SID_CONFIG_DIR"] as const;
++
++describe("cacheBreaksPath 隔离契约", () => {
++  const saved = process.env.SID_CODE_CACHE_BREAKS;
++  afterEach(() => {
++    if (saved === undefined) delete process.env.SID_CODE_CACHE_BREAKS;
++    else process.env.SID_CODE_CACHE_BREAKS = saved;
++  });
++
++  test("未设环境变量时落在配置根目录下（默认路径未被改坏）", () => {
++    delete process.env.SID_CODE_CACHE_BREAKS;
++    const p = cacheBreaksPath();
++    expect(p.startsWith(getSidHome())).toBe(true);
++    expect(p.endsWith("cache-breaks.jsonl")).toBe(true);
++  });
++
++  test("设了环境变量则严格采纳（重定向真的生效）", () => {
++    process.env.SID_CODE_CACHE_BREAKS = "/tmp/sentinel-probe/cache-breaks.jsonl";
++    expect(cacheBreaksPath()).toBe("/tmp/sentinel-probe/cache-breaks.jsonl");
++  });
++
++  test("空串 / 纯空白视为未设置，回落默认路径（避免误重定向到空路径）", () => {
++    process.env.SID_CODE_CACHE_BREAKS = "   ";
++    expect(cacheBreaksPath().startsWith(getSidHome())).toBe(true);
++  });
++});
++
++describe("防复发哨兵：扫描 tests/ 下所有落盘调用方", () => {
++  /** 递归收集 tests/ 下所有 .test.ts（排除本哨兵自身——它 import 的是路径函数不是落盘函数） */
++  function collectTestFiles(dir: string, acc: string[] = []): string[] {
++    for (const entry of readdirSync(dir)) {
++      const full = join(dir, entry);
++      const st = statSync(full);
++      if (st.isDirectory()) collectTestFiles(full, acc);
++      else if (entry.endsWith(".test.ts") && !full.endsWith("no-real-path-writes.test.ts")) {
++        acc.push(full);
++      }
++    }
++    return acc;
++  }
++
++  test("每个 import 了落盘类导出的测试文件都声明了隔离", () => {
++    const testsRoot = join(import.meta.dir, "..");
++    const files = collectTestFiles(testsRoot);
++    // 断言扫描面非空——目录结构变动导致空扫时，这条门禁会静默变成"永远通过"
++    expect(files.length).toBeGreaterThan(100);
++
++    const violations: Array<{ file: string; usedExport: string }> = [];
++    let scanned = 0;
++
++    for (const file of files) {
++      const text = readFileSync(file, "utf-8");
++      const used = WRITING_EXPORTS.find((name) => new RegExp(`\\b${name}\\b`).test(text));
++      if (!used) continue;
++      scanned++;
++      const isolated = ISOLATION_MARKERS.some((marker) => text.includes(marker));
++      if (!isolated) {
++        violations.push({ file: file.replace(testsRoot, "tests"), usedExport: used });
++      }
++    }
++
++    // 已知调用方至少 3 个（cache-detection / clear-resets-cache-state / cache-telemetry-rotation）。
++    // 若正则或导出名漂移导致一个都匹配不上，这条会先失败，而不是让门禁空转成绿灯。
++    expect(scanned).toBeGreaterThanOrEqual(3);
++
++    if (violations.length > 0) {
++      const detail = violations
++        .map((v) => `  - ${v.file}（用了 ${v.usedExport}，未设 ${ISOLATION_MARKERS.join(" / ")}）`)
++        .join("\n");
++      throw new Error(
++        `以下测试会往用户真实的 ~/.sid-code/cache-breaks.jsonl 写数据：\n${detail}\n\n` +
++          `修法：在 beforeAll 里把 SID_CODE_CACHE_BREAKS 指向 mkdtempSync 的临时目录，` +
++          `afterAll 恢复原值（不要无条件 delete——bun test 同进程跑多文件）。\n` +
++          `参考 tests/telemetry/cache-telemetry-rotation.test.ts:38。`,
++      );
++    }
++  });
++});
+diff --git a/tests/trace/crash-marker.test.ts b/tests/trace/crash-marker.test.ts
+index 10cb90e..402128d 100644
+--- a/tests/trace/crash-marker.test.ts
++++ b/tests/trace/crash-marker.test.ts
+@@ -9,13 +9,16 @@
+  */
+ 
+ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+-import { homedir } from "node:os";
+ import { join } from "node:path";
+ import { existsSync, mkdirSync, rmSync } from "node:fs";
+ import * as CrashMarker from "../../src/trace/crash-marker.ts";
++import { getSidHome } from "../../src/config/paths.ts";
+ 
+ const TEST_SESSION_ID = `test-crash-${Date.now()}`;
+-const BASE_DIR = join(homedir(), ".sid-code", "trajectories");
++// 从 getSidHome() 派生而非硬编码 join(homedir(), ".sid-code")：
++// 后者会让本测试**真的往用户家目录写** crash.json，且在隔离生效时期望路径失配。
++// getSidHome() 尊重 SID_CONFIG_DIR（含 tests/preload-isolate-sid-home.ts 设的兜底）。
++const BASE_DIR = join(getSidHome(), "trajectories");
+ const TEST_SESSION_DIR = join(BASE_DIR, "sessions", TEST_SESSION_ID);
+ const TEST_CRASH_FILE = join(TEST_SESSION_DIR, "crash.json");
+ 
+diff --git a/tests/trace/pid-manager.test.ts b/tests/trace/pid-manager.test.ts
+index 403c608..a365b7e 100644
+--- a/tests/trace/pid-manager.test.ts
++++ b/tests/trace/pid-manager.test.ts
+@@ -2,12 +2,15 @@
+  * pid-manager 单测
+  */
+ import { describe, test, expect, afterEach } from "bun:test";
+-import { homedir } from "node:os";
+ import { join } from "node:path";
+ import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+ import * as PidManager from "../../src/trace/pid-manager.ts";
++import { getSidHome } from "../../src/config/paths.ts";
+ 
+-const BASE_DIR = join(homedir(), ".sid-code", "trajectories");
++// 从 getSidHome() 派生而非硬编码 join(homedir(), ".sid-code")：
++// 后者会让本测试**真的往用户家目录写** PID 文件，且在隔离生效时期望路径失配。
++// getSidHome() 尊重 SID_CONFIG_DIR（含 tests/preload-isolate-sid-home.ts 设的兜底）。
++const BASE_DIR = join(getSidHome(), "trajectories");
+ const PIDS_DIR = join(BASE_DIR, ".pids");
+ 
+ /** 清理测试数据 */

@@ -1,0 +1,239 @@
+diff --git a/tests/tool/bash-cwd-tracking.test.ts b/tests/tool/bash-cwd-tracking.test.ts
+new file mode 100644
+index 0000000..09f94f5
+--- /dev/null
++++ b/tests/tool/bash-cwd-tracking.test.ts
+@@ -0,0 +1,120 @@
++/**
++ * 持久 Shell 会话 — bash cwd 追踪 + 跨工具 cwd 一致性测试
++ *
++ * 验证：
++ * 1. bash 执行 `cd <dir>` 后写回全局 cwd 状态
++ * 2. read/glob 等工具通过 normalizeToolPath 读全局 cwd，跟随 bash 的 cd
++ * 3. 后台命令不写回 cwd
++ * 4. cwd 指向已删除目录时回退
++ */
++import { describe, it, expect, beforeEach, afterEach } from "bun:test";
++import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
++import { tmpdir } from "os";
++import { join } from "path";
++import { BashTool } from "../../src/tool/bash.ts";
++import { normalizeToolPath } from "../../src/tool/path-utils.ts";
++import { getCwd, setCwd, getOriginalCwd } from "../../src/bootstrap/state.ts";
++
++let tmpRoot: string;
++let originalGlobalCwd: string;
++
++beforeEach(() => {
++  originalGlobalCwd = getCwd();
++  tmpRoot = mkdtempSync(join(tmpdir(), "sid-cwd-test-"));
++});
++
++afterEach(() => {
++  // 恢复全局 cwd，避免污染其它测试
++  setCwd(originalGlobalCwd);
++  try {
++    rmSync(tmpRoot, { recursive: true, force: true });
++  } catch {
++    /* 忽略 */
++  }
++});
++
++describe("bash cwd 追踪", () => {
++  it("cd 后写回全局 cwd 状态", async () => {
++    if (process.platform === "win32") return; // Windows 不追踪 cwd
++    const subDir = join(tmpRoot, "sub");
++    mkdirSync(subDir);
++
++    const bash = new BashTool();
++    // 从 tmpRoot 起步
++    setCwd(tmpRoot);
++    const result = await bash.execute({
++      command: "cd sub",
++      description: "进入 sub 目录",
++    });
++    expect(result.isError).toBeFalsy();
++    // 全局 cwd 应更新为 subDir（pwd -P 解析符号链接，tmpdir 在 macOS 上是符号链接，用 endsWith 容错）
++    expect(getCwd().endsWith("/sub")).toBe(true);
++  });
++
++  it("跨工具一致性：cd 后 normalizeToolPath 解析相对路径基于新 cwd", async () => {
++    if (process.platform === "win32") return;
++    const subDir = join(tmpRoot, "proj");
++    mkdirSync(subDir);
++    writeFileSync(join(subDir, "foo.ts"), "// test", "utf8");
++
++    const bash = new BashTool();
++    setCwd(tmpRoot);
++    await bash.execute({ command: "cd proj", description: "进入 proj" });
++
++    // read/glob 等工具用 normalizeToolPath("foo.ts") 解析，应基于新 cwd 指向 proj/foo.ts
++    const resolved = normalizeToolPath("foo.ts");
++    expect(resolved.endsWith("/proj/foo.ts")).toBe(true);
++  });
++
++  it("命令失败时不写回 cwd（pwd -P 未执行）", async () => {
++    if (process.platform === "win32") return;
++    const bash = new BashTool();
++    setCwd(tmpRoot);
++    const before = getCwd();
++    // cd 到不存在目录 → 命令失败
++    const result = await bash.execute({
++      command: "cd /nonexistent-dir-xyz-12345",
++      description: "进入不存在目录",
++    });
++    expect(result.isError).toBe(true);
++    // cwd 不应改变
++    expect(getCwd()).toBe(before);
++  });
++
++  it("显式传 cwd 参数优先于全局 cwd", async () => {
++    if (process.platform === "win32") return;
++    const subDir = join(tmpRoot, "explicit");
++    mkdirSync(subDir);
++    writeFileSync(join(subDir, "marker.txt"), "found", "utf8");
++
++    const bash = new BashTool();
++    setCwd(tmpRoot); // 全局 cwd 是 tmpRoot
++    const result = await bash.execute({
++      command: "cat marker.txt",
++      cwd: subDir, // 显式指定
++      description: "读 marker",
++    });
++    expect(result.isError).toBeFalsy();
++    expect(result.output).toContain("found");
++  });
++});
++
++describe("cwd 删除回退", () => {
++  it("全局 cwd 指向已删除目录时回退到原始启动目录", async () => {
++    if (process.platform === "win32") return;
++    const doomed = join(tmpRoot, "doomed");
++    mkdirSync(doomed);
++    setCwd(doomed);
++    rmSync(doomed, { recursive: true, force: true }); // 删除当前 cwd
++
++    const bash = new BashTool();
++    // resolveCwd 应检测到 doomed 不存在，回退到 getOriginalCwd()
++    const result = await bash.execute({
++      command: "pwd",
++      description: "打印当前目录",
++    });
++    // 不应因 cwd 不存在而崩溃
++    expect(result.isError).toBeFalsy();
++    expect(result.output).toContain(getOriginalCwd());
++  });
++});
+diff --git a/tests/tool/shell-snapshot.test.ts b/tests/tool/shell-snapshot.test.ts
+new file mode 100644
+index 0000000..e4a39fb
+--- /dev/null
++++ b/tests/tool/shell-snapshot.test.ts
+@@ -0,0 +1,107 @@
++/**
++ * 持久 Shell 会话 — shell-snapshot 单元测试
++ * 覆盖：escapeForShell（POSIX 单引号转义）、createAndSaveSnapshot（创建/降级/Windows 跳过）、cleanup
++ */
++import { describe, it, expect, afterEach } from "bun:test";
++import { existsSync, readFileSync, rmSync } from "fs";
++import { platform } from "os";
++import {
++  escapeForShell,
++  createAndSaveSnapshot,
++  cleanupSnapshot,
++} from "../../src/tool/bash/shell-snapshot.ts";
++import { sidPaths } from "../../src/config/paths.ts";
++
++// ============================================================
++// escapeForShell
++// ============================================================
++
++describe("escapeForShell", () => {
++  it("普通字符串用单引号包裹", () => {
++    expect(escapeForShell("hello")).toBe("'hello'");
++  });
++
++  it("含空格的路径安全包裹", () => {
++    expect(escapeForShell("/path with space/file")).toBe("'/path with space/file'");
++  });
++
++  it("含单引号：闭合→转义→重开", () => {
++    // it's → 'it'\''s'
++    expect(escapeForShell("it's")).toBe("'it'\\''s'");
++  });
++
++  it("含 $ 等特殊字符不被展开（单引号内字面）", () => {
++    expect(escapeForShell("$HOME && rm -rf /")).toBe("'$HOME && rm -rf /'");
++  });
++
++  it("含反引号字面保留", () => {
++    expect(escapeForShell("`whoami`")).toBe("'`whoami`'");
++  });
++
++  it("空字符串", () => {
++    expect(escapeForShell("")).toBe("''");
++  });
++
++  it("多个单引号", () => {
++    // a'b'c → 'a'\''b'\''c'
++    expect(escapeForShell("a'b'c")).toBe("'a'\\''b'\\''c'");
++  });
++});
++
++// ============================================================
++// createAndSaveSnapshot
++// ============================================================
++
++describe("createAndSaveSnapshot", () => {
++  afterEach(() => {
++    cleanupSnapshot();
++    // 清理可能残留的快照目录内容
++    try {
++      rmSync(sidPaths.shellSnapshots(), { recursive: true, force: true });
++    } catch {
++      /* 忽略 */
++    }
++  });
++
++  it("Windows 平台返回 undefined（无法 source POSIX 脚本）", async () => {
++    if (platform() !== "win32") {
++      // 非 Windows 环境无法真实测 win32 分支，跳过断言但保证函数不抛
++      return;
++    }
++    const result = await createAndSaveSnapshot("powershell.exe");
++    expect(result).toBeUndefined();
++  });
++
++  it("POSIX 平台：用真实 shell 创建快照文件", async () => {
++    if (platform() === "win32") return;
++    const shell = process.env.SHELL || "/bin/bash";
++    const result = await createAndSaveSnapshot(shell);
++    // 真实 shell 应成功创建（CI 中 shell 存在）
++    if (result) {
++      expect(existsSync(result)).toBe(true);
++      const content = readFileSync(result, "utf8");
++      // 快照应包含标志性注释
++      expect(content).toContain("sid-code shell snapshot");
++      expect(content).toContain("unalias -a");
++      // PATH 注入
++      expect(content).toContain("export PATH=");
++    }
++  });
++
++  it("不存在的 shell 路径 → 降级 undefined，不抛出", async () => {
++    if (platform() === "win32") return;
++    const result = await createAndSaveSnapshot("/nonexistent/fake-shell-xyz");
++    expect(result).toBeUndefined();
++  });
++
++  it("cleanupSnapshot 删除快照文件", async () => {
++    if (platform() === "win32") return;
++    const shell = process.env.SHELL || "/bin/bash";
++    const result = await createAndSaveSnapshot(shell);
++    if (result) {
++      expect(existsSync(result)).toBe(true);
++      cleanupSnapshot();
++      expect(existsSync(result)).toBe(false);
++    }
++  });
++});

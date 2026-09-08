@@ -1,0 +1,313 @@
+diff --git a/src/api/cache-detection.ts b/src/api/cache-detection.ts
+index 5397db0..9ff89a5 100644
+--- a/src/api/cache-detection.ts
++++ b/src/api/cache-detection.ts
+@@ -35,6 +35,11 @@ function hashString(s: string): string {
+   return createHash("sha256").update(s).digest("hex").slice(0, 16);
+ }
+ 
++/** P2-1：组合 system prompt + tool schemas + tool order 为单一前缀 hash，用于缓存断裂诊断 */
++function combinePrefixHash(sysHash: string, toolHash: string, orderHash: string): string {
++  return hashString(`${sysHash}|${toolHash}|${orderHash}`);
++}
++
+ /** 请求前的状态快照（G3：15+ 维度归因，对齐 CC） */
+ interface PromptState {
+   systemPromptHash: string;
+@@ -69,6 +74,10 @@ export interface CacheBreakReport {
+   previousCacheReadTokens: number;
+   /** 本次的 cache_read tokens */
+   currentCacheReadTokens: number;
++  /** P2-1 诊断：上次请求的 system prompt + tools 前缀 hash（判定本地断裂 vs 服务端波动） */
++  previousPrefixHash?: string;
++  /** P2-1 诊断：本次请求的 system prompt + tools 前缀 hash */
++  currentPrefixHash?: string;
+ }
+ 
+ /** 输入参数 */
+@@ -231,8 +240,19 @@ export class CacheBreakDetector {
+       changes.push(`TTL 可能已过期 (间隔 ${Math.round(gapMs / 60000)} 分钟)`);
+     }
+ 
++    // P2-1 诊断：计算 system prompt + tools 组合前缀 hash（下次复现即可判本地断裂 vs 服务端波动）
++    const prevPrefixHash = combinePrefixHash(prev.systemPromptHash, prev.toolSchemasHash, prev.toolOrderHash);
++    const currPrefixHash = combinePrefixHash(curr.systemPromptHash, curr.toolSchemasHash, curr.toolOrderHash);
++
+     if (changes.length === 0) {
+-      changes.push("未知原因（命中下降但状态无变化，可能服务端缓存波动）");
++      // P2-1：把前缀 hash 是否变化写进归因——hash 变=本地前缀断裂；hash 未变=服务端波动。
++      // 此前一律归"未知原因"，缺的正是这个判据字段。
++      const prefixChanged = prevPrefixHash !== currPrefixHash;
++      changes.push(
++        prefixChanged
++          ? `本地前缀 hash 变化（${prevPrefixHash} → ${currPrefixHash}），命中下降由本地 prompt 前缀断裂导致`
++          : `本地前缀 hash 未变（${currPrefixHash}），命中下降疑为服务端缓存波动`,
++      );
+     }
+ 
+     const report: CacheBreakReport = {
+@@ -241,6 +261,8 @@ export class CacheBreakDetector {
+       changes,
+       previousCacheReadTokens: prevTokens,
+       currentCacheReadTokens: params.cacheReadTokens,
++      previousPrefixHash: prevPrefixHash,
++      currentPrefixHash: currPrefixHash,
+     };
+ 
+     // 更新状态
+diff --git a/src/goal/evaluator.ts b/src/goal/evaluator.ts
+index 1c62ff7..a1407d4 100644
+--- a/src/goal/evaluator.ts
++++ b/src/goal/evaluator.ts
+@@ -27,6 +27,8 @@ export interface GoalEvalResult {
+   progress?: number;
+   /** 目标是否被判定为不可能达成 */
+   impossible?: boolean;
++  /** P1-3: 本次评估调用消耗的 token（in+out），用于 GoalGateDecision 记账（快速路径/失败为 0） */
++  evalTokensUsed?: number;
+ }
+ 
+ export interface EvalConfig {
+@@ -96,11 +98,11 @@ export async function evaluateGoal(
+   log.info("GOAL_EVAL", `开始评估: objective="${goal.objective.slice(0, 60)}", evidenceCount=${goal.evidenceLog.length}, contextChars=${conversationContext.length}, model=${config.model}`);
+ 
+   try {
+-    const response = await callEvaluatorModel(systemPrompt, userPrompt, config);
++    const { text: response, tokensUsed } = await callEvaluatorModel(systemPrompt, userPrompt, config);
+     const result = parseEvalResponse(response);
+     const durationMs = Date.now() - startTime;
+-    log.info("GOAL_EVAL", `评估完成: satisfied=${result.satisfied}, reason="${result.reason?.slice(0, 100)}", progress=${result.progress ?? "N/A"}, impossible=${result.impossible ?? false}, blockerKey=${result.blockerKey ?? "N/A"}, durationMs=${durationMs}`);
+-    return result;
++    log.info("GOAL_EVAL", `评估完成: satisfied=${result.satisfied}, reason="${result.reason?.slice(0, 100)}", progress=${result.progress ?? "N/A"}, impossible=${result.impossible ?? false}, blockerKey=${result.blockerKey ?? "N/A"}, durationMs=${durationMs}, tokensUsed=${tokensUsed}`);
++    return { ...result, evalTokensUsed: tokensUsed };
+   } catch (error: unknown) {
+     const msg = error instanceof Error ? error.message : String(error);
+     const durationMs = Date.now() - startTime;
+@@ -186,8 +188,8 @@ async function callEvaluatorModel(
+   systemPrompt: string,
+   userPrompt: string,
+   config: EvalConfig,
+-): Promise<string> {
+-  const { provider, model, timeout = 8000 } = config;
++): Promise<{ text: string; tokensUsed: number }> {
++  const { provider, model, timeout = 25000 } = config;
+ 
+   const messages: Message[] = [
+     {
+@@ -201,6 +203,7 @@ async function callEvaluatorModel(
+ 
+   try {
+     let responseText = "";
++    let tokensUsed = 0;
+     const stream = provider.sendMessageStream(
+       {
+         model,
+@@ -220,6 +223,8 @@ async function callEvaluatorModel(
+         responseText += event.delta.text;
+       } else if (event.type === "message_stop" && (event as any).usage) {
+         const u = (event as any).usage;
++        // P1-3: 累计评估器 token 供 GoalGateDecision 记账
++        tokensUsed = (u.inputTokens ?? 0) + (u.outputTokens ?? 0);
+         recordSideCall({
+           label: "goal-evaluator",
+           model,
+@@ -232,7 +237,7 @@ async function callEvaluatorModel(
+       }
+     }
+ 
+-    return responseText;
++    return { text: responseText, tokensUsed };
+   } finally {
+     clearTimeout(timer);
+   }
+diff --git a/src/llm/fallback.ts b/src/llm/fallback.ts
+index 1a8c54f..136bbae 100644
+--- a/src/llm/fallback.ts
++++ b/src/llm/fallback.ts
+@@ -435,7 +435,30 @@ export class ModelFallback {
+         try {
+           log.debug("FALLBACK", `流式阶段尝试 ${attempt + 1}/${streamMaxRetries + 1}`);
+ 
+-          for await (const event of stream) {
++          // P0-2 修复：将 `for await` 改为手动迭代 + Promise.race(abortPromise)。
++          // 当 SSE 半开（TCP 连接在、服务端不再发 event）时，`for await` 内的 reader.read()
++          // 永不 settle，signal?.aborted 检查永远执行不到。通过 race abort，abort 触发时
++          // 立即 reject，不等下一个 event。参考模板：openai.ts:1291-1343。
++          const abortPromise: Promise<never> | null = (() => {
++            if (!signal || signal.aborted) return null;
++            return new Promise<never>((_, reject) => {
++              const onAbort = () => reject(new RequestAbortedError("请求已中止（abort race）"));
++              signal.addEventListener("abort", onAbort, { once: true });
++            });
++          })();
++
++          const iterator = stream[Symbol.asyncIterator]();
++          let iterDone = false;
++          while (!iterDone) {
++            const racers: Promise<IteratorResult<StreamEvent>>[] = [iterator.next()];
++            if (abortPromise) racers.push(abortPromise as any);
++            const iterResult = await Promise.race(racers);
++            if (iterResult.done) {
++              iterDone = true;
++              break;
++            }
++            const event = iterResult.value;
++
+             if (signal?.aborted) {
+               throw new RequestAbortedError("请求已中止");
+             }
+diff --git a/src/query/goal-gate.ts b/src/query/goal-gate.ts
+index c511512..e16d506 100644
+--- a/src/query/goal-gate.ts
++++ b/src/query/goal-gate.ts
+@@ -79,6 +79,8 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+           status: goal.status,
+           tokensUsed: goal.tokensUsed,
+           tokenBudget: goal.tokenBudget,
++          // P1-3: 记录本次评估器调用消耗的 token（evalResult 可能尚未赋值，延迟读取）
++          evalTokensUsed: (extra as any)?.evalTokensUsed ?? 0,
+           ...extra,
+         },
+       });
+@@ -159,7 +161,7 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+       goal.status = "impossible";
+       log.warn("GOAL_GATE", `目标不可能达成（硬停止）: reason="${evalResult.reason}", turn=${goal.turnsUsed}`);
+       systemMessages.push({ level: "warning", text: `Goal 被判定为不可能达成: ${evalResult.reason}` });
+-      emitTraceEvent("impossible", false, { evalReason: evalResult.reason });
++      emitTraceEvent("impossible", false, { evalReason: evalResult.reason, evalTokensUsed: evalResult.evalTokensUsed ?? 0 });
+       return {
+         result: { shouldContinue: false, completed: false, impossible: true, evalResult },
+         injectMessages,
+@@ -172,7 +174,7 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+     const impossibleReminder = buildImpossibleReminder(goal, evalResult);
+     injectMessages.push({ role: "user", content: [{ type: "text", text: impossibleReminder }] });
+     systemMessages.push({ level: "warning", text: `评估者认为目标可能无法达成（${evalResult.reason?.slice(0, 60)}），已提醒模型自行决定` });
+-    emitTraceEvent("impossible_soft", true, { evalReason: evalResult.reason });
++    emitTraceEvent("impossible_soft", true, { evalReason: evalResult.reason, evalTokensUsed: evalResult.evalTokensUsed ?? 0 });
+     return {
+       result: { shouldContinue: true, completed: false, impossible: false, feedback: impossibleReminder, evalResult },
+       injectMessages,
+@@ -185,7 +187,7 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+     goal.status = "complete";
+     log.info("GOAL_GATE", `目标达成: reason="${evalResult.reason}", turn=${goal.turnsUsed}, progress=100`);
+     systemMessages.push({ level: "info", text: `✓ 目标达成: ${evalResult.reason}` });
+-    emitTraceEvent("satisfied", false, { evalReason: evalResult.reason, progress: 100 });
++    emitTraceEvent("satisfied", false, { evalReason: evalResult.reason, progress: 100, evalTokensUsed: evalResult.evalTokensUsed ?? 0 });
+     return {
+       result: { shouldContinue: false, completed: true, impossible: false, evalResult },
+       injectMessages,
+@@ -203,7 +205,7 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+         level: "warning",
+         text: `Goal 检测到卡住（连续 ${goalConfig.blockedThreshold} 轮相同阻塞原因: ${evalResult.blockerKey}），已暂停`,
+       });
+-      emitTraceEvent("blocked", false, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold });
++      emitTraceEvent("blocked", false, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold, evalTokensUsed: evalResult.evalTokensUsed ?? 0 });
+       return {
+         result: { shouldContinue: false, completed: false, impossible: false, evalResult },
+         injectMessages,
+@@ -221,7 +223,7 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+       level: "warning",
+       text: `Goal 疑似卡住（连续 ${goalConfig.blockedThreshold} 轮相同阻塞原因），已提醒模型换思路`,
+     });
+-    emitTraceEvent("blocked_soft", true, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold });
++    emitTraceEvent("blocked_soft", true, { blockerKey: evalResult.blockerKey, threshold: goalConfig.blockedThreshold, evalTokensUsed: evalResult.evalTokensUsed ?? 0 });
+     return {
+       result: { shouldContinue: true, completed: false, impossible: false, feedback: blockedReminder, evalResult },
+       injectMessages,
+@@ -232,7 +234,7 @@ export async function handleGoalGate(ctx: GoalGateContext): Promise<{
+   // 8. 未达成 → 注入反馈 + continue
+   goal.lastEvalReason = evalResult.reason;
+   log.info("GOAL_GATE", `决策: shouldContinue=true, progress=${evalResult.progress ?? "?"}, reason="${evalResult.reason?.slice(0, 80)}", turn=${goal.turnsUsed}`);
+-  emitTraceEvent("continue", true, { progress: evalResult.progress, evalReason: evalResult.reason?.slice(0, 200), blockerKey: evalResult.blockerKey });
++  emitTraceEvent("continue", true, { progress: evalResult.progress, evalReason: evalResult.reason?.slice(0, 200), blockerKey: evalResult.blockerKey, evalTokensUsed: evalResult.evalTokensUsed ?? 0 });
+   const feedback = buildGoalGateFeedback(goal, evalResult);
+   injectMessages.push({
+     role: "user",
+diff --git a/src/query/stream-processor.ts b/src/query/stream-processor.ts
+index 3710c94..4cbb496 100644
+--- a/src/query/stream-processor.ts
++++ b/src/query/stream-processor.ts
+@@ -103,7 +103,31 @@ export async function processStream(
+   }, CHECK_INTERVAL);
+ 
+   try {
+-    for await (const event of stream) {
++    // P0-2 修复：将 `for await` 改为手动迭代 + Promise.race(abortPromise)。
++    // 当 SSE 半开时 reader.read() 永不 settle，timeoutError 检查永远执行不到。
++    // 通过 race abort（来自 getAbortController），abort 触发时立即 reject。
++    const abortCtl = options?.getAbortController?.();
++    const abortSignal = abortCtl?.signal;
++    const abortPromise: Promise<never> | null = (() => {
++      if (!abortSignal || abortSignal.aborted) return null;
++      return new Promise<never>((_, reject) => {
++        const onAbort = () => reject(new Error("Stream aborted (abort race)"));
++        abortSignal.addEventListener("abort", onAbort, { once: true });
++      });
++    })();
++
++    const iterator = stream[Symbol.asyncIterator]();
++    let iterDone = false;
++    while (!iterDone) {
++      const racers: Promise<IteratorResult<StreamEvent>>[] = [iterator.next()];
++      if (abortPromise) racers.push(abortPromise as any);
++      const iterResult = await Promise.race(racers);
++      if (iterResult.done) {
++        iterDone = true;
++        break;
++      }
++      const event = iterResult.value;
++
+       lastActivityTime = Date.now();
+ 
+       // 关键修复：每次事件前检查超时标志，一旦超时就抛错主动退出循环
+diff --git a/src/trace/collector.ts b/src/trace/collector.ts
+index faf7ed6..6ad1dd1 100644
+--- a/src/trace/collector.ts
++++ b/src/trace/collector.ts
+@@ -130,8 +130,10 @@ export class TraceCollector {
+   private heartbeatPath: string = "";
+   /** §3.4：BeforeModel 配对看门狗（index → timer） */
+   private pendingModelCalls = new Map<number, ReturnType<typeof setTimeout>>();
+-  /** 配对超时阈值（10 分钟） */
+-  private readonly PAIRING_TIMEOUT_MS = 10 * 60 * 1000;
++  /** 配对超时阈值（2 分钟）——作为 fallback/stream-processor abort race 都失效时的最后兜底。
++   * P0-2：原 10 分钟太长（真实 hang 时用户白等 600s）。abort race 修复后主路径应在秒级收尾，
++   * 此看门狗仅在极端情况兜底，缩短到 120s 限制最坏等待时间。 */
++  private readonly PAIRING_TIMEOUT_MS = 2 * 60 * 1000;
+   /** §3.8：audit.log 起始行号（SessionStart 时快照） */
+   private auditLogStartLine: number = 0;
+   /** §3.8：audit.log 文件路径（SessionStart 时快照） */
+@@ -759,6 +761,10 @@ export class TraceCollector {
+         stop_reason: stopReason,
+         usage: usageNormalized,
+         index: pair.index,
++        // P1-3: 填充 elapsed_ms/ttft_ms/content_types（此前恒 null，已在 AfterModelRaw 有值但此处缺失导致复盘误判）
++        elapsed_ms: (resp as any).api_duration_ms ?? null,
++        ttft_ms: (resp as any).ttft_ms ?? null,
++        content_types: contentBlocks.filter(Boolean).map((b: any) => b.type),
+       },
+     });
+ 
+@@ -965,11 +971,22 @@ export class TraceCollector {
+       }
+     }
+ 
++    // P1-3: SubagentStop 补全 data（此前 data 恒为空，子代理开销无法从轨迹核算）
++    const stopInput = input as any; // SubagentStopInput 字段
+     this.writer.appendEvent({
+       event: HookEventName.SubagentStop,
+       session_id: this.metadata.session_id,
+       timestamp: input.timestamp,
+       cwd: input.cwd,
++      data: {
++        agent_id: stopInput.agent_id ?? null,
++        agent_type: stopInput.agent_type ?? null,
++        elapsed_ms: stopInput.duration_ms ?? null,
++        output_tokens: stopInput.usage?.outputTokens ?? null,
++        input_tokens: stopInput.usage?.inputTokens ?? null,
++        turns: stopInput.turns ?? null,
++        status: stopInput.success === true ? "completed" : stopInput.success === false ? "error" : "unknown",
++      },
+     });
+   }
+ 

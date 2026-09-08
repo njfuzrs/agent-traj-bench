@@ -1,0 +1,18 @@
+schema_version = "1.4"
+
+[metadata]
+task_id = "T0042"
+source_unit_id = "ab358ff5-e15f-4c32-a528-5f517d4c6887#01"
+repo = "person/sid-code"
+base_commit = "3b9168301dc657c29ca4f06af84da5865681f673"
+difficulty_band = "L"
+category = "test_authoring"
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 2700.0
+
+[environment]
+build_timeout_sec = 1800.0

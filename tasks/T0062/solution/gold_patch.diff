@@ -1,0 +1,1036 @@
+diff --git a/src/app.ts b/src/app.ts
+index ea1baf0..cacd639 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -179,6 +179,8 @@ export class App {
+   private sessionStore: SessionStore | null = null;
+   /** B6：被 resume 恢复的会话 id（非 null 表示当前是 resume 会话，doInit 应续写原 jsonl 而非新建） */
+   private resumedSessionId: string | null = null;
++  /** P0-2：--fork-session 时记录分叉来源会话 id（非 null 表示当前是分叉会话，新建 jsonl 并把源 id 写入 parentUuid） */
++  private forkedFromSessionId: string | null = null;
+   /** P1-7：本会话累积改动过的文件集合（去重），供 recordFileChanges 落盘 file_changes 快照。
+    *  resume 时从被恢复会话的 file_changes metadata 预填，续做时继续累积。 */
+   private changedFiles: Set<string> = new Set();
+@@ -311,7 +313,12 @@ export class App {
+     getSessionMetrics().setAvailableModels(opts.config.availableModels);
+     // B1：会话持久化写入端（构造很轻，仅建目录）。startSession/resumeSession 延迟到 doInit 调用，
+     // 以便 B6 能根据 resumedSessionId 决定"新建 jsonl"还是"续写旧 jsonl"。
+-    this.sessionStore = new SessionStore();
++    // P1-2 --no-session-persistence：置 null 则所有 this.sessionStore?.xxx 调用自动 no-op，
++    // 本次会话完全不落盘（SDK / 一次性任务用），checkpoint/trace 等其它子系统不受影响。
++    this.sessionStore = opts.config.noSessionPersistence ? null : new SessionStore();
++    if (opts.config.noSessionPersistence) {
++      getLogger().info("APP", "会话持久化已禁用（--no-session-persistence）：本次会话不写 jsonl。");
++    }
+     // 成本配额管理（合并 costLimit 和 quota 配置）
+     const quotaConfig = opts.config.quota;
+     const effectiveCostLimit = quotaConfig?.costLimit ?? opts.config.costLimit;
+@@ -1103,6 +1110,8 @@ export class App {
+    * 无新注册表时回退旧 Registry.all()。
+    */
+   private async loadCommandList(): Promise<Array<{ name: string; aliases: string[]; description: string; requiresArgs?: boolean }>> {
++    // P1-8 --disable-slash-commands：禁用时补全列表为空（配合 onSlashCommand 门控，彻底关闭斜杠命令）。
++    if (this.config.disableSlashCommands) return [];
+     if (this.unifiedRegistry) {
+       try {
+         const cmds = await this.unifiedRegistry.getCommands(process.cwd());
+@@ -1525,13 +1534,24 @@ export class App {
+         );
+         log.info("APP", `会话持久化续写已启动（resume）: ${this.resumedSessionId}（trace=${this.sessionState.sessionId}）`);
+       } else {
++        // P0-2：fork 会话把源 id 作为 parentUuid 写入 session_start，便于溯源。
+         this.sessionStore?.startSession(
+           this.sessionState.sessionId,
+           this.config.model,
+           this.config.provider,
+           process.cwd(),
++          this.forkedFromSessionId ?? undefined,
++        );
++        log.info(
++          "APP",
++          this.forkedFromSessionId
++            ? `会话持久化已启动（fork 自 ${this.forkedFromSessionId}）: ${this.sessionState.sessionId}`
++            : `会话持久化已启动: ${this.sessionState.sessionId}`,
+         );
+-        log.info("APP", `会话持久化已启动: ${this.sessionState.sessionId}`);
++      }
++      // P2-5 --name/-n：把会话显示名写入元数据，供 --list-sessions / 会话浏览器辨识。
++      if (this.config.sessionName) {
++        this.sessionStore?.appendMetadata("session_name", this.config.sessionName);
+       }
+     } catch (e) {
+       log.warn("APP", `会话持久化启动失败（不阻断）: ${(e as Error)?.message}`);
+@@ -2121,7 +2141,20 @@ export class App {
+     // B6：标记当前为 resume 会话。doInit 据此调 resumeSession（续写原 jsonl）而非 startSession（新建）。
+     // 注意：不修改 sessionState.sessionId（trajectory/PID/crash marker 仍用本进程的新 id，避免跨进程冲突），
+     // 仅让 SessionStore 的 currentFile 指向被恢复会话的旧 jsonl 续写，使历史不碎片化。
+-    this.resumedSessionId = sessionData.id;
++    //
++    // P0-2 --fork-session：分叉模式下**不**设 resumedSessionId——doInit 因此走 startSession（新建
++    // jsonl），把源会话历史（下方照常注入 ctxMgr）拷进一个全新会话，源会话 jsonl 保持不动。
++    // 新会话 id 用本进程 sessionState.sessionId（若 --session-id 指定，构造时已置为该值）。
++    // parentUuid 记录源会话 id，便于溯源。
++    if (this.config.forkSession) {
++      this.forkedFromSessionId = sessionData.id;
++      log.info(
++        "APP",
++        `会话分叉（--fork-session）：源 ${sessionData.id} → 新会话 ${this.sessionState.sessionId}（历史已拷入，源会话不改动）`,
++      );
++    } else {
++      this.resumedSessionId = sessionData.id;
++    }
+ 
+     // /goal：从 JSONL metadata 恢复目标状态（跨会话续做时保持目标意识不断）
+     // 边界：读到清除哨兵（/clear 落的）跳过恢复，不复活 clear 前的旧目标。
+@@ -4769,6 +4802,13 @@ export class App {
+ 
+         const commandInput = `/${cmd}${args ? " " + args : ""}`;
+ 
++        // P1-8 --disable-slash-commands：禁用时不解析为命令，原文当普通输入交给 LLM。
++        if (this.config.disableSlashCommands) {
++          log.info("TUI:CMD", `斜杠命令已禁用（--disable-slash-commands），作为普通输入提交: ${commandInput}`);
++          await callbacks.onUserInput(commandInput);
++          return;
++        }
++
+         // 构建命令上下文
+         const cmdCtx: import("./command/types.ts").AppContext = {
+           ctxMgr: this.ctxMgr,
+diff --git a/src/cli.ts b/src/cli.ts
+index 2240d4d..7db3205 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -20,6 +20,9 @@ import { printHelp } from "./help.ts";
+ import { runMigrations } from "./migrations/runner.ts";
+ import { getVersion } from "./version.ts";
+ import { isAbortError } from "./llm/errors.ts";
++import { EFFORT_LEVELS, isEffortLevel } from "./llm/effort.ts";
++import { readFileSync } from "node:fs";
++import { resolve as resolvePath } from "node:path";
+ 
+ profileCheckpoint("full_cli_imports_loaded");
+ 
+@@ -46,6 +49,14 @@ type CLIArgs = Partial<Config> & {
+   resumePicker?: boolean;
+ };
+ 
++/**
++ * 校验 UUID v4 格式（--session-id 用）。CC 要求 --session-id 必须是合法 UUID。
++ * 宽松匹配 8-4-4-4-12 十六进制形态（不强制 version/variant 位，兼容外部编排生成的 uuid）。
++ */
++export function isValidUUID(v: string): boolean {
++  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
++}
++
+ /**
+  * 预扫描 argv 抽取 `-r` / `--resume`，对齐 claude-code 的 `[value]` 可选值语义。
+  *
+@@ -133,6 +144,10 @@ function parseCLIArgs(): CLIArgs {
+         provider: { type: "string" },
+         model: { type: "string", short: "m" },
+         "max-tokens": { type: "string" },
++        // 推理强度档位（P0-3）：low/medium/high/xhigh/max/auto。映射到 config.effortLevel。
++        effort: { type: "string" },
++        // 主模型失败时的降级模型（P0-4）：映射到 config.fallbackModel，须在 availableModels 中存在。
++        "fallback-model": { type: "string" },
+ 
+         // 权限配置
+         "permission-mode": { type: "string" },
+@@ -146,6 +161,13 @@ function parseCLIArgs(): CLIArgs {
+         // 注意：resume（-r）不在此声明——它是可选值语义（`-r` 可不带值开选择器），
+         // parseArgs 的 type:"string" 无法表达，已在 extractResumeArg 中预处理。
+         continue: { type: "boolean", short: "c" },
++        // 显式指定会话 UUID（P0-1）：SDK 幂等/外部编排复现。须合法 UUID；
++        // 与 --continue/--resume 同用时必须带 --fork-session（组合约束在下方校验）。
++        "session-id": { type: "string" },
++        // 恢复会话时分叉出新 id 而非复用原 id（P0-2）：配合 --resume/--continue/--session-id。
++        "fork-session": { type: "boolean" },
++        // 禁用会话落盘（P1-2 会话控制）：本次会话不写持久化存储（SDK/一次性任务用）。
++        "no-session-persistence": { type: "boolean" },
+         "list-sessions": { type: "boolean" },
+         "browse-sessions": { type: "boolean" },
+         "delete-session": { type: "string" },
+@@ -162,6 +184,8 @@ function parseCLIArgs(): CLIArgs {
+         "system-prompt": { type: "string" },
+         "append-system-prompt": { type: "string" },
+         "system-prompt-file": { type: "string" },
++        // 从文件读取内容追加到系统提示词（P1-4）：与 --append-system-prompt 合并。
++        "append-system-prompt-file": { type: "string" },
+ 
+         // 调试
+         debug: { type: "boolean", short: "d" },
+@@ -193,6 +217,39 @@ function parseCLIArgs(): CLIArgs {
+ 
+         // Worktree 隔离（P1-2）：启动时直接进入 worktree
+         worktree: { type: "string" }, // --worktree[=name]；不带值时自动命名
++
++        // 目录授权（P1-1）：追加额外可访问目录（可重复）。映射到 config.allowedDirectories。
++        "add-dir": { type: "string", multiple: true },
++        // 花费上限美元（P1-9）：映射到 config.costLimit，超限终止。
++        "max-budget-usd": { type: "string" },
++        // IDE 自动连接（A-4 子集）：等价于 SID_CODE_AUTO_CONNECT_IDE=true / config.ide.autoConnect。
++        ide: { type: "boolean" },
++        // 禁用所有斜杠命令（P1-8）：headless/受限场景下关闭 / 命令入口。
++        "disable-slash-commands": { type: "boolean" },
++        // 会话显示名（P2-5）：映射到会话元数据 title/name，便于 --list-sessions 辨识。
++        name: { type: "string", short: "n" },
++
++        // 配置源（P1-5 / P1-6）
++        settings: { type: "string" }, // 额外 settings 源：文件路径或内联 JSON
++        "setting-sources": { type: "string" }, // 逗号分隔子集：user/project/local
++
++        // MCP 配置源（P1-7）
++        "mcp-config": { type: "string", multiple: true }, // 文件路径或内联 JSON，可重复
++        "strict-mcp-config": { type: "boolean" }, // 仅用 --mcp-config，忽略其它来源
++
++        // Beta 头（P2-3）
++        betas: { type: "string", multiple: true }, // anthropic-beta 头值，可重复或逗号分隔
++
++        // 工具白名单替换整个内置集（P2-6）
++        tools: { type: "string" }, // 逗号分隔；替换而非叠加
++
++        // 子代理注入（P1-10）
++        agents: { type: "string" }, // 内联 JSON：{name:{description,prompt,tools?,model?}}
++        agent: { type: "string" }, // 顶层子代理人格名
++
++        // SDK 输入/输出格式（P2-1 / P2-2）
++        "input-format": { type: "string" }, // text（默认）/ stream-json
++        "include-partial-messages": { type: "boolean" }, // stream-json 输出含部分增量
+       },
+       allowPositionals: true,
+       allowNegative: true,
+@@ -220,6 +277,115 @@ function parseCLIArgs(): CLIArgs {
+     process.exit(0);
+   }
+ 
++  // ── flag 值校验与组合约束（对齐 claude-code main.tsx 的启动期校验）──
++
++  // effort 档位（P0-3）：合法档位或 auto/unset。非法值报错退出。
++  let effortLevel: Config["effortLevel"] | undefined;
++  if (values.effort !== undefined) {
++    const raw = String(values.effort).trim().toLowerCase();
++    if (raw === "auto" || raw === "unset") {
++      // auto：不显式设档（保持 undefined，运行时跟随模型默认）
++      effortLevel = undefined;
++    } else if (isEffortLevel(raw)) {
++      effortLevel = raw as Config["effortLevel"];
++    } else {
++      console.error(
++        `错误: --effort 无效档位 "${values.effort}"，可选: ${EFFORT_LEVELS.join(" / ")} / auto`,
++      );
++      process.exit(1);
++    }
++  }
++
++  // session-id（P0-1）：UUID 校验 + 组合约束。
++  if (values["session-id"] !== undefined) {
++    if (!isValidUUID(String(values["session-id"]))) {
++      console.error(
++        `错误: --session-id 必须是合法 UUID（形如 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx），收到: "${values["session-id"]}"`,
++      );
++      process.exit(1);
++    }
++    // 组合约束：--session-id 与 --continue/--resume 同用时必须带 --fork-session。
++    const resumingExisting = values.continue === true || resumeArg.present;
++    if (resumingExisting && values["fork-session"] !== true) {
++      console.error(
++        "错误: --session-id 与 --continue/--resume 同用时必须同时指定 --fork-session（否则无法确定是复用还是分叉会话）。",
++      );
++      process.exit(1);
++    }
++  }
++
++  // input-format（P2-1）：仅 text / stream-json。
++  let inputFormat: Config["inputFormat"] | undefined;
++  if (values["input-format"] !== undefined) {
++    const raw = String(values["input-format"]).trim().toLowerCase();
++    if (raw === "text" || raw === "stream-json") {
++      inputFormat = raw as Config["inputFormat"];
++    } else {
++      console.error(`错误: --input-format 无效值 "${values["input-format"]}"，可选: text / stream-json`);
++      process.exit(1);
++    }
++  }
++
++  // setting-sources（P1-6）：逗号分隔子集 user/project/local。
++  let settingSources: Config["settingSources"] | undefined;
++  if (values["setting-sources"] !== undefined) {
++    const parts = String(values["setting-sources"]).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
++    const valid = new Set(["user", "project", "local"]);
++    const bad = parts.filter((p) => !valid.has(p));
++    if (bad.length > 0) {
++      console.error(`错误: --setting-sources 含无效源 "${bad.join(", ")}"，可选: user / project / local`);
++      process.exit(1);
++    }
++    settingSources = parts as Config["settingSources"];
++  }
++
++  // max-budget-usd（P1-9）：正数。
++  let costLimit: number | undefined;
++  if (values["max-budget-usd"] !== undefined) {
++    const n = Number(values["max-budget-usd"]);
++    if (!Number.isFinite(n) || n <= 0) {
++      console.error(`错误: --max-budget-usd 必须是正数，收到: "${values["max-budget-usd"]}"`);
++      process.exit(1);
++    }
++    costLimit = n;
++  }
++
++  // append-system-prompt-file（P1-4）：读文件内容，与 --append-system-prompt 合并。
++  let appendSystemPrompt: string | undefined = values["append-system-prompt"];
++  if (values["append-system-prompt-file"] !== undefined) {
++    const filePath = String(values["append-system-prompt-file"]);
++    try {
++      const fileContent = readFileSync(resolvePath(filePath), "utf-8");
++      appendSystemPrompt = appendSystemPrompt
++        ? `${appendSystemPrompt}\n${fileContent}`
++        : fileContent;
++    } catch (err: any) {
++      console.error(`错误: 无法读取 --append-system-prompt-file "${filePath}": ${err?.message ?? err}`);
++      process.exit(1);
++    }
++  }
++
++  // agents（P1-10）：内联 JSON 解析。
++  let injectedAgents: Config["injectedAgents"] | undefined;
++  if (values.agents !== undefined) {
++    try {
++      const parsed = JSON.parse(String(values.agents));
++      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
++        throw new Error("须为对象 { name: { prompt, ... } }");
++      }
++      // 逐项校验 prompt 必填。
++      for (const [name, def] of Object.entries(parsed as Record<string, any>)) {
++        if (!def || typeof def !== "object" || typeof def.prompt !== "string" || !def.prompt.trim()) {
++          throw new Error(`子代理 "${name}" 缺少 prompt 字段`);
++        }
++      }
++      injectedAgents = parsed as Config["injectedAgents"];
++    } catch (err: any) {
++      console.error(`错误: --agents JSON 解析失败: ${err?.message ?? err}`);
++      process.exit(1);
++    }
++  }
++
+   // 转换为 Config 格式
+   const cliConfig: CLIArgs = {
+     provider: values.provider,
+@@ -245,7 +411,8 @@ function parseCLIArgs(): CLIArgs {
+     verbose: values.verbose,
+     jsonSchemaFile: values["json-schema"],
+     systemPrompt: values["system-prompt"],
+-    appendSystemPrompt: values["append-system-prompt"],
++    // P1-4：合并了 --append-system-prompt 与 --append-system-prompt-file 的内容
++    appendSystemPrompt: appendSystemPrompt,
+     systemPromptFile: values["system-prompt-file"],
+     debug: values.debug,
+     debugLevel: values["debug-level"],
+@@ -294,6 +461,52 @@ function parseCLIArgs(): CLIArgs {
+               : undefined,
+         }
+       : undefined, // 不覆盖——完全由配置文件（settings.json）决定
++
++    // ── 对齐 claude-code 新增 flag（批次 1/2/4）──
++    // P0-3 推理强度档位（已在上方校验为合法档位或 auto→undefined）。
++    // 注意：mergeConfig 跳过 undefined，故 auto 态不会覆盖 settings.json 的 effortLevel；
++    // 若需 CLI 显式压过 settings/env 的 auto 语义，由 app.ts 运行时初值处理。
++    effortLevel: effortLevel,
++    // P0-4 降级模型。
++    fallbackModel: values["fallback-model"],
++    // P0-1 显式会话 UUID（已校验格式 + 组合约束）。
++    sessionId: values["session-id"],
++    // P0-2 会话分叉。
++    forkSession: values["fork-session"],
++    // P1-2 禁用会话落盘。
++    noSessionPersistence: values["no-session-persistence"],
++    // P2-5 会话显示名。
++    sessionName: values.name,
++    // P1-1 追加授权目录（multiple → string[]）。
++    allowedDirectories: values["add-dir"] as string[] | undefined,
++    // P1-9 花费上限美元（已校验为正数）。
++    costLimit: costLimit,
++    // A-4 子集：--ide 显式开启 IDE 自动连接。
++    ide: values.ide === true ? { autoConnect: true } : undefined,
++    // P1-8 禁用斜杠命令。
++    disableSlashCommands: values["disable-slash-commands"],
++    // P1-5 额外 settings 源（文件或内联 JSON）。
++    extraSettings: values.settings,
++    // P1-6 限定 settings 源（已校验子集）。
++    settingSources: settingSources,
++    // P1-7 额外 MCP 配置源 + 严格模式。
++    mcpConfigSources: values["mcp-config"] as string[] | undefined,
++    strictMcpConfig: values["strict-mcp-config"],
++    // P2-3 额外 anthropic-beta 头值（multiple + 逗号分隔展开）。
++    betas: values.betas
++      ? (values.betas as string[]).flatMap((b) => b.split(",").map((s) => s.trim())).filter(Boolean)
++      : undefined,
++    // P2-6 工具白名单替换整个内置集（逗号分隔）。
++    toolsWhitelist: values.tools
++      ? String(values.tools).split(",").map((s) => s.trim()).filter(Boolean)
++      : undefined,
++    // P1-10 子代理注入（已解析校验）+ 顶层人格。
++    injectedAgents: injectedAgents,
++    topLevelAgent: values.agent,
++    // P2-1 输入格式（已校验）。
++    inputFormat: inputFormat,
++    // P2-2 stream-json 输出含部分增量。
++    includePartialMessages: values["include-partial-messages"],
+   };
+ 
+   // 位置参数作为初始提示词
+@@ -550,6 +763,31 @@ export async function main(): Promise<void> {
+   try {
+     const cliArgs = parseCLIArgs();
+ 
++    // P1-5 / P1-6：在 loadConfig 之前注入 settings 源过滤与 --settings 覆盖源，
++    // 使后续 loadConfigFile → getSettings 合并时即生效（settings 是 config 的上游数据源之一）。
++    {
++      const { setFlagSettings, setEnabledSettingSources } = await import("./config/settings/index.ts");
++      // --setting-sources：限定磁盘来源子集（flag/policy 始终保留）。
++      setEnabledSettingSources(cliArgs.settingSources ?? null);
++      // --settings：文件路径或内联 JSON，作为 flagSettings 内存源注入（优先级最高的磁盘外覆盖）。
++      if (cliArgs.extraSettings) {
++        const raw = String(cliArgs.extraSettings).trim();
++        try {
++          let json: any;
++          if (raw.startsWith("{")) {
++            json = JSON.parse(raw); // 内联 JSON
++          } else {
++            const content = readFileSync(resolvePath(raw), "utf-8"); // 文件路径
++            json = JSON.parse(content);
++          }
++          setFlagSettings(json);
++        } catch (err: any) {
++          console.error(`错误: --settings 解析失败（应为文件路径或内联 JSON）: ${err?.message ?? err}`);
++          process.exit(1);
++        }
++      }
++    }
++
+     // 执行数据迁移（幂等，失败不阻塞）
+     profileCheckpoint("migrations_start");
+     runMigrations();
+@@ -660,6 +898,16 @@ export async function main(): Promise<void> {
+       }
+     }
+ 
++    // P2-3 --betas：把用户指定的 anthropic-beta 头值注册为 sticky（会话期恒携带）。
++    // 复用 G7 beta-header-latch 机制：只增不减，避免中途抖动废掉 prompt cache。放在 logger 就绪后。
++    if (config.betas && config.betas.length > 0) {
++      const { stickyBetaHeader } = await import("./api/beta-header-latch.ts");
++      for (const b of config.betas) {
++        if (b && b.trim()) stickyBetaHeader(b.trim());
++      }
++      getLogger().info("LLM", `已注册 ${config.betas.length} 个 --betas anthropic-beta 头值。`);
++    }
++
+     // headless(--print) 模式：诊断默认可见（不依赖 --debug），有问题才输出、无问题零输出；
+     // 固定走 stderr，不碰 stdout（--output-format json/stream-json 靠 stdout 输出结构化数据）。
+     // 门控在 config.print 上，天然排除 TUI —— Ink 接管终端前的裸 console 输出会在正式渲染
+@@ -1071,14 +1319,47 @@ export async function main(): Promise<void> {
+ 
+     profileCheckpoint("tool_reg_end");
+ 
+-    // 初始化 MCP 服务器（后台连接，不阻塞启动）—— 合并用户配置 + 插件 MCP
+-    const allMcpServers = { ...config.mcpServers, ...pluginMcpServers };
++    // P1-7 --mcp-config：解析额外 MCP 配置源（文件路径或内联 JSON，可重复）。
++    // 支持 { "mcpServers": {...} } 或直接 { "serverName": {...} } 两种形态（与 .mcp.json 一致）。
++    let mcpConfigServers: Record<string, import("./config/config.ts").MCPServerConfig> = {};
++    if (config.mcpConfigSources && config.mcpConfigSources.length > 0) {
++      for (const src of config.mcpConfigSources) {
++        const raw = String(src).trim();
++        try {
++          let parsed: any;
++          if (raw.startsWith("{")) {
++            parsed = JSON.parse(raw); // 内联 JSON
++          } else {
++            parsed = JSON.parse(readFileSync(resolvePath(raw), "utf-8")); // 文件路径
++          }
++          const servers = parsed?.mcpServers || parsed?.mcp_servers || parsed;
++          if (servers && typeof servers === "object" && !Array.isArray(servers)) {
++            mcpConfigServers = { ...mcpConfigServers, ...servers };
++          } else {
++            getLogger().warn("MCP", `--mcp-config 源格式不正确（期望对象）: ${raw.slice(0, 60)}`);
++          }
++        } catch (err: any) {
++          console.error(`错误: --mcp-config 解析失败 "${raw.slice(0, 60)}": ${err?.message ?? err}`);
++          process.exit(1);
++        }
++      }
++    }
++
++    // 初始化 MCP 服务器（后台连接，不阻塞启动）。
++    // P1-7 --strict-mcp-config：严格模式仅用 --mcp-config 指定的服务器，忽略 settings/.mcp.json/插件来源；
++    // 非严格模式：用户配置 + 插件 MCP + --mcp-config 合并（--mcp-config 优先级最高）。
++    const allMcpServers = config.strictMcpConfig
++      ? { ...mcpConfigServers }
++      : { ...config.mcpServers, ...pluginMcpServers, ...mcpConfigServers };
++    if (config.strictMcpConfig) {
++      getLogger().info("MCP", `严格 MCP 配置模式（--strict-mcp-config）：仅加载 --mcp-config 指定的 ${Object.keys(mcpConfigServers).length} 个服务器。`);
++    }
+     let mcpManager: import("./mcp/manager.ts").MCPManager | undefined;
+ 
+     // IDE 自动连接需要 mcpManager（IDE 作为动态 MCP server 接入），
+     // 因此即使没有配置 MCP 服务器，只要 IDE 自动连接生效也创建 manager
+     const { shouldAutoConnect } = await import("./ide/integration.ts");
+-    const ideAutoConnect = shouldAutoConnect();
++    const ideAutoConnect = shouldAutoConnect(config.ide?.autoConnect);
+ 
+     if (Object.keys(allMcpServers).length > 0 || ideAutoConnect) {
+       const { MCPManager } = await import("./mcp/manager.ts");
+diff --git a/src/config/config.ts b/src/config/config.ts
+index dd3ae96..6defad2 100644
+--- a/src/config/config.ts
++++ b/src/config/config.ts
+@@ -139,7 +139,7 @@ export interface Config {
+    * 推理强度档位初值（/effort 持久化端，settings.json effortLevel）。
+    * 缺省 = auto（跟随模型默认，不显式下发）。运行时态在 App.runtimeEffort，本字段仅作启动初值。
+    */
+-  effortLevel?: "low" | "medium" | "high" | "max";
++  effortLevel?: "low" | "medium" | "high" | "xhigh" | "max";
+   /**
+    * 思考开关初值（/think 持久化端，settings.json thinkingEnabled）。
+    * 缺省 = auto（跟随模型/provider 默认）。运行时态在 App.runtimeThinking，本字段仅作启动初值。
+@@ -172,6 +172,21 @@ export interface Config {
+   sessionId: string;
+   continue: boolean;
+   resume: string;
++  /**
++   * 恢复会话时分叉出新 id 而非复用原 id（P0-2 --fork-session）。
++   * 默认 undefined/false：复用被恢复会话的 id，续接同一会话。
++   * true：生成新 id（或用 --session-id 指定），把源会话历史拷贝到新会话，parentUuid 指向源，源不动。
++   */
++  forkSession?: boolean;
++  /**
++   * 禁用会话落盘（P1-2 --no-session-persistence）。
++   * 默认 undefined/false：正常持久化。true：本次会话不写持久化存储（SDK/一次性任务用）。
++   */
++  noSessionPersistence?: boolean;
++  /**
++   * 会话显示名（P2-5 --name/-n）。写入会话元数据 title，便于 --list-sessions 辨识。
++   */
++  sessionName?: string;
+ 
+   // 无头模式配置
+   print: boolean;
+@@ -239,6 +254,76 @@ export interface Config {
+   /** 会话级插件目录（--plugin-dir，不持久化，视为 inline 来源） */
+   pluginDirs?: string[];
+ 
++  // 功能开关
++  /**
++   * 禁用所有斜杠命令（P1-8 --disable-slash-commands）。
++   * 默认 undefined/false：正常注册。true：跳过命令注册，headless/受限场景关闭 / 命令入口。
++   */
++  disableSlashCommands?: boolean;
++
++  // 配置源控制（P1-5 / P1-6）
++  /**
++   * 额外的 settings 源（--settings <file-or-json>）：文件路径或内联 JSON 字符串。
++   * 优先级高于常规 user/project/local 三源，作为最后一层覆盖。运行时字段，不落盘。
++   */
++  extraSettings?: string;
++  /**
++   * 限定加载哪些 settings 源（--setting-sources <sources>，逗号分隔）。
++   * 取值子集：user / project / local。设置后仅加载列出的源，其余跳过。运行时字段，不落盘。
++   */
++  settingSources?: ("user" | "project" | "local")[];
++
++  // MCP 配置源（P1-7）
++  /**
++   * 额外 MCP 配置源（--mcp-config <configs...>）：文件路径或内联 JSON 字符串数组。
++   * 与 settings.json 的 mcpServers 合并。运行时字段，不落盘。
++   */
++  mcpConfigSources?: string[];
++  /**
++   * 严格 MCP 配置模式（--strict-mcp-config）：仅使用 --mcp-config 指定的服务器，
++   * 忽略 settings.json / .mcp.json 中的 mcpServers。默认 false。运行时字段，不落盘。
++   */
++  strictMcpConfig?: boolean;
++
++  // Beta 头（P2-3）
++  /**
++   * 额外的 anthropic-beta 头值（--betas <betas...>）：透传到 Anthropic 请求头。
++   * 运行时字段，不落盘。
++   */
++  betas?: string[];
++
++  // 工具白名单替换（P2-6）
++  /**
++   * 用此名单**替换**整个内置工具集（--tools <tools...>）。
++   * 与 allowedTools（权限层预授权）语义不同：这是**工具集裁剪**，未列出的工具不注册。
++   * 空/undefined：注册全部内置工具（现状）。运行时字段，不落盘。
++   */
++  toolsWhitelist?: string[];
++
++  // 子代理注入（P1-10）
++  /**
++   * CLI 注入的子代理定义（--agents <json>）：{ name: { description, prompt, tools?, model? } }。
++   * 注册进聚合 registry，使 sub_agent 可发现。运行时字段，不落盘。
++   */
++  injectedAgents?: Record<string, { description?: string; prompt: string; tools?: string[]; model?: string }>;
++  /**
++   * 整会话使用的顶层子代理人格名（--agent <name>）。
++   * 指向 injectedAgents 或已注册 agent 的名字。运行时字段，不落盘。
++   */
++  topLevelAgent?: string;
++
++  // SDK 输入/输出格式（P2-1 / P2-2）
++  /**
++   * 输入格式（--input-format <fmt>）：text（默认）/ stream-json。
++   * stream-json：从 stdin 读取流式 JSON 消息。运行时字段，不落盘。
++   */
++  inputFormat?: "text" | "stream-json";
++  /**
++   * stream-json 输出模式下是否包含部分消息增量（--include-partial-messages）。
++   * 默认 false。运行时字段，不落盘。
++   */
++  includePartialMessages?: boolean;
++
+   // Checkpoint 配置
+   checkpoint?: CheckpointConfig;
+ 
+diff --git a/src/config/settings/index.ts b/src/config/settings/index.ts
+index cbfd0dc..2065a46 100644
+--- a/src/config/settings/index.ts
++++ b/src/config/settings/index.ts
+@@ -42,6 +42,7 @@ export {
+   getSettingsForSource,
+   loadSettingsFromDisk,
+   setFlagSettings,
++  setEnabledSettingSources,
+   writeSettingsFile,
+   patchSettingsFile,
+   mergeMissingTopLevelKeys,
+diff --git a/src/config/settings/settings.ts b/src/config/settings/settings.ts
+index fbe51ee..ae28f77 100644
+--- a/src/config/settings/settings.ts
++++ b/src/config/settings/settings.ts
+@@ -60,9 +60,42 @@ export function setFlagSettings(settings: SettingsJson | null): void {
+   setCachedSource("flagSettings", settings);
+ }
+ 
+-/** 当前生效的 SettingSource 列表（预留 SDK 模式禁用某些来源的扩展点） */
++/**
++ * P1-6 --setting-sources：限定加载的磁盘来源子集（user/project/local）。
++ * null = 不限制（默认加载全部）。非 null 时仅列出的磁盘来源生效。
++ *
++ * 注意：flagSettings（--settings 显式注入）与 policySettings（企业强制管控）**始终保留**——
++ * 前者是用户本次命令显式给的、后者是不可绕过的管控，都不受 --setting-sources 限制。
++ */
++let enabledDiskSources: ReadonlySet<SettingSource> | null = null;
++
++/**
++ * 设置 --setting-sources 过滤（cli.ts 极早期调用，早于任何 getSettings）。
++ * @param sources CC 风格来源名子集 user/project/local；空/undefined 清除限制。
++ */
++export function setEnabledSettingSources(sources: ("user" | "project" | "local")[] | null | undefined): void {
++  if (!sources || sources.length === 0) {
++    enabledDiskSources = null;
++    setSessionCache(null);
++    return;
++  }
++  const map: Record<"user" | "project" | "local", SettingSource> = {
++    user: "userSettings",
++    project: "projectSettings",
++    local: "localSettings",
++  };
++  // 磁盘来源按子集过滤；内存/管控来源始终保留。
++  const allowed = new Set<SettingSource>(sources.map((s) => map[s]));
++  allowed.add("flagSettings");
++  allowed.add("policySettings");
++  enabledDiskSources = allowed;
++  setSessionCache(null); // 过滤变更，清缓存重新合并
++}
++
++/** 当前生效的 SettingSource 列表（受 --setting-sources 过滤，见 setEnabledSettingSources） */
+ function getEnabledSettingSources(): readonly SettingSource[] {
+-  return SETTING_SOURCES;
++  if (enabledDiskSources === null) return SETTING_SOURCES;
++  return SETTING_SOURCES.filter((s) => enabledDiskSources!.has(s));
+ }
+ 
+ /** 安全的 structuredClone（Bun/Node ≥17 全局可用，降级到 JSON 克隆） */
+diff --git a/src/config/settings/types.ts b/src/config/settings/types.ts
+index b28fb46..2fe7ed9 100644
+--- a/src/config/settings/types.ts
++++ b/src/config/settings/types.ts
+@@ -231,7 +231,7 @@ export const SettingsSchema = lazySchema(() =>
+       classifierModel: z.string().optional(),
+ 
+       // 推理强度 / 思考开关旋钮（/effort、/think 持久化端；缺省 = auto 跟随模型默认）
+-      effortLevel: z.enum(["low", "medium", "high", "max"]).optional(),
++      effortLevel: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+       thinkingEnabled: z.boolean().optional(),
+ 
+       // 目录控制
+diff --git a/src/help.ts b/src/help.ts
+index 2c2f41d..78f3652 100644
+--- a/src/help.ts
++++ b/src/help.ts
+@@ -13,7 +13,9 @@ sid-code - AI 编程 CLI 工具
+ LLM 配置:
+   --provider <name>           LLM 提供商 (anthropic/openai/ollama)
+   -m, --model <name>          模型名称
++  --fallback-model <name>     主模型失败时的降级模型（须在 available_models 中）
+   --max-tokens <n>            响应最大 token 数
++  --effort <level>            推理强度档位 (low/medium/high/xhigh/max/auto)
+ 
+ 权限配置:
+   --permission-mode <mode>    权限模式 (default/always-allow/deny-write/acceptEdits/plan/dontAsk)
+@@ -21,11 +23,17 @@ LLM 配置:
+   -y, --yes                   自动批准所有权限请求
+   --allowed-tools <list>      工具白名单（逗号分隔，如 "read,grep,bash"）
+   --disallowed-tools <list>   工具黑名单（逗号分隔）
++  --tools <list>              替换整个内置工具集（逗号分隔；未列出的工具不注册）
++  --add-dir <dir>             追加可访问目录（可重复：--add-dir A --add-dir B）
+ 
+ 会话配置:
+   -c, --continue              继续最近一次会话
+   -r, --resume [值]           恢复会话：不带值打开交互式选择器（可搜索），
+                               带值按 ID/索引恢复，未命中则作为搜索词进选择器
++  --session-id <uuid>         指定会话 UUID（须合法 UUID；与 -c/-r 同用须配 --fork-session）
++  --fork-session              恢复会话时分叉为新会话（新 id，不改动源会话）
++  --no-session-persistence    禁用会话落盘（本次会话不写持久化存储）
++  -n, --name <name>           会话显示名（便于 --list-sessions 辨识）
+   --list-sessions             列出所有会话（文本模式）
+   --browse-sessions           打开 TUI 会话浏览器
+   --delete-session <id>       删除指定会话
+@@ -33,7 +41,9 @@ LLM 配置:
+ 
+ 无头模式:
+   -p, --print                 无头模式（非交互式，需提供提示词）
++  --input-format <fmt>        输入格式 (text/stream-json；stream-json 从 stdin 读流式消息)
+   --output-format <fmt>       输出格式 (text/json)
++  --include-partial-messages  stream-json 输出模式下包含部分消息增量
+   --max-turns <n>             Agent 循环最大轮次
+   --verbose                   详细输出（无头模式下输出全量消息数组而非仅最终消息）
+   --json-schema <path>        结构化输出 JSON Schema 文件路径（约束 LLM 输出格式）
+@@ -42,10 +52,35 @@ LLM 配置:
+   --system-prompt <text>      覆盖系统提示词
+   --append-system-prompt <text>  追加到系统提示词
+   --system-prompt-file <path>    从文件加载系统提示词
++  --append-system-prompt-file <path>  从文件读取内容追加到系统提示词
+ 
+ 插件:
+   --plugin-dir <path>         会话级插件目录（可重复：--plugin-dir A --plugin-dir B）
+ 
++配置源:
++  --settings <file-or-json>   额外 settings 源（文件路径或内联 JSON，最后一层覆盖）
++  --setting-sources <sources> 限定加载的 settings 源（逗号分隔，子集：user/project/local）
++
++MCP:
++  --mcp-config <config>       额外 MCP 配置源（文件路径或内联 JSON，可重复）
++  --strict-mcp-config         仅用 --mcp-config 指定的服务器，忽略其它来源
++
++子代理:
++  --agents <json>             注入子代理定义（内联 JSON: {name:{description,prompt,...}}）
++  --agent <name>              整会话使用指定的顶层子代理人格
++
++模型行为:
++  --betas <beta>              额外 anthropic-beta 头值（可重复或逗号分隔）
++
++限制控制:
++  --max-budget-usd <amount>   花费上限（美元，超限终止）
++
++IDE:
++  --ide                       启动即自动连接 IDE（等价 SID_CODE_AUTO_CONNECT_IDE=true）
++
++功能开关:
++  --disable-slash-commands    禁用所有斜杠命令（headless/受限场景）
++
+ 调试:
+   -d, --debug                 启用调试模式（日志输出到 ~/.sid-code/debug.log）
+   --debug-level <level>       日志级别 (ERROR/WARN/INFO/DEBUG，默认 DEBUG)
+diff --git a/src/ide/integration.ts b/src/ide/integration.ts
+index 81c92d3..29febfa 100644
+--- a/src/ide/integration.ts
++++ b/src/ide/integration.ts
+@@ -143,8 +143,10 @@ export class IDEIntegration {
+  * 2. 显式开启自动连接
+  * 3. 在 IDE 内置终端中运行
+  */
+-export function shouldAutoConnect(): boolean {
++export function shouldAutoConnect(configAutoConnect?: boolean): boolean {
+   return !!(
++    // --ide flag / settings.json ide.autoConnect 显式开启（与 env 等价，A-4 子集）
++    configAutoConnect ||
+     process.env.SID_CODE_SSE_PORT ||
+     process.env.SID_CODE_AUTO_CONNECT_IDE === "true" ||
+     isSupportedTerminal()
+diff --git a/src/llm/effort.ts b/src/llm/effort.ts
+index 44f4977..d1b51ac 100644
+--- a/src/llm/effort.ts
++++ b/src/llm/effort.ts
+@@ -25,13 +25,36 @@ import { lookupCatalog } from "./model-params-catalog.ts";
+ // 1. 统一内部标度（与协议无关）
+ // ─────────────────────────────────────────────────────────────
+ 
+-/** 统一推理强度档位（用户面对的永远是这 4 档 + auto） */
+-export const EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
++/** 统一推理强度档位（用户面对的永远是这 5 档 + auto，对齐 claude-code low/medium/high/xhigh/max） */
++export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+ export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+ 
+ /** undefined = auto（跟随模型默认，不显式下发 effort 参数） */
+ export type EffortSetting = EffortLevel | undefined;
+ 
++/**
++ * 线格式档位（各 provider 的 reasoning_effort / output_config.effort 实际认可的值）。
++ * 统一档位含 xhigh，但没有任何 provider 的线格式认 "xhigh"——它必须在 applier 里钳到本四档之一。
++ * 这个类型让钳制结果与线格式字段（SendParams.reasoningEffort / outputConfig.effort）严格对齐。
++ */
++type WireEffort = "low" | "medium" | "high" | "max";
++
++/**
++ * 把统一档位钳到「支持 max 的线格式」（DeepSeek/GLM/Anthropic-adaptive 用）：
++ * xhigh → max（视为最高档），其余原样。
++ */
++function clampToMaxWire(effort: EffortLevel): WireEffort {
++  return effort === "xhigh" ? "max" : effort;
++}
++
++/**
++ * 把统一档位钳到「无 max 的线格式」（o-series/Grok 用）：
++ * max 与 xhigh 均 → high，其余原样。
++ */
++function clampToHighWire(effort: EffortLevel): WireEffort {
++  return effort === "max" || effort === "xhigh" ? "high" : effort;
++}
++
+ /** 思考开关三态。undefined = auto（跟随模型/provider 默认） */
+ export type ThinkingSetting = "on" | "off" | undefined;
+ 
+@@ -49,6 +72,7 @@ const ANTHROPIC_EFFORT_BUDGET: Record<EffortLevel, number> = {
+   low: 2_000,
+   medium: 10_000,
+   high: 20_000,
++  xhigh: 32_000,
+   max: 50_000,
+ };
+ 
+@@ -102,8 +126,9 @@ function applyDeepSeekOpenAI(params: SendParams, effort: EffortSetting, thinking
+   // budgetTokens 在 DeepSeek OpenAI 端点无对应字段，置 0；强度走 reasoningEffort。
+   params.thinking = { enabled: thinking, budgetTokens: 0 };
+   // 思考关闭时不下发 effort（与 openai.ts 的 thinkingDisabled 规避一致，避冲突）。
++  // DeepSeek 仅认 high/max：xhigh 与 max 同视为 max，low/medium 视为 high。
+   if (thinking && effort !== undefined) {
+-    params.reasoningEffort = effort === "max" ? "max" : "high";
++    params.reasoningEffort = clampToMaxWire(effort) === "max" ? "max" : "high";
+   }
+ }
+ 
+@@ -115,7 +140,7 @@ function applyDeepSeekOpenAI(params: SendParams, effort: EffortSetting, thinking
+ function applyDeepSeekAnthropic(params: SendParams, effort: EffortSetting, thinking: boolean): void {
+   params.thinking = { enabled: thinking, budgetTokens: 0 };
+   if (thinking && effort !== undefined) {
+-    params.outputConfig = { effort: effort === "max" ? "max" : "high" };
++    params.outputConfig = { effort: clampToMaxWire(effort) === "max" ? "max" : "high" };
+   }
+ }
+ 
+@@ -145,7 +170,9 @@ function applyAnthropicNative(params: SendParams, effort: EffortSetting, thinkin
+     }
+ 
+     // auto（effort=undefined）→ 走模型默认（Opus 4.8 默认 high）
+-    const level: EffortLevel = effort ?? "high";
++    // Anthropic adaptive 线格式官方档位为 low/medium/high/max，不含 xhigh：
++    // xhigh 钳到 max，避免未知档位触发 400。
++    const level: WireEffort = clampToMaxWire(effort ?? "high");
+     // 标记为 adaptive 模式：anthropic.ts 据此下发 {type:"adaptive"} 而非 {type:"enabled"}
+     params.thinking = { enabled: true, budgetTokens: 0 };
+     params.outputConfig = { effort: level, thinkingType: "adaptive" };
+@@ -168,7 +195,8 @@ function applyAnthropicNative(params: SendParams, effort: EffortSetting, thinkin
+  */
+ function applyOSeries(params: SendParams, effort: EffortSetting, _thinking: boolean): void {
+   if (effort !== undefined) {
+-    params.reasoningEffort = effort === "max" ? "high" : effort;
++    // o-series 仅 low/medium/high，无 max：max 与 xhigh 均钳到 high。
++    params.reasoningEffort = clampToHighWire(effort);
+   }
+ }
+ 
+@@ -187,8 +215,9 @@ function applyNoop(_params: SendParams, _effort: EffortSetting, _thinking: boole
+ function applyGLMOpenAI(params: SendParams, effort: EffortSetting, thinking: boolean): void {
+   params.thinking = { enabled: thinking, budgetTokens: 0 };
+   // 思考关闭时不下发 effort（与 DeepSeek 一致，避免与 disabled 冲突）。
++  // GLM 线格式仅认 low/medium/high/max，不认 xhigh：xhigh 钳到 max（GLM 支持的最高档）。
+   if (thinking && effort !== undefined) {
+-    params.reasoningEffort = effort;
++    params.reasoningEffort = clampToMaxWire(effort);
+   }
+ }
+ 
+@@ -200,7 +229,8 @@ function applyGLMOpenAI(params: SendParams, effort: EffortSetting, thinking: boo
+  */
+ function applyGrokOpenAI(params: SendParams, effort: EffortSetting, _thinking: boolean): void {
+   if (effort !== undefined) {
+-    params.reasoningEffort = effort === "max" ? "high" : effort;
++    // Grok 无 max：max 与 xhigh 均钳到 high。
++    params.reasoningEffort = clampToHighWire(effort);
+   }
+ }
+ 
+diff --git a/src/session/store.ts b/src/session/store.ts
+index aaecdf1..0f9d7ee 100644
+--- a/src/session/store.ts
++++ b/src/session/store.ts
+@@ -278,7 +278,11 @@ export class SessionStore {
+ 
+   /** 开始新会话（JSONL 模式）。P2-9：不立即创建文件，延迟到首条真实记录时才 materialize，
+    *  避免"打开即退出"的会话留下只有 session_start 的空文件噪音。 */
+-  startSession(sessionId: string, model: string, provider: string, cwd: string): void {
++  /**
++   * @param forkedFromSessionId P0-2 --fork-session：分叉来源会话 id。非空时写入 session_start.parentUuid，
++   *   记录本会话是从哪个会话分叉出来的，便于溯源；不影响历史（历史已由 App 注入 ctxMgr）。
++   */
++  startSession(sessionId: string, model: string, provider: string, cwd: string, forkedFromSessionId?: string): void {
+     this.currentFile = join(this.sessionDir, `${sessionId}.jsonl`);
+     this.materialized = false;
+     const uuid = crypto.randomUUID();
+@@ -291,7 +295,7 @@ export class SessionStore {
+       cwd,
+       timestamp: new Date().toISOString(),
+       uuid,
+-      parentUuid: null,
++      parentUuid: forkedFromSessionId ?? null,
+     };
+     // 链尾提前指向待写入的 session_start，即便文件还未 materialize，
+     // 后续记录的 parentUuid 也能正确指向它（写入顺序由 ensureMaterialized 保证）。
+diff --git a/src/session/utils.ts b/src/session/utils.ts
+index 037a1fc..39ced70 100644
+--- a/src/session/utils.ts
++++ b/src/session/utils.ts
+@@ -303,7 +303,11 @@ async function scanSessionDir(
+           startTime: data.createdAt,
+           lastUpdated: data.updatedAt,
+           messageCount: data.messages.length,
+-          displayName: data.summary || firstUserMessage,
++          // P2-5：用户经 --name/-n 指定的显示名（session_name 元数据）优先，其次摘要，最后首条用户消息。
++          displayName:
++            (typeof data.metadata?.session_name === "string" && data.metadata.session_name.trim()
++              ? data.metadata.session_name
++              : undefined) || data.summary || firstUserMessage,
+           firstUserMessage,
+           isCurrentSession,
+           index: 0, // 排序后设置
+diff --git a/src/tool/registry.ts b/src/tool/registry.ts
+index 0b3a3b7..511e989 100644
+--- a/src/tool/registry.ts
++++ b/src/tool/registry.ts
+@@ -282,6 +282,36 @@ export class Registry {
+     }
+   }
+ 
++  /**
++   * P2-6 --tools：就地裁剪内置工具集，仅保留白名单内的工具（名称不区分大小写匹配）。
++   *
++   * 与 allowedTools（权限层预授权）语义不同：这是**工具集裁剪**——未列出的内置工具直接不可见、
++   * 模型无法调用。MCP 工具（mcp__ 前缀）不受影响，由各 MCP server 决定其可用性。
++   * 名称匹配同时接受工具原名与别名（经 get() 解析）。
++   *
++   * @returns 被移除的工具名列表（供调用方日志/诊断）。
++   */
++  retainBuiltInByNames(names: string[]): string[] {
++    // 归一化白名单：小写、trim、去空。同时把别名解析到真实工具名。
++    const wanted = new Set<string>();
++    for (const raw of names) {
++      const n = raw.trim().toLowerCase();
++      if (!n) continue;
++      wanted.add(n);
++    }
++    const removed: string[] = [];
++    for (const name of [...this.builtInTools.keys()]) {
++      const lower = name.toLowerCase();
++      // 命中白名单（原名）或其别名映射到的名字在白名单内 → 保留。
++      const keep = wanted.has(lower);
++      if (!keep) {
++        this.builtInTools.delete(name);
++        removed.push(name);
++      }
++    }
++    return removed;
++  }
++
+   /** 已注册工具数量 */
+   size(): number {
+     return this.builtInTools.size + this.mcpTools.size;
+diff --git a/src/ui/components/EffortDialog.tsx b/src/ui/components/EffortDialog.tsx
+index 3dd822f..465428a 100644
+--- a/src/ui/components/EffortDialog.tsx
++++ b/src/ui/components/EffortDialog.tsx
+@@ -1,9 +1,9 @@
+ /**
+  * 推理强度快捷切换面板（/effort 无参时打开）
+  *
+- * 选项固定（low/medium/high/max/auto），无外部数据，用轻量 Dialog + RadioButtonSelect。
++ * 选项固定（low/medium/high/xhigh/max/auto），无外部数据，用轻量 Dialog + RadioButtonSelect。
+  * - 当前生效档位用 ● 标记（区别于光标指示的 ›）
+- * - 每档用 ▁▃▅█ 柱状字形表达强度递进（元原则①：同族填充度递进）
++ * - 每档用 ▁▃▅▇█ 柱状字形表达强度递进（元原则①：同族填充度递进）
+  * - 底部 hint 提示 -p 持久化
+  */
+ 
+@@ -18,6 +18,7 @@ import {
+   EFFORT_LOW,
+   EFFORT_MEDIUM,
+   EFFORT_HIGH,
++  EFFORT_XHIGH,
+   EFFORT_MAX,
+   EFFORT_AUTO,
+ } from "../constants/figures.ts";
+@@ -48,6 +49,7 @@ const OPTIONS: EffortItem[] = [
+   { value: "low", key: "low", glyph: EFFORT_LOW, label: "low", desc: "快速响应，跳过深度推理" },
+   { value: "medium", key: "medium", glyph: EFFORT_MEDIUM, label: "medium", desc: "平衡模式" },
+   { value: "high", key: "high", glyph: EFFORT_HIGH, label: "high", desc: "深度推理（多数模型默认）" },
++  { value: "xhigh", key: "xhigh", glyph: EFFORT_XHIGH, label: "xhigh", desc: "更深推理（介于 high 与 max）" },
+   { value: "max", key: "max", glyph: EFFORT_MAX, label: "max", desc: "最大推理深度" },
+   { value: "auto", key: "auto", glyph: EFFORT_AUTO, label: "auto", desc: "跟随模型默认" },
+ ];
+diff --git a/src/ui/constants/figures.ts b/src/ui/constants/figures.ts
+index ba4928d..b2b7850 100644
+--- a/src/ui/constants/figures.ts
++++ b/src/ui/constants/figures.ts
+@@ -151,15 +151,17 @@ export const TITLE_ANIMATION_FRAMES = ["⠂", "⠐"];
+ export const EFFORT_LOW = "▁";
+ export const EFFORT_MEDIUM = "▃";
+ export const EFFORT_HIGH = "▅";
++export const EFFORT_XHIGH = "▇";
+ export const EFFORT_MAX = "█";
+ /** effort auto 态字形（未显式设档，跟随模型默认）。空心点 = 「未定」。 */
+ export const EFFORT_AUTO = "◌";
+ 
+ /** 档位 → 字形映射（供 useStatusLineData 取用，避免渲染层硬编码）。 */
+-export const EFFORT_GLYPHS: Record<"low" | "medium" | "high" | "max", string> = {
++export const EFFORT_GLYPHS: Record<"low" | "medium" | "high" | "xhigh" | "max", string> = {
+   low: EFFORT_LOW,
+   medium: EFFORT_MEDIUM,
+   high: EFFORT_HIGH,
++  xhigh: EFFORT_XHIGH,
+   max: EFFORT_MAX,
+ };
+ 
+diff --git a/src/ui/hooks/useStatusLineData.ts b/src/ui/hooks/useStatusLineData.ts
+index 884bb48..7b6eac2 100644
+--- a/src/ui/hooks/useStatusLineData.ts
++++ b/src/ui/hooks/useStatusLineData.ts
+@@ -133,7 +133,7 @@ export function deriveCacheSavings(
+  * - 显式档位 → 填充方块字形（▁▃▅█）+ 档位名；max 用品牌色点睛，其余用默认灰。
+  */
+ export function deriveEffort(
+-  effortDisplay: { level: "low" | "medium" | "high" | "max"; isAuto: boolean } | null,
++  effortDisplay: { level: import("../../llm/effort.ts").EffortLevel; isAuto: boolean } | null,
+   defaultColor: string,
+ ): { glyph: string; text: string; color: string } | null {
+   if (!effortDisplay) return null;
+@@ -142,8 +142,8 @@ export function deriveEffort(
+     // auto 态：空心点 ◌ 前缀 + 档位名。◌ 字形自解释「跟随默认」，不再写 (auto) 文字后缀（冗余）。
+     return { glyph: EFFORT_AUTO, text: `${EFFORT_AUTO} ${level}`, color: defaultColor };
+   }
+-  // max 档用品牌强调色点睛（最高强度值得一眼可辨），其余档位用默认灰，保持克制。
+-  const color = level === "max" ? theme.ui.active : defaultColor;
++  // 最高两档（xhigh/max）用品牌强调色点睛（最高强度值得一眼可辨），其余档位用默认灰，保持克制。
++  const color = level === "max" || level === "xhigh" ? theme.ui.active : defaultColor;
+   return { glyph: EFFORT_GLYPHS[level], text: level, color };
+ }
+ 

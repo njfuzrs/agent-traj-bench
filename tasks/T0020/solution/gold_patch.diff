@@ -1,0 +1,831 @@
+diff --git a/src/app.ts b/src/app.ts
+index bd28c15..e76f225 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -2132,6 +2132,7 @@ export class App {
+       permissionRequest: null,
+       shellConfirmRequest: null,
+       planApprovalRequest: null,
++      askUserQuestionRequest: null,
+       debug: !!this.config.debug,
+       lastToolResult: null,
+       streamingText: "",
+@@ -2392,6 +2393,47 @@ export class App {
+       });
+     });
+ 
++    // 设置 TUI AskUserQuestion 提问回调（结构化选择题，对标 cc AskUserQuestion）
++    {
++      const { setAskUserQuestionHandler } = await import("./tool/ask-user-question-bridge.ts");
++      setAskUserQuestionHandler(async (req, signal) => {
++        return new Promise((resolve) => {
++          log.info("TUI:ASK", `显示提问对话框: ${req.questions.length} 题`);
++          let settled = false;
++          const wrappedResolve = (
++            result:
++              | { decision: "answered"; answers: Record<string, string> }
++              | { decision: "cancelled" },
++          ) => {
++            if (settled) return;
++            settled = true;
++            log.info("TUI:ASK", `提问对话框响应: ${result.decision}`);
++            updateState({ askUserQuestionRequest: null });
++            if (result.decision === "answered") {
++              resolve({ status: "answered", answers: result.answers });
++            } else {
++              resolve({ status: "cancelled" });
++            }
++          };
++          // abort（用户 ESC 中断整轮 / 超时）时清理对话框并按取消处理，避免悬挂
++          if (signal) {
++            if (signal.aborted) {
++              wrappedResolve({ decision: "cancelled" });
++              return;
++            }
++            signal.addEventListener(
++              "abort",
++              () => wrappedResolve({ decision: "cancelled" }),
++              { once: true },
++            );
++          }
++          updateState({
++            askUserQuestionRequest: { questions: req.questions, resolve: wrappedResolve },
++          });
++        });
++      });
++    }
++
+     // TUI 版本的 agentLoop（消费 QueryEngine async generator）
+     const tuiAgentLoop = async (userInput: string) => {
+       const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 单次 session 最长 30 分钟
+diff --git a/src/cli.ts b/src/cli.ts
+index f0422e5..3b35323 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -613,6 +613,12 @@ export async function main(): Promise<void> {
+     const { TodoWriteTool } = await import("./tool/todo-write.ts");
+     toolRegistry.register(new TodoWriteTool());
+ 
++    // 注册结构化提问工具（对标 cc AskUserQuestion）：模型遇关键岔路口时向用户抛
++    // 选择题、收集决策。shouldDefer，由 tool_search 按需调出；TUI 模式弹交互对话框，
++    // headless 模式自动降级为"无法提问"提示（见 ask-user-question-bridge.ts）。
++    const { AskUserQuestionTool } = await import("./tool/ask-user-question.ts");
++    toolRegistry.register(new AskUserQuestionTool());
++
+     // 注册假设登记表工具（环节③：把"怀疑自己的假设"从模型自律外化为 harness 机制）。
+     // register 工具持有 ledger，challenge 工具复用同一实例；turnProvider 暂用占位（轮次仅用于
+     // 证据追溯，非关键路径）。queryLoop 经 deps.getHypothesisLedger 读取做矛盾中断 + 交付门禁。
+diff --git a/src/state/app-state.ts b/src/state/app-state.ts
+index 1cf800e..d6add76 100644
+--- a/src/state/app-state.ts
++++ b/src/state/app-state.ts
+@@ -6,7 +6,7 @@
+ 
+ import type { Message, Usage } from "../llm/types.ts";
+ import type { HistoryItem } from "../ui/types.ts";
+-import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo } from "../ui/App.tsx";
++import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo, AskUserQuestionRequestInfo } from "../ui/App.tsx";
+ import type { DialogType } from "../command/types.ts";
+ 
+ /** 深度不可变类型工具 */
+@@ -89,6 +89,7 @@ export type AppState = DeepImmutable<{
+   permissionRequest: PermissionRequestInfo | null;
+   shellConfirmRequest: ShellConfirmRequestInfo | null;
+   planApprovalRequest: PlanApprovalRequestInfo | null;
++  askUserQuestionRequest: AskUserQuestionRequestInfo | null;
+ 
+   mcpConnections: MCPConnectionState[];
+   subAgentTasks: Record<string, SubAgentTaskState>;
+@@ -131,6 +132,7 @@ export function getDefaultAppState(): AppState {
+     permissionRequest: null,
+     shellConfirmRequest: null,
+     planApprovalRequest: null,
++    askUserQuestionRequest: null,
+     mcpConnections: [],
+     subAgentTasks: {},
+     transientMessage: null,
+diff --git a/src/tool/ask-user-question-bridge.ts b/src/tool/ask-user-question-bridge.ts
+new file mode 100644
+index 0000000..7c98e81
+--- /dev/null
++++ b/src/tool/ask-user-question-bridge.ts
+@@ -0,0 +1,94 @@
++/**
++ * AskUserQuestion 桥接模块
++ *
++ * 解决"工具执行时没有 TUI 句柄"的问题：tool-executor 调 `tool.execute(input, signal)`，
++ * 不向工具传任何 TUI 通道。AskUserQuestionTool 需要在执行中途唤起交互式选择题 UI 并阻塞
++ * 等待用户作答——和权限确认/Shell 确认/Plan 审批同构（app.ts 用 setTUIConfirmCallback
++ * 等回调把"请求"投影成 TUI 状态）。
++ *
++ * 本模块是一个模块级单例 handler 注册表（对标 agent/message-queue.ts 的桥接思路）：
++ * - TUI 模式：app.ts 在 doInit 里调 setAskUserQuestionHandler 注入真正弹窗的实现。
++ * - headless/SDK/CI 模式：无人注入 handler → askUserQuestion 返回 { status: "unavailable" }，
++ *   工具据此告知模型"当前无法向用户提问，请用最合理的默认继续"，绝不阻塞无头进程。
++ *
++ * 对标 claude-code src/tools/AskUserQuestionTool/AskUserQuestionTool.tsx
++ * + components/permissions/AskUserQuestionPermissionRequest。
++ */
++
++/** 单个选项 */
++export interface AskQuestionOption {
++  /** 显示给用户的选项文本（1-5 词） */
++  label: string;
++  /** 选项说明 / 权衡解释（可选） */
++  description?: string;
++}
++
++/** 单个问题 */
++export interface AskQuestion {
++  /** 完整问题文本，以问号结尾 */
++  question: string;
++  /** chip/tag 显示的短标签 */
++  header: string;
++  /** 2-4 个候选项（UI 会自动追加"其他"以支持自定义输入） */
++  options: AskQuestionOption[];
++  /** 是否允许多选（默认 false） */
++  multiSelect?: boolean;
++}
++
++/** 一次提问请求（1-4 个问题） */
++export interface AskUserQuestionRequest {
++  questions: AskQuestion[];
++}
++
++/**
++ * 提问结果。
++ * - answered：用户作答，answers 按"问题文本 → 答案"映射（多选答案以 ", " 连接）。
++ * - cancelled：用户主动放弃回答（ESC）。
++ * - unavailable：当前无交互通道（headless/SDK/CI），无法提问。
++ */
++export type AskUserQuestionResult =
++  | { status: "answered"; answers: Record<string, string> }
++  | { status: "cancelled" }
++  | { status: "unavailable" };
++
++/** TUI 注入的提问处理器 */
++export type AskUserQuestionHandler = (
++  request: AskUserQuestionRequest,
++  signal?: AbortSignal,
++) => Promise<AskUserQuestionResult>;
++
++let handler: AskUserQuestionHandler | null = null;
++
++/**
++ * 注册提问处理器（TUI 模式由 app.ts 注入）。
++ * 返回反注册函数，便于会话结束 / 测试清理。
++ */
++export function setAskUserQuestionHandler(h: AskUserQuestionHandler | null): () => void {
++  handler = h;
++  return () => {
++    if (handler === h) handler = null;
++  };
++}
++
++/** 当前是否存在可用的提问通道（交互模式判定）。 */
++export function hasAskUserQuestionHandler(): boolean {
++  return handler !== null;
++}
++
++/**
++ * 发起一次提问。工具层调用入口。
++ *
++ * 无 handler（headless）时立即返回 unavailable，不阻塞；handler 抛错时同样降级为
++ * unavailable，保证工具永远拿得到结果、不会把异常冒泡成孤儿 tool_use。
++ */
++export async function askUserQuestion(
++  request: AskUserQuestionRequest,
++  signal?: AbortSignal,
++): Promise<AskUserQuestionResult> {
++  if (!handler) return { status: "unavailable" };
++  try {
++    return await handler(request, signal);
++  } catch {
++    return { status: "unavailable" };
++  }
++}
+diff --git a/src/tool/ask-user-question.ts b/src/tool/ask-user-question.ts
+new file mode 100644
+index 0000000..715615e
+--- /dev/null
++++ b/src/tool/ask-user-question.ts
+@@ -0,0 +1,157 @@
++/**
++ * AskUserQuestion 工具
++ *
++ * 让模型在需要用户决策时，向用户抛出**结构化选择题**（而非在正文里夹一句问话等用户
++ * 自由回答）：每题 2-4 个候选项，用户用键盘选择，答案结构化回灌给模型。适用于
++ * 方案选型、歧义澄清、关键取舍等"继续往下做之前必须由人拍板"的场景。
++ *
++ * 设计对标 claude-code src/tools/AskUserQuestionTool/AskUserQuestionTool.tsx：
++ * - shouldDefer：长尾低频工具，由 ToolSearch 按需调出，不占首轮上下文。
++ * - 交互通过 ask-user-question-bridge 唤起 TUI 弹窗（headless 模式自动降级）。
++ * - 结果格式化为 `「问题」→「答案」` 文本回灌模型，多选答案以 ", " 连接。
++ *
++ * fix_type: new_module
++ */
++
++import type { LegacyTool as Tool, LegacyToolResult as ToolResult } from "./types.ts";
++import { z } from "zod/v4";
++import { lazySchema } from "../sdk/lazy-schema.ts";
++import {
++  askUserQuestion,
++  type AskQuestion,
++} from "./ask-user-question-bridge.ts";
++
++/** 单题最多候选项数（对标 cc 的 2-4） */
++const MAX_OPTIONS = 4;
++const MIN_OPTIONS = 2;
++/** 一次最多提问数（对标 cc 的 1-4） */
++const MAX_QUESTIONS = 4;
++
++const askUserQuestionSchema = lazySchema(() =>
++  z.object({
++    questions: z
++      .array(
++        z.object({
++          question: z
++            .string()
++            .describe("完整问题文本，应以问号结尾，清晰具体"),
++          header: z
++            .string()
++            .describe("极短标签（≤12 字符），作为该问题的分类 chip 显示，如 '认证方式' '数据库'"),
++          options: z
++            .array(
++              z.object({
++                label: z.string().describe("选项显示文本（1-5 词，简洁且互斥）"),
++                description: z
++                  .string()
++                  .optional()
++                  .describe("该选项的说明或权衡解释（可选）"),
++              }),
++            )
++            .min(MIN_OPTIONS)
++            .max(MAX_OPTIONS)
++            .describe(`${MIN_OPTIONS}-${MAX_OPTIONS} 个候选项。无需提供"其他"选项——UI 会自动追加，允许用户自定义输入`),
++          multiSelect: z
++            .boolean()
++            .optional()
++            .describe("是否允许多选（选项之间不互斥时设为 true，默认 false）"),
++        }),
++      )
++      .min(1)
++      .max(MAX_QUESTIONS)
++      .describe(`要向用户提出的问题列表（1-${MAX_QUESTIONS} 个）`),
++  }),
++);
++
++export class AskUserQuestionTool implements Tool {
++  readonly zodSchema = askUserQuestionSchema();
++  /** 长尾低频工具：仅在需要用户拍板时使用，延迟加载，由 tool_search 按需调出 */
++  readonly shouldDefer = true;
++  readonly searchHint = "ask user question choice clarify decision 提问 选择 澄清 决策 选型";
++
++  name(): string {
++    return "ask_user_question";
++  }
++
++  description(): string {
++    return `向用户提出结构化选择题，收集决策。当你遇到只有用户能拍板的关键岔路口时使用——而不是在回复正文里夹一句问话。
++
++## 何时使用
++- 方案选型：多种合理实现路径，需要用户选一种（如 OAuth vs JWT、Redis vs 内存缓存）
++- 歧义澄清：需求有多种理解，继续做之前必须确认
++- 关键取舍：性能/可维护性/工期等维度需要用户权衡
++- 范围确认：要改动的边界不清晰，需用户圈定
++
++## 何时不使用
++- 你能从代码/上下文/常理推断出合理默认 → 直接做，事后说明，别打断用户
++- 只是想确认"我这样做对吗" → 不要为寻求认可而提问
++- 信息查询类问题 → 自己查（读代码 / 搜索 / 联网），不要问用户
++- 纯偏好且有约定俗成默认（命名/格式/默认值）→ 选合理项并注明
++
++## 用法
++- 一次可提 1-4 个问题，每题 2-4 个候选项。
++- 每个选项给简短 label + 可选 description（解释这个选项意味着什么、有何权衡）。
++- 若推荐某个选项，把它放在第一个，并在 label 末尾标注"(推荐)"。
++- 选项之间不互斥时设 multiSelect: true（允许用户多选）。
++- 无需提供"其他"选项——UI 会自动追加，允许用户自定义输入。
++
++用户作答后，答案会以"问题 → 答案"的形式回灌给你。请严格按用户的选择继续，不要无视用户的决策。`;
++  }
++
++  inputSchema(): Record<string, unknown> {
++    return z.toJSONSchema(askUserQuestionSchema()) as Record<string, unknown>;
++  }
++
++  /** 只读：不改动任何文件 / 状态，仅收集用户输入 */
++  readOnly(): boolean {
++    return true;
++  }
++
++  /**
++   * 非并发安全：交互式弹窗必须独占——多个提问同时弹出会争抢键盘焦点、互相覆盖。
++   * 串行执行保证一次只弹一个问卷。
++   */
++  isConcurrencySafe(): boolean {
++    return false;
++  }
++
++  async execute(input: unknown, signal?: AbortSignal): Promise<ToolResult> {
++    const params = input as { questions?: AskQuestion[] };
++
++    if (!Array.isArray(params?.questions) || params.questions.length === 0) {
++      return {
++        output:
++          "questions 必须是非空数组。格式: { questions: [{ question, header, options: [{ label, description? }], multiSelect? }] }",
++        isError: true,
++      };
++    }
++
++    const result = await askUserQuestion({ questions: params.questions }, signal);
++
++    if (result.status === "unavailable") {
++      // headless/SDK/CI 模式：无交互通道。明确告知模型"无法向用户提问"，
++      // 让它退回到自行选择最合理默认并继续，而不是误以为用户拒绝或卡住。
++      return {
++        output:
++          "当前运行环境无法向用户提问（非交互模式 / 无 TUI）。请基于现有上下文选择最合理的默认方案继续推进，并在最终回复中说明你的选择与理由。",
++        isError: false,
++      };
++    }
++
++    if (result.status === "cancelled") {
++      return {
++        output:
++          "用户取消了回答（未作选择）。请不要重复追问同样的问题；基于现有信息选择最合理的默认方案继续，或在回复中说明你需要的信息。",
++        isError: false,
++      };
++    }
++
++    // answered：把"问题 → 答案"格式化回灌模型
++    const lines: string[] = ["用户已作答："];
++    for (const q of params.questions) {
++      const answer = result.answers[q.question];
++      lines.push(`· ${q.question} → ${answer ?? "(未作答)"}`);
++    }
++    return { output: lines.join("\n") };
++  }
++}
+diff --git a/src/ui/App.tsx b/src/ui/App.tsx
+index e26bebf..5579d9d 100644
+--- a/src/ui/App.tsx
++++ b/src/ui/App.tsx
+@@ -101,6 +101,31 @@ export interface PlanApprovalRequestInfo {
+   resolve: (decision: "approve" | "reject") => void;
+ }
+ 
++/** AskUserQuestion 单题（投影给 UI 的展示结构，不直接依赖工具层类型） */
++export interface AskQuestionInfo {
++  question: string;
++  header: string;
++  options: Array<{ label: string; description?: string }>;
++  multiSelect?: boolean;
++}
++
++/**
++ * AskUserQuestion 交互请求信息（对标 cc AskUserQuestionPermissionRequest）。
++ * 模型用 ask_user_question 工具发起结构化提问，TUI 弹出多题多选对话框收集答案。
++ */
++export interface AskUserQuestionRequestInfo {
++  questions: AskQuestionInfo[];
++  /**
++   * 用户作答完成后回灌：answers 按"问题文本 → 答案"映射（多选以 ", " 连接）。
++   * decision="cancelled" 表示用户 ESC 放弃，此时 answers 省略。
++   */
++  resolve: (
++    result:
++      | { decision: "answered"; answers: Record<string, string> }
++      | { decision: "cancelled" },
++  ) => void;
++}
++
+ /** TUI 状态（由外部 App 驱动） */
+ export interface TUIState {
+   messages: Message[];
+@@ -139,6 +164,7 @@ export interface TUIState {
+   permissionRequest: PermissionRequestInfo | null;
+   shellConfirmRequest: ShellConfirmRequestInfo | null;
+   planApprovalRequest: PlanApprovalRequestInfo | null;
++  askUserQuestionRequest: AskUserQuestionRequestInfo | null;
+   debug: boolean;
+   lastToolResult: { toolName: string; isError: boolean; elapsedMs: number } | null;
+   /** 流式输出的完整文本 */
+@@ -251,8 +277,9 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+       permissionRequest: state.permissionRequest,
+       shellConfirmRequest: state.shellConfirmRequest,
+       planApprovalRequest: state.planApprovalRequest,
++      askUserQuestionRequest: state.askUserQuestionRequest,
+     });
+-  }, [state.permissionRequest, state.shellConfirmRequest, state.planApprovalRequest, state.isStreaming, state.isToolExecuting, state.isLoading]);
++  }, [state.permissionRequest, state.shellConfirmRequest, state.planApprovalRequest, state.askUserQuestionRequest, state.isStreaming, state.isToolExecuting, state.isLoading]);
+   // 同步到 ref，供 handleSubmit 闭包读取最新流式态
+   streamingStateRef.current = streamingState;
+   const log = getLogger();
+@@ -409,6 +436,7 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+       (state.isLoading || state.isStreaming || state.isToolExecuting) &&
+       !state.permissionRequest &&
+       !state.shellConfirmRequest &&
++      !state.askUserQuestionRequest &&
+       !state.activeDialog;
+ 
+     if (!isInterruptible) return false;
+@@ -664,6 +692,7 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+           permissionRequest={state.permissionRequest}
+           shellConfirmRequest={state.shellConfirmRequest}
+           planApprovalRequest={state.planApprovalRequest}
++          askUserQuestionRequest={state.askUserQuestionRequest}
+           isLoading={state.isLoading}
+           commands={state.commands}
+           cwd={state.cwd}
+@@ -707,6 +736,7 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+           permissionRequest={state.permissionRequest}
+           shellConfirmRequest={state.shellConfirmRequest}
+           planApprovalRequest={state.planApprovalRequest}
++          askUserQuestionRequest={state.askUserQuestionRequest}
+           isLoading={state.isLoading}
+           commands={state.commands}
+           cwd={state.cwd}
+diff --git a/src/ui/components/DefaultAppLayout.tsx b/src/ui/components/DefaultAppLayout.tsx
+index 2a0bbe7..1a523de 100644
+--- a/src/ui/components/DefaultAppLayout.tsx
++++ b/src/ui/components/DefaultAppLayout.tsx
+@@ -26,7 +26,7 @@ import { EmptyLogo } from "./EmptyLogo.tsx";
+ import { ModelDialog } from "./ModelDialog.tsx";
+ import { ThemeDialog } from "./ThemeDialog.tsx";
+ import type { HistoryItem } from "../types.ts";
+-import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo, TaskDisplayInfo } from "../App.tsx";
++import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo, AskUserQuestionRequestInfo, TaskDisplayInfo } from "../App.tsx";
+ import type { DialogType } from "../../command/types.ts";
+ import type { Usage } from "../../llm/types.ts";
+ import type { TodoItem } from "../../tool/todo-write.ts";
+@@ -58,6 +58,7 @@ interface DefaultAppLayoutProps {
+   permissionRequest: PermissionRequestInfo | null;
+   shellConfirmRequest: ShellConfirmRequestInfo | null;
+   planApprovalRequest: PlanApprovalRequestInfo | null;
++  askUserQuestionRequest: AskUserQuestionRequestInfo | null;
+   isLoading: boolean;
+   commands: Array<{ name: string; aliases: string[]; description: string }>;
+   cwd: string;
+@@ -111,6 +112,7 @@ export const DefaultAppLayout: React.FC<DefaultAppLayoutProps> = ({
+   permissionRequest,
+   shellConfirmRequest,
+   planApprovalRequest,
++  askUserQuestionRequest,
+   isLoading,
+   commands,
+   cwd,
+@@ -230,6 +232,13 @@ export const DefaultAppLayout: React.FC<DefaultAppLayoutProps> = ({
+               shellConfirmRequest={null}
+               planApprovalRequest={planApprovalRequest}
+             />
++          ) : askUserQuestionRequest ? (
++            <DialogRenderer
++              permissionRequest={null}
++              shellConfirmRequest={null}
++              planApprovalRequest={null}
++              askUserQuestionRequest={askUserQuestionRequest}
++            />
+           ) : activeDialog === "model" ? (
+             <ModelDialog
+               onClose={onDialogClose}
+diff --git a/src/ui/components/DialogManager.tsx b/src/ui/components/DialogManager.tsx
+index e5eff7f..687156a 100644
+--- a/src/ui/components/DialogManager.tsx
++++ b/src/ui/components/DialogManager.tsx
+@@ -5,14 +5,14 @@
+  * 支持：权限确认对话框、Shell 命令确认对话框、设置对话框、模型对话框、主题对话框。
+  */
+ 
+-import React, { useRef } from "react";
++import React, { useRef, useState } from "react";
+ import Box from "../../ink/components/Box.js";
+ import Text from "../../ink/components/Text.js";
+ import { useKeypress, KeypressPriority } from "../contexts/KeypressContext.tsx";
+-import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo } from "../App.tsx";
++import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo, AskUserQuestionRequestInfo } from "../App.tsx";
+ import { getToolSummary } from "../ui-utils.ts";
+ import { theme } from "../semantic-colors.ts";
+-import { BULLET, PLAN_REVIEW, WARNING_MARK } from "../constants/figures.ts";
++import { BULLET, PLAN_REVIEW, WARNING_MARK, ARROW_PROMPT, TODO_PENDING, TODO_COMPLETED } from "../constants/figures.ts";
+ import { inspectToolCall, inspectCommand } from "../utils/danger-detect.ts";
+ import { SettingsDialog } from "./SettingsDialog.tsx";
+ import { ModelDialog } from "./ModelDialog.tsx";
+@@ -176,15 +176,235 @@ function PlanApprovalDialog({ request }: { request: PlanApprovalRequestInfo }) {
+   );
+ }
+ 
+-/** 对话框渲染器：渲染权限确认、Shell 确认或 Plan 审批对话框 */
++/**
++ * AskUserQuestion 交互对话框（对标 cc AskUserQuestionPermissionRequest）。
++ *
++ * 模型用 ask_user_question 工具发起 1-4 道结构化选择题，本组件逐题收集答案：
++ * - 单选：↑↓ 选择 + Enter 确认，立即进入下一题（最后一题确认即提交）。
++ * - 多选：↑↓ 移动 + Space 勾选 / 取消，Enter 确认本题（至少选一项）。
++ * - 每题末尾自动追加"其他…"项：选中后进入文本输入，键入自定义答案，Enter 确认。
++ * - ESC 取消整个问卷（回灌 cancelled，模型据此走默认方案，不会卡住）。
++ *
++ * 视觉遵循 src/ui/CLAUDE.md：单 round 容器、品牌蓝点睛、字形从 figures.ts 取、
++ * 多选用 ○/● 填充度双通道表达勾选态（非仅靠颜色）。
++ */
++function AskUserQuestionDialog({ request }: { request: AskUserQuestionRequestInfo }) {
++  const resolvedRef = useRef(false);
++  const questions = request.questions;
++
++  // 当前题目索引
++  const [qIndex, setQIndex] = useState(0);
++  // 已收集答案：问题文本 → 答案串（多选以 ", " 连接）
++  const [answers, setAnswers] = useState<Record<string, string>>({});
++  // 当前题的高亮项索引（含末尾"其他"项）
++  const [cursor, setCursor] = useState(0);
++  // 多选模式下当前题已勾选的选项 label 集合
++  const [checked, setChecked] = useState<Set<number>>(new Set());
++  // 是否处于"其他"自定义文本输入态
++  const [editingOther, setEditingOther] = useState(false);
++  const [otherText, setOtherText] = useState("");
++
++  const current = questions[qIndex];
++  // 末尾追加"其他"项：索引 = options.length
++  const otherIndex = current.options.length;
++  const totalRows = current.options.length + 1;
++  const isMulti = !!current.multiSelect;
++
++  const finish = (finalAnswers: Record<string, string>) => {
++    if (resolvedRef.current) return;
++    resolvedRef.current = true;
++    request.resolve({ decision: "answered", answers: finalAnswers });
++  };
++
++  // 记录一题答案并推进到下一题（或在最后一题时提交）
++  const commitAnswer = (answer: string) => {
++    const next = { ...answers, [current.question]: answer };
++    setAnswers(next);
++    if (qIndex < questions.length - 1) {
++      setQIndex(qIndex + 1);
++      setCursor(0);
++      setChecked(new Set());
++      setEditingOther(false);
++      setOtherText("");
++    } else {
++      finish(next);
++    }
++  };
++
++  useKeypress(KeypressPriority.Critical, (key) => {
++    if (resolvedRef.current) return false;
++
++    // ESC：整卷取消（文本输入态下先退出输入态，再次 ESC 才取消整卷）
++    if (key.name === "escape") {
++      if (editingOther) {
++        setEditingOther(false);
++        setOtherText("");
++        return true;
++      }
++      resolvedRef.current = true;
++      request.resolve({ decision: "cancelled" });
++      return true;
++    }
++
++    // ── 文本输入态（选了"其他"）──
++    if (editingOther) {
++      if (key.name === "return" || key.name === "enter") {
++        const text = otherText.trim();
++        if (text.length === 0) return true; // 空输入不提交
++        commitAnswer(text);
++        return true;
++      }
++      if (key.name === "backspace" || key.name === "delete") {
++        setOtherText((t) => t.slice(0, -1));
++        return true;
++      }
++      if (key.insertable && key.sequence) {
++        setOtherText((t) => t + key.sequence);
++        return true;
++      }
++      return true; // 输入态吞掉其它按键
++    }
++
++    // ── 列表选择态 ──
++    if (key.name === "up" || (key.ctrl && key.name === "p")) {
++      setCursor((c) => (c - 1 + totalRows) % totalRows);
++      return true;
++    }
++    if (key.name === "down" || (key.ctrl && key.name === "n")) {
++      setCursor((c) => (c + 1) % totalRows);
++      return true;
++    }
++
++    // 多选：空格勾选 / 取消（"其他"项不参与勾选，须用 Enter 进入输入）
++    if (isMulti && key.name === "space" && cursor < otherIndex) {
++      setChecked((prev) => {
++        const next = new Set(prev);
++        if (next.has(cursor)) next.delete(cursor);
++        else next.add(cursor);
++        return next;
++      });
++      return true;
++    }
++
++    if (key.name === "return" || key.name === "enter") {
++      // 选中"其他" → 进入文本输入
++      if (cursor === otherIndex) {
++        setEditingOther(true);
++        return true;
++      }
++      if (isMulti) {
++        // 多选：Enter 确认本题已勾选项（若光标停在某项且未勾选，视为顺带勾选它）
++        const sel = new Set(checked);
++        if (sel.size === 0) sel.add(cursor);
++        const labels = current.options
++          .filter((_, i) => sel.has(i))
++          .map((o) => o.label);
++        if (labels.length === 0) return true;
++        commitAnswer(labels.join(", "));
++      } else {
++        // 单选：直接提交当前项
++        commitAnswer(current.options[cursor].label);
++      }
++      return true;
++    }
++
++    return false;
++  });
++
++  const accent = theme.ui.active;
++
++  return (
++    <Box flexDirection="column" borderStyle="round" borderColor={accent} paddingX={1}>
++      {/* 标题行：chip 标签 + 进度 */}
++      <Box>
++        <Text color={accent} bold>{BULLET} {current.header}</Text>
++        {questions.length > 1 && (
++          <Text color={theme.text.secondary}>  ({qIndex + 1}/{questions.length})</Text>
++        )}
++      </Box>
++      <Box paddingLeft={2} marginTop={0}>
++        <Text>{current.question}</Text>
++      </Box>
++
++      {/* 选项列表 */}
++      <Box flexDirection="column" marginTop={1} paddingLeft={2}>
++        {current.options.map((opt, i) => {
++          const isCursor = cursor === i && !editingOther;
++          const isChecked = isMulti && checked.has(i);
++          // 多选用填充度字形双通道表达勾选（○ 未选 / ● 已选）；单选用光标 BULLET
++          const marker = isMulti
++            ? (isChecked ? TODO_COMPLETED : TODO_PENDING)
++            : (isCursor ? BULLET : " ");
++          const markerColor = isChecked
++            ? theme.status.success
++            : isCursor
++              ? accent
++              : theme.text.secondary;
++          const labelColor = isCursor ? accent : theme.text.primary;
++          return (
++            <Box key={i} flexDirection="column">
++              <Box>
++                <Box width={2} flexShrink={0}>
++                  <Text color={markerColor}>{marker}</Text>
++                </Box>
++                <Text color={labelColor} bold={isCursor}>{opt.label}</Text>
++              </Box>
++              {isCursor && opt.description && (
++                <Box paddingLeft={2}>
++                  <Text color={theme.text.secondary}>{opt.description}</Text>
++                </Box>
++              )}
++            </Box>
++          );
++        })}
++
++        {/* "其他"自定义输入项 */}
++        <Box flexDirection="column">
++          <Box>
++            <Box width={2} flexShrink={0}>
++              <Text color={cursor === otherIndex ? accent : theme.text.secondary}>
++                {cursor === otherIndex && !editingOther ? BULLET : " "}
++              </Text>
++            </Box>
++            <Text color={cursor === otherIndex ? accent : theme.text.secondary} bold={cursor === otherIndex}>
++              其他…
++            </Text>
++          </Box>
++          {editingOther && (
++            <Box paddingLeft={2}>
++              <Text color={accent}>{ARROW_PROMPT} </Text>
++              <Text>{otherText}</Text>
++              <Text color={accent}>▌</Text>
++            </Box>
++          )}
++        </Box>
++      </Box>
++
++      {/* 操作提示行：随模式切换 */}
++      <Box marginTop={1}>
++        {editingOther ? (
++          <Text color={theme.text.secondary}>输入自定义答案，Enter 确认，Esc 返回</Text>
++        ) : isMulti ? (
++          <Text color={theme.text.secondary}>↑↓ 移动 · Space 勾选 · Enter 确认本题 · Esc 取消</Text>
++        ) : (
++          <Text color={theme.text.secondary}>↑↓ 选择 · Enter 确认 · Esc 取消</Text>
++        )}
++      </Box>
++    </Box>
++  );
++}
++
++/** 对话框渲染器：渲染权限确认、Shell 确认、Plan 审批或 AskUserQuestion 对话框 */
+ export function DialogRenderer({
+   permissionRequest,
+   shellConfirmRequest,
+   planApprovalRequest,
++  askUserQuestionRequest,
+ }: {
+   permissionRequest: PermissionRequestInfo | null;
+   shellConfirmRequest: ShellConfirmRequestInfo | null;
+   planApprovalRequest: PlanApprovalRequestInfo | null;
++  askUserQuestionRequest?: AskUserQuestionRequestInfo | null;
+ }) {
+   if (permissionRequest) {
+     return <PermissionDialog request={permissionRequest} />;
+@@ -195,5 +415,8 @@ export function DialogRenderer({
+   if (planApprovalRequest) {
+     return <PlanApprovalDialog request={planApprovalRequest} />;
+   }
++  if (askUserQuestionRequest) {
++    return <AskUserQuestionDialog request={askUserQuestionRequest} />;
++  }
+   return null;
+ }
+diff --git a/src/ui/components/MainScreenLayout.tsx b/src/ui/components/MainScreenLayout.tsx
+index 206a854..28e6a1b 100644
+--- a/src/ui/components/MainScreenLayout.tsx
++++ b/src/ui/components/MainScreenLayout.tsx
+@@ -29,7 +29,7 @@ import { EmptyLogo } from "./EmptyLogo.tsx";
+ import { ModelDialog } from "./ModelDialog.tsx";
+ import { ThemeDialog } from "./ThemeDialog.tsx";
+ import type { HistoryItem } from "../types.ts";
+-import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo, TaskDisplayInfo } from "../App.tsx";
++import type { PermissionRequestInfo, ShellConfirmRequestInfo, PlanApprovalRequestInfo, AskUserQuestionRequestInfo, TaskDisplayInfo } from "../App.tsx";
+ import type { DialogType } from "../../command/types.ts";
+ import type { Usage } from "../../llm/types.ts";
+ import type { TodoItem } from "../../tool/todo-write.ts";
+@@ -63,6 +63,7 @@ interface MainScreenLayoutProps {
+   permissionRequest: PermissionRequestInfo | null;
+   shellConfirmRequest: ShellConfirmRequestInfo | null;
+   planApprovalRequest: PlanApprovalRequestInfo | null;
++  askUserQuestionRequest: AskUserQuestionRequestInfo | null;
+   isLoading: boolean;
+   commands: Array<{ name: string; aliases: string[]; description: string }>;
+   cwd: string;
+@@ -113,6 +114,7 @@ export const MainScreenLayout: React.FC<MainScreenLayoutProps> = memo(function M
+   permissionRequest,
+   shellConfirmRequest,
+   planApprovalRequest,
++  askUserQuestionRequest,
+   isLoading,
+   commands,
+   cwd,
+@@ -243,6 +245,13 @@ export const MainScreenLayout: React.FC<MainScreenLayoutProps> = memo(function M
+               shellConfirmRequest={null}
+               planApprovalRequest={planApprovalRequest}
+             />
++          ) : askUserQuestionRequest ? (
++            <DialogRenderer
++              permissionRequest={null}
++              shellConfirmRequest={null}
++              planApprovalRequest={null}
++              askUserQuestionRequest={askUserQuestionRequest}
++            />
+           ) : activeDialog === "model" ? (
+             <ModelDialog
+               onClose={onDialogClose}
+diff --git a/src/ui/derive-streaming-state.ts b/src/ui/derive-streaming-state.ts
+index 4059c3d..043e30d 100644
+--- a/src/ui/derive-streaming-state.ts
++++ b/src/ui/derive-streaming-state.ts
+@@ -24,10 +24,11 @@ export interface StreamingStateInput {
+   permissionRequest: unknown;
+   shellConfirmRequest: unknown;
+   planApprovalRequest: unknown;
++  askUserQuestionRequest: unknown;
+ }
+ 
+ export function deriveStreamingState(state: StreamingStateInput): StreamingState {
+-  if (state.permissionRequest || state.shellConfirmRequest || state.planApprovalRequest) {
++  if (state.permissionRequest || state.shellConfirmRequest || state.planApprovalRequest || state.askUserQuestionRequest) {
+     return StreamingState.WaitingForConfirmation;
+   }
+   if (state.isStreaming || state.isToolExecuting) {
+diff --git a/src/ui/state-bridge.ts b/src/ui/state-bridge.ts
+index c9252c2..941ce0d 100644
+--- a/src/ui/state-bridge.ts
++++ b/src/ui/state-bridge.ts
+@@ -107,6 +107,7 @@ export function getConversationClearedPatch(): Partial<TUIState> {
+     // P1-2：对照完整 TUIState 补齐遗漏字段——否则 /clear 时若有待审批计划，
+     // 审批框不消失（planApprovalRequest 最该修）；加载态/Copy 模式/plan 模式标志亦可能残留。
+     planApprovalRequest: null,
++    askUserQuestionRequest: null,
+     isLoading: false,
+     copyModeEnabled: false,
+     isPlanMode: false,

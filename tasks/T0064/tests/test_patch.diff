@@ -1,0 +1,734 @@
+diff --git a/tests/extension/managed-layer.test.ts b/tests/extension/managed-layer.test.ts
+new file mode 100644
+index 0000000..7134027
+--- /dev/null
++++ b/tests/extension/managed-layer.test.ts
+@@ -0,0 +1,101 @@
++/**
++ * 企业 managed 扩展层测试（P2-1）
++ *
++ * 覆盖：managed 覆盖同名 user/project、SID_CODE_DISABLE_POLICY_SKILLS 开关、
++ * managed source 标记、五层优先级（builtin < user < project < managed）。
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { mkdirSync, writeFileSync, rmSync } from "fs";
++import { join } from "path";
++import { tmpdir } from "os";
++import { ExtensionLoader } from "../../src/extension/loader.ts";
++
++let testDir: string;
++let loader: ExtensionLoader;
++let prevSidHome: string | undefined;
++let prevClaudeHome: string | undefined;
++let prevDisable: string | undefined;
++
++function writeSkill(dir: string, name: string, desc: string) {
++  const skillDir = join(dir, name);
++  mkdirSync(skillDir, { recursive: true });
++  writeFileSync(join(skillDir, "SKILL.md"), `---\nname: ${name}\ndescription: ${desc}\n---\n内容`);
++}
++
++beforeEach(() => {
++  testDir = join(tmpdir(), `managed-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
++  mkdirSync(testDir, { recursive: true });
++  prevSidHome = process.env.SID_CONFIG_DIR;
++  prevClaudeHome = process.env.CLAUDE_CONFIG_DIR;
++  prevDisable = process.env.SID_CODE_DISABLE_POLICY_SKILLS;
++  process.env.SID_CONFIG_DIR = join(testDir, "__user_home__", ".sid-code");
++  process.env.CLAUDE_CONFIG_DIR = join(testDir, "__user_home__", ".claude");
++  delete process.env.SID_CODE_DISABLE_POLICY_SKILLS;
++  loader = new ExtensionLoader();
++});
++
++afterEach(() => {
++  if (prevSidHome === undefined) delete process.env.SID_CONFIG_DIR;
++  else process.env.SID_CONFIG_DIR = prevSidHome;
++  if (prevClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
++  else process.env.CLAUDE_CONFIG_DIR = prevClaudeHome;
++  if (prevDisable === undefined) delete process.env.SID_CODE_DISABLE_POLICY_SKILLS;
++  else process.env.SID_CODE_DISABLE_POLICY_SKILLS = prevDisable;
++  rmSync(testDir, { recursive: true, force: true });
++});
++
++describe("企业 managed 扩展层（P2-1）", () => {
++  test("managed skill 被加载且标记 source=managed", async () => {
++    const managedDir = join(testDir, "managed-skills");
++    writeSkill(managedDir, "policy-skill", "企业策略 skill");
++
++    const result = await loader.scanWithResult("skills", testDir, {
++      managedDirs: [managedDir],
++    });
++    const found = result.files.find((f) => f.name === "policy-skill");
++    expect(found).toBeDefined();
++    expect(found!.source).toBe("managed");
++  });
++
++  test("managed 覆盖同名 project skill", async () => {
++    // project 级同名 skill
++    const projDir = join(testDir, ".sid-code", "skills");
++    writeSkill(projDir, "shared", "项目版");
++    // managed 级同名
++    const managedDir = join(testDir, "managed-skills");
++    writeSkill(managedDir, "shared", "企业版");
++
++    const result = await loader.scanWithResult("skills", testDir, {
++      managedDirs: [managedDir],
++      trustProjectExtensions: true, // 跳过信任检查
++    });
++    const found = result.files.find((f) => f.name === "shared");
++    expect(found).toBeDefined();
++    // managed 最后扫描 → 覆盖 project
++    expect(found!.source).toBe("managed");
++  });
++
++  test("SID_CODE_DISABLE_POLICY_SKILLS=1 时不加载 managed 层", async () => {
++    const managedDir = join(testDir, "managed-skills");
++    writeSkill(managedDir, "policy-skill", "企业策略 skill");
++
++    process.env.SID_CODE_DISABLE_POLICY_SKILLS = "1";
++    const disabledLoader = new ExtensionLoader();
++    const result = await disabledLoader.scanWithResult("skills", testDir, {
++      managedDirs: [managedDir],
++    });
++    expect(result.files.find((f) => f.name === "policy-skill")).toBeUndefined();
++  });
++
++  test("未提供 managedDirs 时无 managed 层（向后兼容）", async () => {
++    const projDir = join(testDir, ".sid-code", "skills");
++    writeSkill(projDir, "only-proj", "只有项目版");
++    const result = await loader.scanWithResult("skills", testDir, {
++      trustProjectExtensions: true,
++    });
++    const found = result.files.find((f) => f.name === "only-proj");
++    expect(found).toBeDefined();
++    expect(found!.source).toBe("project");
++  });
++});
+diff --git a/tests/plugin/plugin-skills.test.ts b/tests/plugin/plugin-skills.test.ts
+new file mode 100644
+index 0000000..bd8562d
+--- /dev/null
++++ b/tests/plugin/plugin-skills.test.ts
+@@ -0,0 +1,123 @@
++/**
++ * 插件 Skills 加载测试（P0-4）
++ *
++ * 覆盖：加载、命名空间前缀不被 sanitize 破坏、卸载后消失、frontmatter 字段保真。
++ */
++
++import { describe, expect, test, afterEach } from "bun:test";
++import { mkdtemp, writeFile, mkdir, rm } from "fs/promises";
++import { join } from "path";
++import { tmpdir } from "os";
++import { setInlinePluginDirs } from "../../src/plugin/loader.ts";
++import { clearAllPluginCaches } from "../../src/plugin/caches.ts";
++
++let tmpDirs: string[] = [];
++
++/** 造一个带 skills/<name>/SKILL.md 的插件目录 */
++async function makePluginWithSkills(
++  manifest: object,
++  skills: Record<string, string>,
++): Promise<string> {
++  const dir = await mkdtemp(join(tmpdir(), "sid-plugin-skills-"));
++  tmpDirs.push(dir);
++  await writeFile(join(dir, "plugin.json"), JSON.stringify(manifest));
++  for (const [name, content] of Object.entries(skills)) {
++    await mkdir(join(dir, "skills", name), { recursive: true });
++    await writeFile(join(dir, "skills", name, "SKILL.md"), content);
++  }
++  return dir;
++}
++
++afterEach(async () => {
++  setInlinePluginDirs([]);
++  clearAllPluginCaches();
++  for (const dir of tmpDirs) {
++    await rm(dir, { recursive: true, force: true }).catch(() => {});
++  }
++  tmpDirs = [];
++});
++
++describe("插件 Skills 加载（P0-4）", () => {
++  test("插件 skill 带 pluginName: 命名空间前缀加载", async () => {
++    const dir = await makePluginWithSkills(
++      { name: "skill-plugin", version: "1.0.0", description: "带 skill 的插件" },
++      {
++        "code-review": `---
++name: code-review
++description: 审查代码质量
++---
++审查以下代码`,
++      },
++    );
++    setInlinePluginDirs([dir]);
++    clearAllPluginCaches();
++
++    const { getPluginSkills } = await import("../../src/plugin/loadPluginSkills.ts");
++    const skills = await getPluginSkills();
++
++    const found = skills.find((s) => s.name === "skill-plugin:code-review");
++    expect(found).toBeDefined();
++    // 关键：命名空间前缀的 `:` 未被 sanitizeName 破坏成 `-`
++    expect(found!.name).toContain(":");
++    expect(found!.name).not.toBe("skill-plugin-code-review");
++    expect(found!.loadedFrom).toBe("plugin");
++    expect(found!.description).toBe("审查代码质量");
++  });
++
++  test("多个 skill 目录全部加载", async () => {
++    const dir = await makePluginWithSkills(
++      { name: "multi", version: "1.0.0", description: "多 skill" },
++      {
++        alpha: `---\nname: alpha\ndescription: A skill\n---\nA`,
++        beta: `---\nname: beta\ndescription: B skill\n---\nB`,
++      },
++    );
++    setInlinePluginDirs([dir]);
++    clearAllPluginCaches();
++
++    const { getPluginSkills } = await import("../../src/plugin/loadPluginSkills.ts");
++    const names = (await getPluginSkills()).map((s) => s.name).sort();
++    expect(names).toContain("multi:alpha");
++    expect(names).toContain("multi:beta");
++  });
++
++  test("卸载插件后其 skills 消失", async () => {
++    const dir = await makePluginWithSkills(
++      { name: "temp-plugin", version: "1.0.0", description: "临时插件" },
++      { "my-skill": `---\nname: my-skill\ndescription: 临时\n---\n内容` },
++    );
++    setInlinePluginDirs([dir]);
++    clearAllPluginCaches();
++
++    const { getPluginSkills } = await import("../../src/plugin/loadPluginSkills.ts");
++    expect((await getPluginSkills()).length).toBeGreaterThan(0);
++
++    // 卸载：清空 inline 目录 + 清缓存
++    setInlinePluginDirs([]);
++    clearAllPluginCaches();
++    expect((await getPluginSkills()).length).toBe(0);
++  });
++
++  test("frontmatter 敏感字段(effort/allowedTools)保真", async () => {
++    const dir = await makePluginWithSkills(
++      { name: "rich", version: "1.0.0", description: "字段丰富" },
++      {
++        deep: `---
++name: deep
++description: 深度分析
++effort: high
++allowed-tools: read, grep
++---
++分析`,
++      },
++    );
++    setInlinePluginDirs([dir]);
++    clearAllPluginCaches();
++
++    const { getPluginSkills } = await import("../../src/plugin/loadPluginSkills.ts");
++    const found = (await getPluginSkills()).find((s) => s.name === "rich:deep");
++    expect(found).toBeDefined();
++    expect(found!.effort).toBe("high");
++    expect(found!.allowedTools).toEqual(["read", "grep"]);
++  });
++});
+diff --git a/tests/skill/activation-coordinator.test.ts b/tests/skill/activation-coordinator.test.ts
+new file mode 100644
+index 0000000..47620a9
+--- /dev/null
++++ b/tests/skill/activation-coordinator.test.ts
+@@ -0,0 +1,148 @@
++/**
++ * Skill 运行时激活协调器测试（P1-2 条件激活 + P2-2 动态发现 + P3-2 增量 listing）
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { mkdtemp, writeFile, mkdir, rm } from "fs/promises";
++import { join } from "path";
++import { tmpdir } from "os";
++import { SkillActivationCoordinator } from "../../src/skill/activation-coordinator.ts";
++import { SkillManager } from "../../src/skill/manager.ts";
++import type { SkillDefinition } from "../../src/skill/types.ts";
++
++function makeSkill(overrides: Partial<SkillDefinition>): SkillDefinition {
++  return {
++    name: "demo",
++    description: "演示",
++    prompt: "内容",
++    source: "project",
++    filePath: "/test/demo.md",
++    ...overrides,
++  };
++}
++
++function managerWith(skills: SkillDefinition[]): SkillManager {
++  const m = new SkillManager();
++  // @ts-expect-error 注入内部 skills
++  m.skills = skills;
++  return m;
++}
++
++describe("SkillActivationCoordinator - 条件激活门控（P1-2）", () => {
++  test("init 把带 paths 的 skill gate（从 listing 隐藏）", () => {
++    const mgr = managerWith([
++      makeSkill({ name: "always" }),
++      makeSkill({ name: "onts", paths: ["**/*.ts"] }),
++    ]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: "/proj" });
++    const gated = coord.init(mgr.getSkills());
++    expect(gated).toEqual(["onts"]);
++    // listable 不含被 gate 的
++    expect(mgr.getListableSkills().map((s) => s.name)).toEqual(["always"]);
++  });
++
++  test("文件路径匹配触发激活 → 解除 gate + 进 pending", async () => {
++    const mgr = managerWith([
++      makeSkill({ name: "onts", paths: ["**/*.ts"] }),
++    ]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: "/proj", enableDynamicDiscovery: false });
++    coord.init(mgr.getSkills());
++    expect(mgr.isGated("onts")).toBe(true);
++
++    await coord.onToolResults([{ file_path: "/proj/src/foo.ts" }]);
++    expect(mgr.isGated("onts")).toBe(false);
++    expect(mgr.getListableSkills().map((s) => s.name)).toContain("onts");
++  });
++
++  test("路径不匹配则不激活", async () => {
++    const mgr = managerWith([makeSkill({ name: "onts", paths: ["**/*.ts"] })]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: "/proj", enableDynamicDiscovery: false });
++    coord.init(mgr.getSkills());
++    await coord.onToolResults([{ file_path: "/proj/README.md" }]);
++    expect(mgr.isGated("onts")).toBe(true);
++  });
++});
++
++describe("SkillActivationCoordinator - 增量 listing（P3-2）", () => {
++  test("首轮全量注入所有可 listing skill", () => {
++    const mgr = managerWith([makeSkill({ name: "a" }), makeSkill({ name: "b" })]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: "/proj" });
++    coord.init(mgr.getSkills());
++    const delta = coord.drainListingDelta();
++    expect(delta).toContain("a");
++    expect(delta).toContain("b");
++    expect(coord.getSentNames().sort()).toEqual(["a", "b"]);
++  });
++
++  test("第二轮无新增 → 返回 null（不重复注入）", () => {
++    const mgr = managerWith([makeSkill({ name: "a" })]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: "/proj" });
++    coord.init(mgr.getSkills());
++    expect(coord.drainListingDelta()).not.toBeNull(); // 首轮
++    expect(coord.drainListingDelta()).toBeNull(); // 第二轮无新增
++  });
++
++  test("激活新 skill 后增量注入只含新 skill", async () => {
++    const mgr = managerWith([
++      makeSkill({ name: "always" }),
++      makeSkill({ name: "onts", paths: ["**/*.ts"] }),
++    ]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: "/proj", enableDynamicDiscovery: false });
++    coord.init(mgr.getSkills());
++
++    // 首轮：只有 always（onts 被 gate）
++    const first = coord.drainListingDelta();
++    expect(first).toContain("always");
++    expect(first).not.toContain("onts");
++
++    // 激活 onts
++    await coord.onToolResults([{ file_path: "/proj/x.ts" }]);
++    const delta = coord.drainListingDelta();
++    expect(delta).toContain("onts");
++    expect(delta).not.toContain("always"); // 已发过，不重复
++  });
++});
++
++describe("SkillActivationCoordinator - 动态发现（P2-2）", () => {
++  let tmp: string;
++  beforeEach(async () => {
++    tmp = await mkdtemp(join(tmpdir(), "sid-dyn-"));
++  });
++  afterEach(async () => {
++    await rm(tmp, { recursive: true, force: true }).catch(() => {});
++  });
++
++  test("文件操作沿目录链发现 .sid-code/skills/ 并加载", async () => {
++    // 造 tmp/sub/.sid-code/skills/found/SKILL.md
++    const skillDir = join(tmp, "sub", ".sid-code", "skills", "found");
++    await mkdir(skillDir, { recursive: true });
++    await writeFile(
++      join(skillDir, "SKILL.md"),
++      `---\nname: found\ndescription: 动态发现的 skill\n---\n内容`,
++    );
++
++    const mgr = managerWith([]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: tmp });
++    coord.init(mgr.getSkills());
++
++    // 对 tmp/sub/ 下的文件做操作 → 沿链发现 tmp/sub/.sid-code/skills/
++    await coord.onToolResults([{ file_path: join(tmp, "sub", "app.ts") }]);
++
++    expect(mgr.getSkill("found")).not.toBeNull();
++    // 新发现的 skill 进增量 listing
++    const delta = coord.drainListingDelta();
++    expect(delta).toContain("found");
++  });
++
++  test("enableDynamicDiscovery=false 时不发现", async () => {
++    const skillDir = join(tmp, "sub", ".sid-code", "skills", "nope");
++    await mkdir(skillDir, { recursive: true });
++    await writeFile(join(skillDir, "SKILL.md"), `---\nname: nope\ndescription: x\n---\nx`);
++
++    const mgr = managerWith([]);
++    const coord = new SkillActivationCoordinator({ manager: mgr, cwd: tmp, enableDynamicDiscovery: false });
++    coord.init(mgr.getSkills());
++    await coord.onToolResults([{ file_path: join(tmp, "sub", "app.ts") }]);
++    expect(mgr.getSkill("nope")).toBeNull();
++  });
++});
+diff --git a/tests/skill/executor.test.ts b/tests/skill/executor.test.ts
+new file mode 100644
+index 0000000..be3b0be
+--- /dev/null
++++ b/tests/skill/executor.test.ts
+@@ -0,0 +1,154 @@
++/**
++ * Skill 执行共享内核测试（P0-2 hooks / P0-3 权限 / P1-1 effort+agent）
++ */
++
++import { describe, test, expect } from "bun:test";
++import {
++  authorizeSkill,
++  registerSkillLifecycleHooks,
++  normalizeSkillEffort,
++  resolveSkillAgentType,
++  resolveSkillAsk,
++} from "../../src/skill/executor.ts";
++import { HookSystem } from "../../src/hook/system.ts";
++import type { SkillDefinition } from "../../src/skill/types.ts";
++
++function makeSkill(overrides: Partial<SkillDefinition>): SkillDefinition {
++  return {
++    name: "demo",
++    description: "演示",
++    prompt: "内容",
++    source: "project",
++    filePath: "/test/demo.md",
++    ...overrides,
++  };
++}
++
++describe("normalizeSkillEffort (P1-1)", () => {
++  test("识别 5 档", () => {
++    for (const v of ["low", "medium", "high", "xhigh", "max"]) {
++      expect(normalizeSkillEffort(v)).toBe(v as any);
++    }
++  });
++  test("大小写不敏感 + 去空白", () => {
++    expect(normalizeSkillEffort("  HIGH ")).toBe("high");
++  });
++  test("非法值返回 undefined", () => {
++    expect(normalizeSkillEffort("turbo")).toBeUndefined();
++    expect(normalizeSkillEffort(undefined)).toBeUndefined();
++    expect(normalizeSkillEffort("")).toBeUndefined();
++  });
++});
++
++describe("resolveSkillAgentType (P1-1)", () => {
++  test("存在的 agent 类型透传", async () => {
++    // explore 是内置 agent 类型
++    expect(await resolveSkillAgentType("explore", "demo")).toBe("explore");
++  });
++  test("不存在的 agent 类型回退 undefined（fail-open）", async () => {
++    expect(await resolveSkillAgentType("no-such-agent-xyz", "demo")).toBeUndefined();
++  });
++  test("空值返回 undefined", async () => {
++    expect(await resolveSkillAgentType(undefined, "demo")).toBeUndefined();
++    expect(await resolveSkillAgentType("  ", "demo")).toBeUndefined();
++  });
++});
++
++describe("authorizeSkill (P0-3)", () => {
++  test("仅安全属性 → allow", () => {
++    const r = authorizeSkill(makeSkill({}), { permissionRules: { allow: [], deny: [], ask: [] } });
++    expect(r.decision).toBe("allow");
++  });
++  test("含敏感属性(hooks) → ask", () => {
++    const r = authorizeSkill(
++      makeSkill({ hooks: { PostToolUse: [] } as any }),
++      { permissionRules: { allow: [], deny: [], ask: [] } },
++    );
++    expect(r.decision).toBe("ask");
++  });
++  test("Skill(name) deny 命中 → deny", () => {
++    const r = authorizeSkill(makeSkill({ name: "x" }), {
++      permissionRules: { deny: ["Skill(x)"], allow: [], ask: [] },
++    });
++    expect(r.decision).toBe("deny");
++  });
++  test("Skill 通配 allow → 放行敏感 skill", () => {
++    const r = authorizeSkill(makeSkill({ allowedTools: ["bash"] }), {
++      permissionRules: { allow: ["Skill"], deny: [], ask: [] },
++    });
++    expect(r.decision).toBe("allow");
++  });
++  test("MCP 来源含敏感属性 → ask", () => {
++    const r = authorizeSkill(
++      makeSkill({ loadedFrom: "mcp", allowedTools: ["bash"] }),
++      { permissionRules: { allow: [], deny: [], ask: [] } },
++    );
++    expect(r.decision).toBe("ask");
++  });
++});
++
++describe("registerSkillLifecycleHooks (P0-2)", () => {
++  test("MCP 来源 skill 拒绝注册 hooks（安全铁律）", () => {
++    const sys = new HookSystem();
++    const count = registerSkillLifecycleHooks(
++      makeSkill({
++        loadedFrom: "mcp",
++        hooks: { PostToolUse: [{ matcher: "write", hooks: [{ command: "echo x" }] }] },
++      }),
++      sys,
++    );
++    expect(count).toBe(0);
++    expect(sys.getAllHooks().length).toBe(0);
++  });
++
++  test("本地 skill 注册 hooks 成功", () => {
++    const sys = new HookSystem();
++    const count = registerSkillLifecycleHooks(
++      makeSkill({
++        name: "local",
++        hooks: { PostToolUse: [{ matcher: "write", hooks: [{ command: "echo x" }] }] },
++      }),
++      sys,
++    );
++    expect(count).toBeGreaterThan(0);
++    // 可按 skill 名卸载
++    const removed = sys.removeSkillHooks("local");
++    expect(removed).toBe(count);
++  });
++
++  test("无 hookSystem 返回 0", () => {
++    const count = registerSkillLifecycleHooks(makeSkill({ hooks: {} as any }), undefined);
++    expect(count).toBe(0);
++  });
++});
++
++describe("resolveSkillAsk (P0-3)", () => {
++  test("有 confirm 回调且批准 → true", async () => {
++    const ok = await resolveSkillAsk(makeSkill({}), "reason", {
++      confirm: async () => true,
++    });
++    expect(ok).toBe(true);
++  });
++  test("confirm 拒绝 → false", async () => {
++    const ok = await resolveSkillAsk(makeSkill({}), "reason", {
++      confirm: async () => false,
++    });
++    expect(ok).toBe(false);
++  });
++  test("无任何确认通道 → 保守拒绝", async () => {
++    const ok = await resolveSkillAsk(makeSkill({}), "reason", {});
++    expect(ok).toBe(false);
++  });
++  test("checker allowed=true → true", async () => {
++    const ok = await resolveSkillAsk(makeSkill({}), "reason", {
++      checker: { check: async () => ({ allowed: true }) } as any,
++    });
++    expect(ok).toBe(true);
++  });
++  test("checker allowed=false（子代理 ask→deny 语义）→ false", async () => {
++    const ok = await resolveSkillAsk(makeSkill({}), "reason", {
++      checker: { check: async () => ({ allowed: false, needsConfirmation: true }) } as any,
++    });
++    expect(ok).toBe(false);
++  });
++});
+diff --git a/tests/skill/meta-tool.test.ts b/tests/skill/meta-tool.test.ts
+new file mode 100644
+index 0000000..8815626
+--- /dev/null
++++ b/tests/skill/meta-tool.test.ts
+@@ -0,0 +1,178 @@
++/**
++ * 单一 Skill 元工具测试（P0-1 架构重构 + P0-3 权限 + P3-1 argument-hint 语义）
++ *
++ * 覆盖：分发正确性、disableModelInvocation 拦截、未知 skill 报错、
++ * disabled 拦截、listing 收集、args schema（不塞 argumentHint）、权限 deny/ask。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { SkillMetaTool, SKILL_TOOL_NAME } from "../../src/skill/meta-tool.ts";
++import { SkillManager } from "../../src/skill/manager.ts";
++import type { SkillDefinition } from "../../src/skill/types.ts";
++
++function makeSkill(overrides: Partial<SkillDefinition>): SkillDefinition {
++  return {
++    name: "demo",
++    description: "演示 skill",
++    prompt: "执行任务",
++    source: "project",
++    filePath: "/test/demo.md",
++    ...overrides,
++  };
++}
++
++/** 构造一个只含指定 skills 的 manager（绕过磁盘扫描） */
++function managerWith(skills: SkillDefinition[]): SkillManager {
++  const m = new SkillManager();
++  // @ts-expect-error 测试直接注入内部 skills，避免磁盘 discover
++  m.skills = skills;
++  return m;
++}
++
++describe("SkillMetaTool - 基本形态（P0-1）", () => {
++  test("工具名是单一 Skill（不带 skill__ 前缀）", () => {
++    const tool = new SkillMetaTool(managerWith([]), {} as any, {} as any);
++    expect(tool.name()).toBe(SKILL_TOOL_NAME);
++    expect(tool.name()).toBe("Skill");
++  });
++
++  test("inputSchema 是 {skill, args}，不含单个 skill 的 argumentHint（P3-1）", () => {
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ argumentHint: "<file> <focus>" })]),
++      {} as any,
++      {} as any,
++    );
++    const schema = tool.inputSchema();
++    expect(schema.type).toBe("object");
++    const props = schema.properties as any;
++    expect(props.skill).toBeDefined();
++    expect(props.args).toBeDefined();
++    // argument-hint 是用户 slash 补全提示，不应出现在模型工具 schema 里
++    const json = JSON.stringify(schema);
++    expect(json).not.toContain("<file> <focus>");
++  });
++
++  test("getListingEntries 只含可被模型调用的 skill", () => {
++    const tool = new SkillMetaTool(
++      managerWith([
++        makeSkill({ name: "a" }),
++        makeSkill({ name: "b", disableModelInvocation: true }),
++        makeSkill({ name: "c", disabled: true }),
++      ]),
++      {} as any,
++      {} as any,
++    );
++    const names = tool.getListingEntries().map((e) => e.name);
++    expect(names).toContain("a");
++    expect(names).not.toContain("b"); // disableModelInvocation
++    expect(names).not.toContain("c"); // disabled
++  });
++});
++
++describe("SkillMetaTool - 分发与拦截（P0-1 验收）", () => {
++  test("未知 skill 名报错，列出可用", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ name: "real" })]),
++      {} as any,
++      {} as any,
++    );
++    const res = await tool.execute({ skill: "nope" });
++    expect(res.isError).toBe(true);
++    expect(res.output).toContain("未知 Skill");
++    expect(res.output).toContain("real");
++  });
++
++  test("空 skill 名报错", async () => {
++    const tool = new SkillMetaTool(managerWith([]), {} as any, {} as any);
++    const res = await tool.execute({ skill: "" });
++    expect(res.isError).toBe(true);
++  });
++
++  test("disableModelInvocation 的 skill 经元工具被拒", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ name: "manual", disableModelInvocation: true })]),
++      {} as any,
++      {} as any,
++    );
++    const res = await tool.execute({ skill: "manual" });
++    expect(res.isError).toBe(true);
++    expect(res.output).toContain("禁止模型自动调用");
++  });
++
++  test("disabled 的 skill 被拒", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ name: "off", disabled: true })]),
++      {} as any,
++      {} as any,
++    );
++    const res = await tool.execute({ skill: "off" });
++    expect(res.isError).toBe(true);
++    expect(res.output).toContain("已被禁用");
++  });
++
++  test("按名分发不区分大小写", async () => {
++    // activate 模式不需要子代理，可安全执行到底
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ name: "MyReview", mode: "activate", prompt: "审查内容" })]),
++      {} as any,
++      {} as any,
++    );
++    const res = await tool.execute({ skill: "myreview", args: "关注安全" });
++    expect(res.isError).toBe(false);
++    expect(res.output).toContain("审查内容");
++    expect(res.output).toContain("关注安全");
++  });
++});
++
++describe("SkillMetaTool - 权限判定（P0-3）", () => {
++  test("Skill(name) deny 规则拦截", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ name: "danger", mode: "activate" })]),
++      {} as any,
++      {} as any,
++    );
++    tool.setPermissionRules({ deny: ["Skill(danger)"], allow: [], ask: [] });
++    const res = await tool.execute({ skill: "danger" });
++    expect(res.isError).toBe(true);
++    expect(res.output).toContain("权限拒绝");
++  });
++
++  test("仅安全属性的 skill 默认放行（activate）", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([makeSkill({ name: "safe", mode: "activate", prompt: "安全内容" })]),
++      {} as any,
++      {} as any,
++    );
++    tool.setPermissionRules({ allow: [], deny: [], ask: [] });
++    const res = await tool.execute({ skill: "safe" });
++    expect(res.isError).toBe(false);
++  });
++
++  test("含敏感属性(allowedTools)的 skill 触发 ask，无确认通道则拒", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([
++        makeSkill({ name: "sensitive", mode: "activate", allowedTools: ["bash"] }),
++      ]),
++      {} as any,
++      {} as any,
++    );
++    tool.setPermissionRules({ allow: [], deny: [], ask: [] });
++    // 未注入 permissionChecker → ask 无通道 → 拒绝
++    const res = await tool.execute({ skill: "sensitive" });
++    expect(res.isError).toBe(true);
++    expect(res.output).toContain("需确认");
++  });
++
++  test("Skill(name) allow 规则放行敏感 skill", async () => {
++    const tool = new SkillMetaTool(
++      managerWith([
++        makeSkill({ name: "sensitive", mode: "activate", allowedTools: ["bash"], prompt: "内容" }),
++      ]),
++      {} as any,
++      {} as any,
++    );
++    tool.setPermissionRules({ allow: ["Skill(sensitive)"], deny: [], ask: [] });
++    const res = await tool.execute({ skill: "sensitive" });
++    expect(res.isError).toBe(false);
++  });
++});

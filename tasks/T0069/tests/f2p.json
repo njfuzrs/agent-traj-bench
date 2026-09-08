@@ -1,0 +1,1 @@
+["tests/task/kill-all-running-tasks.test.ts", "tests/ui/external-editor.test.ts", "tests/ui/status-line-data.test.ts", "tests/ui/text-buffer-kill-ring.test.ts"]

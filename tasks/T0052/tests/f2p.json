@@ -1,0 +1,1 @@
+["tests/goal/evaluator.test.ts", "tests/goal/goal-gate.test.ts", "tests/llm/provider-anthropic-conformance.test.ts", "tests/llm/stream-lifecycle.test.ts"]

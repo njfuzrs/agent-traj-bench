@@ -1,0 +1,1 @@
+["tests/goal/goal-gate.test.ts", "tests/query/hypothesis-ledger.test.ts", "tests/query/output-stall.test.ts", "tests/query/reactive-compact.test.ts", "tests/query/thinking-divergence.test.ts", "tests/tool/omission-detector.test.ts"]

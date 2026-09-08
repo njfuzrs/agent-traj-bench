@@ -1,0 +1,1570 @@
+diff --git a/src/agent/sub-agent.ts b/src/agent/sub-agent.ts
+index 1699fc9..1b1e228 100644
+--- a/src/agent/sub-agent.ts
++++ b/src/agent/sub-agent.ts
+@@ -256,6 +256,13 @@ export interface CustomSubAgentTask {
+   timeout?: number;
+   /** 子代理类型（G13：save_memory 的 agent scope 据此定位记忆目录；不传则 agent scope 不可用） */
+   type?: string;
++  /**
++   * P1-1：推理努力程度（skill frontmatter effort 透传而来）。
++   * low|medium|high → provider reasoningEffort "high"；xhigh|max → "max"
++   * （provider 层仅接受 high|max，对齐 SendParams.reasoningEffort 契约）。
++   * 显式指定即开 thinking + 下发 reasoningEffort；不传则关 thinking（与 executeInner 同口径）。
++   */
++  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+ }
+ 
+ export class SubAgent {
+@@ -1294,6 +1301,20 @@ export class SubAgent {
+       let lastTextOutput = "";
+       let toolUseCount = 0;
+ 
++      // P1-1：effort → provider reasoningEffort，与 executeInner 同口径（仅 high|max 两档）。
++      // low/medium/high → "high"；xhigh/max → "max"。显式指定 effort 视为「要思考」，开 thinking；
++      // 未指定则关 thinking（SIDE_CALL_NO_THINK），自定义子代理默认不思考。skill frontmatter
++      // 声明 effort: high 时经此生效（此前 executeCustomInner 从不消费 effort，写了不起作用）。
++      const customSendParamsExtra: Partial<SendParams> =
++        task.effort !== undefined
++          ? {
++              thinking: { enabled: true, budgetTokens: 0 },
++              reasoningEffort: (task.effort === "xhigh" || task.effort === "max"
++                ? "max"
++                : "high") as "high" | "max",
++            }
++          : { thinking: SIDE_CALL_NO_THINK };
++
+       const loopResult = await runAgentLoop({
+         provider: activeProvider,
+         model: activeModel,
+@@ -1303,6 +1324,7 @@ export class SubAgent {
+         signal: mergedSignal,
+         loopDetector,
+         hookSystem: this.hookSystem,
++        sendParamsExtra: customSendParamsExtra,
+         onTurnEnd: (info) => {
+           lastTextOutput = info.textOutput || lastTextOutput;
+           toolUseCount += info.tools.length;
+diff --git a/src/app.ts b/src/app.ts
+index 77d365c..dd2da28 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -216,6 +216,8 @@ export interface AppOptions {
+   planManager?: PlanModeManager;
+   /** 共享的 FileReadTracker 实例（§2.1 post-compact 文件恢复需要它取最近访问文件）。 */
+   fileReadTracker?: import("./tool/file-read-tracker.ts").FileReadTracker;
++  /** P1-2/P2-2/P3-2：Skill 运行时激活协调器（条件激活 + 动态发现 + 增量 listing）。可选。 */
++  skillActivationCoordinator?: import("./skill/activation-coordinator.ts").SkillActivationCoordinator;
+ }
+ 
+ /**
+@@ -292,6 +294,8 @@ export class App {
+   private traceCollector: import("./trace/collector.ts").TraceCollector | null = null;
+   /** §2.1：共享 FileReadTracker，autoCompact 后用于恢复最近访问文件。 */
+   private fileReadTracker: import("./tool/file-read-tracker.ts").FileReadTracker | null = null;
++  /** P1-2/P2-2/P3-2：Skill 运行时激活协调器（条件激活 + 动态发现 + 增量 listing）。可选。 */
++  private skillActivationCoordinator?: import("./skill/activation-coordinator.ts").SkillActivationCoordinator;
+   /** §5：共享 cached microcompact 状态机，压缩后重置。延迟创建。 */
+   private cachedMicrocompactState: import("./query/compact/cached-microcompact.ts").CachedMicrocompactState | null = null;
+   /** 已播报过 instructions 的 MCP server 名（去重集，避免每轮重复注入同一 server 说明）。 */
+@@ -355,6 +359,7 @@ export class App {
+     this.permissionChecker = opts.permissionChecker ?? null;
+     this.planManager = opts.planManager ?? null;
+     this.fileReadTracker = opts.fileReadTracker ?? null;
++    this.skillActivationCoordinator = opts.skillActivationCoordinator;
+     const sessionId = opts.config.sessionId || generateSessionId();
+     this.sessionIdForCompact = sessionId;
+     // 上下文窗口按模型实际大小初始化（deepseek-v4 为 1M，Claude 200K，gpt-4o 128K）。
+@@ -714,6 +719,7 @@ export class App {
+       tokenMeter: this.tokenMeter,
+       budgetTracker: this.budgetTracker,
+       sessionStore: this.sessionStore ?? undefined,
++      skillActivationCoordinator: this.skillActivationCoordinator,
+       executeTools: (content) => this.executeTools(content),
+       processStream: (stream, onText, onThinking, turnAbortController) => this.processStream(stream, onText, onThinking, turnAbortController),
+       autoCompact: () => this.autoCompact(),
+@@ -915,14 +921,26 @@ export class App {
+     // 延迟导入工厂函数（避免循环依赖）
+     const { createSubAgentChecker } = require("./permission/sub-agent-checker.ts");
+     const subChecker = createSubAgentChecker(this.permissionChecker);
++    // P0-3：抽取合并后的权限规则，供 skill 元工具解析 Skill(name) 规则。
++    const checkerWithRules = this.permissionChecker as unknown as {
++      getRules?: () => import("./permission/types.ts").PermissionRule | null;
++    };
++    const rawRules = typeof checkerWithRules.getRules === "function"
++      ? checkerWithRules.getRules()
++      : null;
+     for (const tool of this.toolRegistry.all()) {
+       const maybe = tool as {
+         setPermissionChecker?: (c: import("./permission/types.ts").Checker) => void;
+         setPermissionConfirm?: (fn: (desc: string) => Promise<boolean>) => void;
++        setPermissionRules?: (r: import("./permission/types.ts").PermissionRule) => void;
+       };
+       if (typeof maybe.setPermissionChecker === "function") {
+         maybe.setPermissionChecker(subChecker);
+       }
++      // P0-3：SkillMetaTool 需要原始规则（非 subChecker）来判定 Skill(name) 的 allow/deny/ask
++      if (typeof maybe.setPermissionRules === "function" && rawRules) {
++        maybe.setPermissionRules(rawRules);
++      }
+       // TeamCreateTool 需要额外注入 leader 确认回调（swarm teammate escalate 用）
+       if (typeof maybe.setPermissionConfirm === "function") {
+         maybe.setPermissionConfirm((desc: string) => this.requestUserConfirmation(desc));
+@@ -5594,6 +5612,8 @@ export class App {
+             });
+           },
+           hookSystem: this.hookSystem,
++          // P0-3：skill 权限 ask 决策的用户确认回调（用户斜杠路径用主会话弹窗）。
++          requestUserConfirmation: (desc: string) => this.requestUserConfirmation(desc),
+           commandRegistry: this.commandRegistry,
+           unifiedRegistry: this.unifiedRegistry,
+           // /goal：目标驱动持续执行——命令层读写 goalState 的三个回调
+diff --git a/src/cli.ts b/src/cli.ts
+index 0b20be9..5d89f5b 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1306,7 +1306,7 @@ export async function main(): Promise<void> {
+ 
+     // 加载 Skills（通过 SkillManager 统一管理）
+     const { SkillManager } = await import("./skill/manager.ts");
+-    const { SkillTool } = await import("./skill/tool.ts");
++    const { SkillMetaTool } = await import("./skill/meta-tool.ts");
+     const { SkillCommand } = await import("./command/skill-command.ts");
+     const skillManager = new SkillManager();
+     await skillManager.discover(process.cwd(), scanOptions);
+@@ -1315,12 +1315,16 @@ export async function main(): Promise<void> {
+       skillManager.setDisabledSkills(config.disabledSkills);
+     }
+ 
++    // P0-1：单一 Skill 元工具（对齐 CC）。此前每个 skill 一个 skill__<name> 工具导致工具池膨胀
++    // + 与摘要 listing 信息重复。改为全局唯一 `Skill` 工具按名分发，工具数不随 skill 增长。
++    // 权限规则/hookSystem/permissionChecker 由 app.ts 的 wireTool* setter 回填。
++    // permissionRules 在下方（checker 构造处）才加载，故此处只注册工具，
++    // 权限规则/hookSystem/permissionChecker 统一由 app.ts 的 wireTool* setter 回填。
++    const skillMetaTool = new SkillMetaTool(skillManager, providerRegistry, toolRegistry);
++    toolRegistry.register(skillMetaTool);
++
+     const skills = skillManager.getSkills();
+     for (const skill of skills) {
+-      // 模型调用路径：注册为工具（除非显式禁止模型调用）
+-      if (!skill.disableModelInvocation) {
+-        toolRegistry.register(new SkillTool(skill, providerRegistry, toolRegistry));
+-      }
+       // 用户调用路径：注册为斜杠命令 /skill-name（除非显式禁止用户调用）
+       // 此前缺失此步骤,导致 /bug-fix 等 skill 命令报"未知命令"。
+       if (skill.userInvocable !== false) {
+@@ -1328,6 +1332,14 @@ export async function main(): Promise<void> {
+       }
+     }
+ 
++    // P1-2/P2-2/P3-2：Skill 运行时激活协调器。init() 延后到插件 skills 也加载完毕后调用
++    // （下方插件块），以便条件激活门控覆盖插件 skill。
++    const { SkillActivationCoordinator } = await import("./skill/activation-coordinator.ts");
++    const skillActivationCoordinator = new SkillActivationCoordinator({
++      manager: skillManager,
++      cwd: process.cwd(),
++    });
++
+     // Bundled Skill 模型调用路径（Gap 1）：把 fork 模式且未禁止模型调用的
+     // Bundled Skill 注册为工具，使 LLM 可自动调用（与磁盘 Skill 的 SkillTool 对等）。
+     // inline 模式语义是注入主对话、不返回结果，不适合做工具，仅保留斜杠命令。
+@@ -1419,6 +1431,23 @@ export async function main(): Promise<void> {
+       // 插件命令（带 pluginName: 前缀，与内置/自定义命令隔离）
+       const pluginCmdCount = await mergePluginCommands(commandRegistry);
+ 
++      // P0-4：插件 Skills（带 pluginName: 前缀）。注入同一 skillManager（元工具据此分发），
++      // 并把 userInvocable 的注册为 /pluginName:skill 斜杠命令。
++      try {
++        const { getPluginSkills } = await import("./plugin/loadPluginSkills.ts");
++        const pluginSkills = await getPluginSkills();
++        if (pluginSkills.length > 0) {
++          skillManager.addPluginSkills(pluginSkills);
++          for (const skill of pluginSkills) {
++            if (skill.userInvocable !== false) {
++              commandRegistry.register(new SkillCommand(skill), "user");
++            }
++          }
++        }
++      } catch (err: any) {
++        getLogger().warn("PLUGIN", `插件 Skills 加载失败: ${err?.message ?? String(err)}`);
++      }
++
+       // 插件 Agent（注册为工具 + 注册进聚合 registry，overwrite=false：优先级低于用户自定义）
+       const pluginAgents = await loadPluginAgents();
+       if (pluginAgents.length > 0) {
+@@ -1456,6 +1485,10 @@ export async function main(): Promise<void> {
+       getLogger().error("PLUGIN", `插件组件加载失败: ${err.message}`);
+     }
+ 
++    // P1-2/P2-2：插件 skills 也加载完毕后，用全量 skill 初始化激活协调器
++    // （分离条件激活 skill 并 gate，未触发前不进模型 listing）。
++    skillActivationCoordinator.init(skillManager.getAllSkills());
++
+     profileCheckpoint("tool_reg_end");
+ 
+     // P2-6 --tools：白名单替换整个内置工具集（未列出的内置工具不可见）。
+@@ -1723,7 +1756,7 @@ export async function main(): Promise<void> {
+ 
+     // 创建 App
+     const { App } = await import("./app.ts");
+-    const app = new App({ config, provider, providerRegistry, toolRegistry, commandRegistry, unifiedRegistry, permissionChecker, mcpManager, planManager, fileReadTracker });
++    const app = new App({ config, provider, providerRegistry, toolRegistry, commandRegistry, unifiedRegistry, permissionChecker, mcpManager, planManager, fileReadTracker, skillActivationCoordinator });
+     // 注册全局 App 弱引用（供 uncaughtException 等异常兜底使用）
+     setLastApp(app);
+ 
+diff --git a/src/command/skill-command.ts b/src/command/skill-command.ts
+index f40fb20..e9be4e8 100644
+--- a/src/command/skill-command.ts
++++ b/src/command/skill-command.ts
+@@ -56,12 +56,45 @@ export class SkillCommand implements Command {
+       return { kind: "error", message: `Skill 提示处理失败: ${err.message}` };
+     }
+ 
++    // ── P0-3：权限判定（用户路径可用主会话弹窗做 ask）──
++    const { authorizeSkill, resolveSkillAsk, registerSkillLifecycleHooks } = await import("../skill/executor.ts");
++    const rawRules = ctx.permissionChecker && typeof (ctx.permissionChecker as { getRules?: () => unknown }).getRules === "function"
++      ? (ctx.permissionChecker as unknown as { getRules: () => import("../permission/types.ts").PermissionRule | null }).getRules()
++      : null;
++    const auth = authorizeSkill(this.skill, { permissionRules: rawRules ?? undefined });
++    if (auth.decision === "deny") {
++      return { kind: "error", message: `权限拒绝：Skill "${this.skill.name}" 被规则拒绝` };
++    }
++    if (auth.decision === "ask") {
++      const allowed = await resolveSkillAsk(this.skill, auth.reason ?? "", {
++        // 用户路径优先用主会话确认回调（若上层提供）；否则回退 checker
++        confirm: ctx.requestUserConfirmation
++          ? (desc: string) => ctx.requestUserConfirmation!(desc)
++          : undefined,
++        checker: ctx.permissionChecker ?? undefined,
++      });
++      if (!allowed) {
++        return { kind: "error", message: `已取消：Skill "${this.skill.name}" 未获授权` };
++      }
++    }
++
++    // ── P0-2：授权通过后注册生命周期 hooks（MCP 来源内部拒绝）──
++    // inline 语义把 skill 注入主对话、长期存活，hooks 也应持续到会话结束（不卸载）；
++    // fork 在子代理内执行，hooks 作用域限定本次调用，executeFork 返回后卸载。
++    const hookCount = registerSkillLifecycleHooks(this.skill, ctx.hookSystem);
++
+     // fork 模式：子代理独立执行
+     if (this.context === "fork") {
+-      return this.executeFork(prompt, ctx);
++      try {
++        return await this.executeFork(prompt, ctx);
++      } finally {
++        if (hookCount > 0 && ctx.hookSystem) {
++          ctx.hookSystem.removeSkillHooks(this.skill.name);
++        }
++      }
+     }
+ 
+-    // inline 模式：注入当前对话，触发 LLM 响应
++    // inline 模式：注入当前对话，触发 LLM 响应（hooks 随会话长期存活，不卸载）
+     log.debug("SKILL", `inline 注入 skill /${this.skill.name}`);
+     return { kind: "submit_prompt", prompt };
+   }
+@@ -77,18 +110,26 @@ export class SkillCommand implements Command {
+ 
+     try {
+       const { SubAgent } = await import("../agent/sub-agent.ts");
++      const { normalizeSkillEffort, resolveSkillAgentType } = await import("../skill/executor.ts");
+       const subAgent = SubAgent.fromRegistry(
+         ctx.providerRegistry,
+         ctx.registry,
+         ctx.hookSystem,
++        this.skill.model,
+       );
+ 
++      // P1-1：effort/agent 透传（与模型路径 SkillMetaTool 同口径）
++      const effort = normalizeSkillEffort(this.skill.effort);
++      const agentType = await resolveSkillAgentType(this.skill.agent, this.skill.name);
++
+       const result = await subAgent.executeCustom({
+         systemPrompt: "你是一个专注的助手，请完成以下任务。",
+         userPrompt: prompt,
+         allowedTools: this.skill.allowedTools ?? [],
+         // P2-2：与 command/executor.ts 的 fork 命令同档，默认从 10 提到 30
+         maxTurns: this.skill.maxTurns ?? 30,
++        effort,
++        type: agentType ?? `skill:${this.skill.name}`,
+       });
+ 
+       return {
+diff --git a/src/command/types.ts b/src/command/types.ts
+index a3bb173..74b0057 100644
+--- a/src/command/types.ts
++++ b/src/command/types.ts
+@@ -97,6 +97,11 @@ export interface AppContext {
+   customCommands?: Array<{ name: string; description: string }>;
+   /** Shell 注入确认回调（自定义命令 !{cmd} 语法用），返回 true 表示用户确认 */
+   confirmShellCommands?: (commands: string[]) => Promise<boolean>;
++  /**
++   * P0-3：通用用户确认回调（skill 权限 ask 决策用），返回 true 表示用户批准。
++   * 用户斜杠路径的 skill 若含敏感能力（hooks/allowedTools/shell）触发 ask 时，弹此确认。
++   */
++  requestUserConfirmation?: (desc: string) => Promise<boolean>;
+   /** Hook 系统引用（/hooks 命令用） */
+   hookSystem?: HookSystem;
+   /** 命令注册表引用（/reload-plugins 重新合并插件命令用） */
+diff --git a/src/config/paths.ts b/src/config/paths.ts
+index fed2af0..2572fce 100644
+--- a/src/config/paths.ts
++++ b/src/config/paths.ts
+@@ -141,6 +141,15 @@ export const sidPaths = {
+   builtinSkills: () => sidHomePath("builtin-skills"),
+   skills: () => sidHomePath("skills"),
+   extensionDir: (type: string) => sidHomePath(type),
++  /**
++   * P2-1：企业 managed 扩展目录候选（first-exists 全扫，优先级最高）。
++   * 与 managedPolicyCandidates 同源约定：系统级 /etc/sid-code/{type} + 用户级回退 ~/.sid-code/managed/{type}。
++   * managed 层扩展覆盖同名 user/project。SID_CODE_DISABLE_POLICY_SKILLS=1 可整体关闭。
++   */
++  managedExtensionDirs: (type: string): string[] => [
++    `/etc/sid-code/${type}`,
++    sidHomePath("managed", type),
++  ],
+ 
+   // ── 自带二进制（编译期嵌入、运行时释放的工具，如 ripgrep）──
+   binDir: () => sidHomePath("bin"),
+diff --git a/src/extension/loader.ts b/src/extension/loader.ts
+index 81f12d4..9ae957e 100644
+--- a/src/extension/loader.ts
++++ b/src/extension/loader.ts
+@@ -146,6 +146,17 @@ export class ExtensionLoader {
+       errors.push(...projErrors);
+     }
+ 
++    // 3. P2-1：企业 managed 层（最高优先级，最后扫描）。managed 扩展覆盖同名 user/project，
++    //    且不受项目信任检查约束（企业下发本就是可信源）。SID_CODE_DISABLE_POLICY_SKILLS=1 时跳过。
++    const policyDisabled = process.env.SID_CODE_DISABLE_POLICY_SKILLS === "1";
++    if (options?.managedDirs && options.managedDirs.length > 0 && !policyDisabled) {
++      for (const managedDir of options.managedDirs) {
++        const { files: managedFiles, errors: managedErrors } = await this.scanDir(managedDir, "managed");
++        mergeFiles(managedFiles);
++        errors.push(...managedErrors);
++      }
++    }
++
+     const files = Array.from(fileMap.values());
+     const result: ScanResult = { files, errors, overrides };
+ 
+@@ -193,6 +204,19 @@ export class ExtensionLoader {
+     this.cache.clear();
+   }
+ 
++  /**
++   * P0-4：扫描任意单个目录（供插件 skills 加载复用与 user/project 完全一致的扫描逻辑：
++   * 扁平 .md + 子目录 SKILL.md/AGENT.md/index.md）。source 标记来源（插件传 "project" 语义占位，
++   * 真实 loadedFrom 由调用方覆盖）。
++   */
++  async scanSingleDir(
++    dir: string,
++    source: ExtensionSource = "project",
++  ): Promise<ParsedExtensionFile[]> {
++    const { files } = await this.scanDir(dir, source);
++    return files;
++  }
++
+   /** 扫描单个目录下的 .md 文件和子目录中的 SKILL.md / AGENT.md / index.md */
+   private async scanDir(
+     dir: string,
+diff --git a/src/extension/types.ts b/src/extension/types.ts
+index f589090..74fc07b 100644
+--- a/src/extension/types.ts
++++ b/src/extension/types.ts
+@@ -5,8 +5,8 @@
+ 
+ import type { TrustManager } from "./trust.ts";
+ 
+-/** 扩展来源 */
+-export type ExtensionSource = "builtin" | "user" | "project";
++/** 扩展来源（managed = 企业策略层，最高优先级，P2-1） */
++export type ExtensionSource = "builtin" | "managed" | "user" | "project";
+ 
+ /** 扫描到的扩展文件（未解析 frontmatter） */
+ export interface ExtensionFile {
+@@ -66,4 +66,10 @@ export interface ScanOptions {
+   trustManager?: TrustManager;
+   /** 未信任文件回调（返回用户确认后的文件列表） */
+   onUntrusted?: (files: ParsedExtensionFile[]) => Promise<ParsedExtensionFile[]>;
++  /**
++   * P2-1：企业 managed 层目录候选（first-exists 全扫）。企业策略统一下发的扩展，
++   * 优先级最高——managed 扩展覆盖同名 user/project，且可标记为 locked（不被任何来源覆盖）。
++   * 未提供或 SID_CODE_DISABLE_POLICY_SKILLS=1 时不扫描 managed 层。
++   */
++  managedDirs?: string[];
+ }
+diff --git a/src/permission/checker.ts b/src/permission/checker.ts
+index 92ac21c..ffa3fa6 100644
+--- a/src/permission/checker.ts
++++ b/src/permission/checker.ts
+@@ -511,6 +511,11 @@ export class PermissionChecker implements Checker {
+     this.rules = this.ruleLoader.toPermissionRule();
+   }
+ 
++  /** 读取当前合并后的权限规则（P0-3：供 skill 元工具抽取 Skill(name) 规则）。 */
++  getRules(): PermissionRule | null {
++    return this.rules;
++  }
++
+   /** 设置权限规则（支持运行时更新，同步到 ruleLoader） */
+   setRules(rules: PermissionRule): void {
+     this.rules = rules;
+diff --git a/src/plugin/loadPluginSkills.ts b/src/plugin/loadPluginSkills.ts
+new file mode 100644
+index 0000000..c91e611
+--- /dev/null
++++ b/src/plugin/loadPluginSkills.ts
+@@ -0,0 +1,74 @@
++/**
++ * 插件 Skills 加载（P0-4：补齐缺失的 loadPluginSkills）
++ *
++ * 背景（缺口）：manifest.ts 把插件 skills/ 目录解析进了 LoadedPlugin.skillsPaths，
++ * command/plugin.ts 也显示"Skill(N 目录)"，但**没有任何 loader 从 skillsPaths 加载 skill**。
++ * 插件系统有 loadPluginCommands / loadPluginAgents / loadPluginHooks / loadPluginMcp，
++ * 唯独缺 loadPluginSkills——§18.10 插件带的 skills 加载不进来。
++ *
++ * 命名规则（对齐 CC {pluginName}:{skillName} + 现有 command 命名空间）：
++ *   skills/code-review/SKILL.md  → my-plugin:code-review
++ *
++ * 命名空间隔离：前缀在 SkillLoader.sanitizeName **之后**施加（buildNamespacedSkill），
++ * 绕开 sanitizeName 会把 `:` 替成 `-`、validateName 会拒 `:` 的问题。
++ */
++
++import { getLogger } from "../debug/logger.ts";
++import { memoize } from "../utils/memoize.ts";
++import { ExtensionLoader } from "../extension/loader.ts";
++import { SkillLoader } from "../skill/loader.ts";
++import type { SkillDefinition } from "../skill/types.ts";
++import { registerPluginCache } from "./caches.ts";
++import { loadAllPluginsCacheOnly } from "./loader.ts";
++import type { LoadedPlugin } from "./types.ts";
++
++/** 加载单个插件的所有 skills（施加 pluginName: 命名空间前缀） */
++export async function loadSkillsForPlugin(
++  plugin: LoadedPlugin,
++): Promise<SkillDefinition[]> {
++  const log = getLogger();
++  const extLoader = new ExtensionLoader();
++  const skillLoader = new SkillLoader(extLoader);
++  const out: SkillDefinition[] = [];
++
++  for (const dir of plugin.skillsPaths) {
++    let files;
++    try {
++      files = await extLoader.scanSingleDir(dir, "project");
++    } catch (err: any) {
++      log.warn("PLUGIN", `扫描插件 skills 目录失败 ${dir}: ${err?.message ?? String(err)}`);
++      continue;
++    }
++
++    for (const file of files) {
++      const skill = skillLoader.buildNamespacedSkill(file, plugin.name, "plugin");
++      if (skill) {
++        skill.source = "project";
++        out.push(skill);
++      }
++    }
++  }
++
++  return out;
++}
++
++/**
++ * 加载所有已启用插件的 skills（memoized）。
++ */
++export const getPluginSkills = memoize(async (): Promise<SkillDefinition[]> => {
++  const { enabled } = await loadAllPluginsCacheOnly();
++  const all: SkillDefinition[] = [];
++  for (const plugin of enabled) {
++    if (!plugin.skillsPaths || plugin.skillsPaths.length === 0) continue;
++    const skills = await loadSkillsForPlugin(plugin);
++    all.push(...skills);
++  }
++  if (all.length > 0) {
++    getLogger().info("PLUGIN", `加载了 ${all.length} 个插件 Skill`, {
++      names: all.map((s) => s.name),
++    });
++  }
++  return all;
++});
++
++registerPluginCache(getPluginSkills.clear);
+diff --git a/src/query/engine.ts b/src/query/engine.ts
+index 70662b5..bf8420f 100644
+--- a/src/query/engine.ts
++++ b/src/query/engine.ts
+@@ -47,6 +47,8 @@ export interface QueryEngineDeps {
+   budgetTracker?: BudgetTracker;
+   /** B2：会话持久化写入端（增量写入 user/assistant/tool_result 消息）。可选——未注入则不持久化 */
+   sessionStore?: import("../session/store.ts").SessionStore;
++  /** P1-2/P2-2/P3-2：Skill 运行时激活协调器（条件激活 + 动态发现 + 增量 listing）。可选。 */
++  skillActivationCoordinator?: import("../skill/activation-coordinator.ts").SkillActivationCoordinator;
+   /** 执行工具调用（含权限检查）。返回 results + 可选 followup（ADR-019） */
+   executeTools: (content: ContentBlock[]) => Promise<{ results: ContentBlock[]; followup?: ContentBlock[] }>;
+   /** 处理流式响应。onThinking 对标 Claude Code 的独立思考流通道 */
+@@ -297,6 +299,13 @@ export class QueryEngine {
+             return notes.map(n => `[Hook: ${n.hookName}]\n${n.error}`);
+           }
+         : undefined,
++      // P1-2/P2-2/P3-2：skill 激活协调器转发（条件激活/动态发现 + 增量 listing）
++      onSkillToolResults: this.deps.skillActivationCoordinator
++        ? (toolInputs) => this.deps.skillActivationCoordinator!.onToolResults(toolInputs)
++        : undefined,
++      drainSkillListingDelta: this.deps.skillActivationCoordinator
++        ? () => this.deps.skillActivationCoordinator!.drainListingDelta()
++        : undefined,
+       // /goal：目标驱动持续执行——转发到 queryLoop deps
+       getGoalState: this.deps.getGoalState,
+       updateGoalState: this.deps.updateGoalState,
+diff --git a/src/query/loop.ts b/src/query/loop.ts
+index a55e7ed..cb7fa12 100644
+--- a/src/query/loop.ts
++++ b/src/query/loop.ts
+@@ -867,6 +867,17 @@ export async function* queryLoop(
+       }
+     }
+ 
++    // P3-2：Skill 增量 listing 注入（首轮全量、后续只增量已激活的条件/动态 skill）。
++    // 走 reminderParts（user 消息，cache-friendly），不碰 system prompt 静态前缀 → 不击穿 prompt cache。
++    if (deps.drainSkillListingDelta) {
++      try {
++        const skillDelta = deps.drainSkillListingDelta();
++        if (skillDelta) reminderParts.push(skillDelta);
++      } catch (e) {
++        log.warn("QUERY_LOOP", `skill 增量 listing 注入异常（忽略）: ${e instanceof Error ? e.message : String(e)}`);
++      }
++    }
++
+     if (reminderParts.length > 0) {
+       // 注入逻辑抽到 reminder-inject.ts（纯函数，便于单测）。
+       // 关键：纯 tool_result 轮（plan 探索高频场景）无 text block 时会追加 text block，
+@@ -2464,6 +2475,15 @@ export async function* queryLoop(
+       // 内部按双阈值决定是否真正提取，未达阈值/进行中则直接跳过，不阻塞主循环）。
+       deps.updateSessionMemory?.().catch(() => { /* 提取失败不阻断主循环 */ });
+ 
++      // P1-2/P2-2：本轮工具输入喂给 skill 激活协调器（条件激活 + 动态发现）。
++      // 新激活/发现的 skill 会在下一轮开始经 drainSkillListingDelta → reminderParts 增量注入。
++      if (deps.onSkillToolResults) {
++        const toolInputs = toolBlocks
++          .filter((b) => b.type === "tool_use")
++          .map((b) => (b as import("../llm/types.ts").ToolUseBlock).input);
++        deps.onSkillToolResults(toolInputs).catch(() => { /* 激活失败不阻断主循环 */ });
++      }
++
+       // ─── 方向 2/4/6：无进展只读命令重复检测 + git-status 刷新止损阀 ───
+       // 根因（根因分析-commit任务git状态快照冻结死循环.md）：git-status 快照冻结进 system
+       // prompt 整会话不刷新，任务完成后模型被"快照说脏/实时说净"的矛盾锁死，反复空跑
+diff --git a/src/query/types.ts b/src/query/types.ts
+index 221bb1c..9d332af 100644
+--- a/src/query/types.ts
++++ b/src/query/types.ts
+@@ -479,6 +479,14 @@ export interface QueryDeps {
+    * 内部维护 rewake 队列，无待处理通知时返回空数组。可选——未注入则不回灌 async hook 反馈。
+    */
+   drainAsyncHookRewakes?: () => string[];
++  /**
++   * P1-2/P2-2/P3-2：Skill 运行时激活协调。每轮工具执行后调用 onSkillToolResults 喂入工具
++   * 输入（条件激活 + 动态发现）；每轮开始调用 drainSkillListingDelta 取增量 skill 摘要
++   * （首轮全量、后续只增量），由 loop 经 reminderParts 注入（cache-friendly）。
++   * 可选——未注入则 skill 激活/增量 listing 不生效（向后兼容）。
++   */
++  onSkillToolResults?: (toolInputs: unknown[]) => Promise<void>;
++  drainSkillListingDelta?: () => string | null;
+   /**
+    * Trace 事件写入（Goal Gate、评估器等关键决策写入结构化事件到 events.jsonl）。
+    * 可选——未注入则不写 trace 事件。
+diff --git a/src/skill/activation-coordinator.ts b/src/skill/activation-coordinator.ts
+new file mode 100644
+index 0000000..5bafdcc
+--- /dev/null
++++ b/src/skill/activation-coordinator.ts
+@@ -0,0 +1,189 @@
++/**
++ * Skill 运行时激活协调器（P1-2 条件激活 + P2-2 动态发现 + P3-2 增量 listing）
++ *
++ * 把三个此前的死模块接成一条链，挂到 query loop 的工具调用后回调：
++ *
++ *   工具调用（write/edit/read/glob/...）产生受影响文件路径
++ *     │
++ *     ├─ P1-2 ConditionalSkillStore.activateForPaths(paths)
++ *     │      带 paths frontmatter 的 skill，路径匹配则激活（gate 解除 → 进 listing）
++ *     │
++ *     └─ P2-2 discoverSkillDirsForPaths(paths)
++ *            沿目录链找 .sid-code/skills/ 子目录，发现新 skill 目录则加载其中 skill
++ *     │
++ *     ▼
++ *   新激活/新发现的 skill 名 → drainNewlyActivated()
++ *     由 query loop 经 reminderParts 增量注入（P3-2，cache-friendly：走 user reminder，
++ *     不碰 system prompt 静态前缀，不击穿 prompt cache）。
++ *
++ * 线程模型：单会话内串行调用 onToolResults（query loop 每轮工具执行后一次），无并发。
++ */
++
++import { getLogger } from "../debug/logger.ts";
++import type { SkillManager } from "./manager.ts";
++import type { SkillDefinition } from "./types.ts";
++import { ConditionalSkillStore } from "./conditional.ts";
++import { extractAffectedPaths, discoverSkillDirsForPaths } from "./dynamic-discovery.ts";
++
++export interface ActivationCoordinatorOptions {
++  manager: SkillManager;
++  /** 工作目录（动态发现的边界 + 条件路径匹配的基准） */
++  cwd: string;
++  /** 是否启用动态发现（P2-2）。默认 true。 */
++  enableDynamicDiscovery?: boolean;
++}
++
++export class SkillActivationCoordinator {
++  private manager: SkillManager;
++  private cwd: string;
++  private enableDynamic: boolean;
++  private conditional = new ConditionalSkillStore();
++  /** 动态发现已扫过的 skills 目录（去重，避免重复加载） */
++  private discoveredDirs = new Set<string>();
++  /** 待增量注入 listing 的新激活 skill 名（drain 后清空） */
++  private pendingActivated: string[] = [];
++  /** P3-2：已发送进 listing 的 skill 名（小写），用于首轮全量 + 后续增量去重 */
++  private sentSkillNames = new Set<string>();
++
++  constructor(opts: ActivationCoordinatorOptions) {
++    this.manager = opts.manager;
++    this.cwd = opts.cwd;
++    this.enableDynamic = opts.enableDynamicDiscovery ?? true;
++  }
++
++  /**
++   * 初始化：把带 paths 的条件 skill 分离出来并 gate（从初始 listing 隐藏）。
++   * 无条件 skill 保持可见。返回被 gate 的条件 skill 名（用于日志/测试）。
++   */
++  init(allSkills: SkillDefinition[]): string[] {
++    const unconditional = this.conditional.separate(allSkills);
++    const gatedNames = allSkills
++      .filter((s) => !unconditional.includes(s))
++      .map((s) => s.name);
++    this.manager.setGatedSkills(gatedNames);
++    if (gatedNames.length > 0) {
++      getLogger().info("SKILL", `${gatedNames.length} 个条件激活 skill 待触发: ${gatedNames.join(", ")}`);
++    }
++    return gatedNames;
++  }
++
++  /**
++   * query loop 每轮工具执行后调用：从工具输入提取受影响路径，
++   * 跑条件激活 + 动态发现，累积新激活 skill 名到 pendingActivated。
++   *
++   * @param toolInputs 本轮各工具的 input 对象数组
++   */
++  async onToolResults(toolInputs: unknown[]): Promise<void> {
++    if (toolInputs.length === 0) return;
++
++    // 汇集本轮所有受影响文件路径
++    const paths: string[] = [];
++    for (const input of toolInputs) {
++      paths.push(...extractAffectedPaths(input));
++    }
++    if (paths.length === 0) return;
++
++    // ── P1-2：条件激活 ──
++    try {
++      const activated = this.conditional.activateForPaths(paths, this.cwd);
++      for (const name of activated) {
++        this.manager.ungateSkill(name);
++        this.pendingActivated.push(name);
++      }
++    } catch (err) {
++      getLogger().warn("SKILL", `条件激活异常（忽略）: ${err instanceof Error ? err.message : String(err)}`);
++    }
++
++    // ── P2-2：动态发现 ──
++    if (this.enableDynamic) {
++      try {
++        const newDirs = discoverSkillDirsForPaths(paths, this.cwd, this.discoveredDirs);
++        for (const dir of newDirs) this.discoveredDirs.add(dir);
++        if (newDirs.length > 0) {
++          await this.loadDiscoveredDirs(newDirs);
++        }
++      } catch (err) {
++        getLogger().warn("SKILL", `动态发现异常（忽略）: ${err instanceof Error ? err.message : String(err)}`);
++      }
++    }
++  }
++
++  /** 加载动态发现的 skills 目录，新 skill 追加进 manager 并标记待注入。 */
++  private async loadDiscoveredDirs(dirs: string[]): Promise<void> {
++    const { ExtensionLoader } = await import("../extension/loader.ts");
++    const { SkillLoader } = await import("./loader.ts");
++    const extLoader = new ExtensionLoader();
++    const skillLoader = new SkillLoader(extLoader);
++    const newSkills: SkillDefinition[] = [];
++
++    for (const dir of dirs) {
++      let files;
++      try {
++        files = await extLoader.scanSingleDir(dir, "project");
++      } catch {
++        continue;
++      }
++      for (const file of files) {
++        // 动态发现的 skill 无命名空间前缀（本地项目 skill），但已存在同名则跳过
++        const skill = skillLoader.buildNamespacedSkill(file, "", "skills");
++        if (skill && !this.manager.getSkill(skill.name)) {
++          newSkills.push(skill);
++        }
++      }
++    }
++
++    if (newSkills.length > 0) {
++      this.manager.addPluginSkills(newSkills); // 复用 precedence 追加逻辑
++      for (const s of newSkills) {
++        if (!s.disableModelInvocation) this.pendingActivated.push(s.name);
++      }
++      getLogger().info("SKILL", `动态发现 ${newSkills.length} 个 skill: ${newSkills.map((s) => s.name).join(", ")}`);
++    }
++  }
++
++  /**
++   * P3-2：排空待注入的 skill 摘要（增量）。query loop 每轮开始调用一次。
++   *
++   * - 首轮（sentSkillNames 为空）：返回全部可 listing 的 skill（全量）。
++   * - 后续轮：只返回**新激活/新发现**且尚未发送过的 skill（增量）。
++   *
++   * 返回的文本块由 loop 放进 reminderParts（user 消息，cache-friendly），
++   * 不写进 system prompt 静态前缀，避免击穿 prompt cache。
++   *
++   * @returns system-reminder 文本块；无新增时返回 null。
++   */
++  drainListingDelta(): string | null {
++    const listable = this.manager.getListableSkills();
++
++    let toSend: SkillDefinition[];
++    if (this.sentSkillNames.size === 0) {
++      // 首轮全量
++      toSend = listable;
++    } else {
++      // 增量：只发新激活且未发送过的
++      const pendingSet = new Set(this.pendingActivated.map((n) => n.toLowerCase()));
++      toSend = listable.filter(
++        (s) => pendingSet.has(s.name.toLowerCase()) && !this.sentSkillNames.has(s.name.toLowerCase()),
++      );
++    }
++
++    // 清空 pending（无论首轮还是增量，都已消费）
++    this.pendingActivated = [];
++
++    if (toSend.length === 0) return null;
++
++    for (const s of toSend) this.sentSkillNames.add(s.name.toLowerCase());
++
++    const lines = toSend.map((s) => `- ${s.name}: ${(s.whenToUse || s.description || "").trim()}`);
++    const isFirst = this.sentSkillNames.size === toSend.length;
++    const header = isFirst
++      ? "以下 Skill 现可通过 Skill 工具调用："
++      : "以下 Skill 因你的文件操作已被激活，现可通过 Skill 工具调用：";
++    return `<system-reminder>\n${header}\n${lines.join("\n")}\n</system-reminder>`;
++  }
++
++  /** 测试/诊断用：已发送 listing 的 skill 名快照。 */
++  getSentNames(): string[] {
++    return [...this.sentSkillNames];
++  }
++}
+diff --git a/src/skill/executor.ts b/src/skill/executor.ts
+new file mode 100644
+index 0000000..34e27fa
+--- /dev/null
++++ b/src/skill/executor.ts
+@@ -0,0 +1,242 @@
++/**
++ * Skill 执行共享内核（P0-1/P0-2/P0-3/P1-1 汇合点）
++ *
++ * 背景：skill 有两条调用路径——模型路径（SkillMetaTool.execute）与用户斜杠路径
++ * （SkillCommand.execute）。P0-2（生命周期 hooks）、P0-3（权限判定）、P1-1（effort/agent
++ * 透传）三项能力两条路径都要接。若各写一份必然漂移，故抽到本模块统一：
++ *
++ *   authorizeSkill()      —— P0-3：执行前权限判定（deny/ask/allow）
++ *   registerSkillLifecycleHooks() —— P0-2：授权通过后注册 frontmatter hooks（先权限后 hooks）
++ *   buildDelegateTask()   —— P1-1：把 SkillDefinition 归一成 CustomSubAgentTask（effort/agent 透传）
++ *
++ * 顺序铁律（对齐 §18 P0-3 实施方案第 4 点）：先权限判定，通过后再注册 hooks + 执行。
++ * 避免被 deny 的 skill 已经注册了 hooks 污染后续工具调用。
++ */
++
++import { getLogger } from "../debug/logger.ts";
++import type { SkillDefinition } from "./types.ts";
++import type { HookSystem } from "../hook/system.ts";
++import type { Checker, PermissionRule } from "../permission/types.ts";
++import { checkSkillPermission, type SkillPermissionRules } from "./permission.ts";
++import { registerSkillHooks } from "./hooks.ts";
++
++/** 授权结果 */
++export interface SkillAuthResult {
++  decision: "allow" | "deny" | "ask";
++  /** deny/ask 时的说明 */
++  reason?: string;
++}
++
++/**
++ * P0-3：skill 执行前权限判定。
++ *
++ * 两级判定合流：
++ *   1. skill 自身安全模型（checkSkillPermission）：敏感属性（hooks/allowedTools/shell/agent/
++ *      effort/maxTurns/timeoutMins）触发 ask；MCP 来源带敏感属性强制 ask；仅安全属性 allow。
++ *   2. 统一权限规则（permissions.allow/deny/ask 里的 `Skill(<name>)` 形态，与工具规则同源）：
++ *      deny 命中即拒；allow 命中即放行；ask 命中升级确认。
++ *
++ * 优先级：统一规则的 deny 最高（安全护栏，allow 永不越过 deny）；其次 skill 安全模型；
++ * 二者任一要求 ask 即 ask。fail-open：判定异常时回退 allow（不阻断既有行为），仅告警。
++ */
++export function authorizeSkill(
++  skill: SkillDefinition,
++  opts: {
++    /** 统一权限规则（来自 config permissions，含 Skill(name) 规则） */
++    permissionRules?: PermissionRule;
++  } = {},
++): SkillAuthResult {
++  const log = getLogger();
++  try {
++    // 从统一权限规则里抽取 skill 相关规则（Skill(<name>) / Skill / skill:<name>）
++    const skillRules = extractSkillRules(skill.name, opts.permissionRules);
++
++    const decision = checkSkillPermission(skill, skillRules);
++    if (decision === "deny") {
++      return { decision: "deny", reason: `Skill "${skill.name}" 被权限规则拒绝` };
++    }
++    if (decision === "ask") {
++      return {
++        decision: "ask",
++        reason: `Skill "${skill.name}" 含敏感能力（hooks/allowedTools/shell 等）或来自 MCP，需确认`,
++      };
++    }
++    return { decision: "allow" };
++  } catch (err) {
++    // fail-open：权限判定本身出错不阻断 skill（与既有"未接权限=直接放行"行为一致），仅告警
++    log.warn(
++      "SKILL",
++      `skill 权限判定异常（fail-open 放行）: ${err instanceof Error ? err.message : String(err)}`,
++    );
++    return { decision: "allow" };
++  }
++}
++
++/**
++ * 从统一权限规则（permissions.allow/deny/ask）里抽取 skill 相关规则，
++ * 转成 checkSkillPermission 认识的 { allow, deny } 形态。
++ *
++ * 识别形态（大小写不敏感的工具名）：
++ *   - "Skill(<name>)" / "skill(<name>)" —— 精确 skill 名
++ *   - "Skill" / "skill" —— 通配全部 skill（无括号）
++ *   - "Skill(*)" —— 显式全通配
++ *   - "skill:<name>" —— checkSkillPermission 已支持的前缀写法（透传）
++ */
++function extractSkillRules(
++  skillName: string,
++  rules?: PermissionRule,
++): SkillPermissionRules {
++  if (!rules) return {};
++  const out: SkillPermissionRules = { allow: [], deny: [] };
++
++  const collect = (list: string[] | undefined, into: string[]) => {
++    if (!list) return;
++    for (const raw of list) {
++      const rule = raw.trim();
++      // Skill(<arg>) 形态
++      const m = rule.match(/^([A-Za-z_]+)(?:\(([^)]*)\))?$/);
++      if (m) {
++        const tool = m[1].toLowerCase();
++        if (tool === "skill") {
++          const arg = m[2];
++          // 无括号 or (*) → 全通配；(name) → 精确名
++          if (arg === undefined || arg === "" || arg === "*") {
++            into.push("*");
++          } else if (arg.toLowerCase() === skillName.toLowerCase()) {
++            into.push(skillName);
++          }
++          continue;
++        }
++      }
++      // skill:<name> 前缀写法（checkSkillPermission matchesRule 直接认）
++      if (rule.toLowerCase() === `skill:${skillName.toLowerCase()}`) {
++        into.push(`skill:${skillName}`);
++      }
++    }
++  };
++
++  collect(rules.deny, out.deny!);
++  collect(rules.allow, out.allow!);
++  return out;
++}
++
++/**
++ * P0-3：把 authorizeSkill 的 ask 决策落到实际的用户确认。
++ *
++ * @param checker 权限检查器（主会话注入；子代理路径用 dontAsk 语义的 subChecker，ask→deny）
++ * @param confirm 直接确认回调（用户斜杠路径可用主会话弹窗）
++ * @returns true=放行，false=用户拒绝/无通道拒绝
++ */
++export async function resolveSkillAsk(
++  skill: SkillDefinition,
++  reason: string,
++  opts: {
++    checker?: Checker | null;
++    confirm?: (desc: string) => Promise<boolean>;
++  },
++): Promise<boolean> {
++  const log = getLogger();
++  const desc = `执行 Skill "${skill.name}"？${reason}`;
++
++  // 优先用直接确认回调（用户斜杠路径）
++  if (opts.confirm) {
++    try {
++      return await opts.confirm(desc);
++    } catch (err) {
++      log.warn("SKILL", `skill 确认回调异常，保守拒绝: ${err instanceof Error ? err.message : String(err)}`);
++      return false;
++    }
++  }
++
++  // 其次走 checker 的 ask 通道
++  if (opts.checker) {
++    try {
++      const decision = await opts.checker.check({
++        toolName: `Skill(${skill.name})`,
++        input: {},
++        description: desc,
++      });
++      // 子代理 subChecker 语义：ask→deny，needsConfirmation 视为拒绝
++      return decision.allowed === true;
++    } catch (err) {
++      log.warn("SKILL", `skill 权限 checker 异常，保守拒绝: ${err instanceof Error ? err.message : String(err)}`);
++      return false;
++    }
++  }
++
++  // 无任何确认通道：保守拒绝（ask 不能静默放行）
++  log.warn("SKILL", `skill "${skill.name}" 需确认但无确认通道，拒绝执行`);
++  return false;
++}
++
++/**
++ * P0-2：授权通过后注册 skill 声明的生命周期 hooks。
++ *
++ * 安全：MCP 来源 skill（loadedFrom="mcp"）禁止注册 hooks（远程来源不可信，能执行任意 shell）。
++ * @returns 成功注册的 hook 数量（0 表示无 hooks / 被拒 / 无 hookSystem）
++ */
++export function registerSkillLifecycleHooks(
++  skill: SkillDefinition,
++  hookSystem: HookSystem | undefined,
++): number {
++  if (!hookSystem) return 0;
++  if (!skill.hooks || Object.keys(skill.hooks).length === 0) return 0;
++
++  // 安全铁律：MCP 来源禁止注册 hooks
++  if (skill.loadedFrom === "mcp") {
++    getLogger().warn(
++      "SKILL",
++      `MCP 来源 skill "${skill.name}" 声明了 hooks，出于安全已拒绝注册`,
++    );
++    return 0;
++  }
++
++  return registerSkillHooks(hookSystem, skill.name, skill.hooks, skill.skillRoot);
++}
++
++/**
++ * P1-1：归一化 skill 的 effort 字段。
++ *
++ * loader 解析出的 effort 是任意字符串（frontmatter 原样）。这里收敛到 CustomSubAgentTask
++ * 认识的 5 档（low/medium/high/xhigh/max）；非法值 fail-open 返回 undefined（子代理默认不思考）。
++ */
++export function normalizeSkillEffort(
++  raw: string | undefined,
++): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
++  if (!raw) return undefined;
++  const v = raw.trim().toLowerCase();
++  if (v === "low" || v === "medium" || v === "high" || v === "xhigh" || v === "max") {
++    return v;
++  }
++  getLogger().warn("SKILL", `skill effort 值非法（忽略）: ${raw}`);
++  return undefined;
++}
++
++/**
++ * P1-1：解析 skill.agent（fork 时用哪个 agent 类型）。
++ *
++ * 校验该 agent 类型存在于 registry；不存在则告警回退 undefined（调用方用 skill:<name>）。
++ * fail-open：解析异常不 spawn 失败。
++ */
++export async function resolveSkillAgentType(
++  agent: string | undefined,
++  skillName: string,
++): Promise<string | undefined> {
++  if (!agent || !agent.trim()) return undefined;
++  const type = agent.trim();
++  try {
++    const { resolveAgent, getActiveAgentTypes } = await import("../agent/agent-definition.ts");
++    if (resolveAgent(type)) return type;
++    getLogger().warn(
++      "SKILL",
++      `skill "${skillName}" 声明的 agent 类型 "${type}" 不存在（可用: ${getActiveAgentTypes().join(", ")}），回退 skill:${skillName}`,
++    );
++    return undefined;
++  } catch (err) {
++    getLogger().warn(
++      "SKILL",
++      `解析 skill agent 类型失败（回退）: ${err instanceof Error ? err.message : String(err)}`,
++    );
++    return undefined;
++  }
++}
+diff --git a/src/skill/loader.ts b/src/skill/loader.ts
+index 438dbb8..ce21c9e 100644
+--- a/src/skill/loader.ts
++++ b/src/skill/loader.ts
+@@ -48,10 +48,17 @@ export class SkillLoader {
+     scanOptions?: ScanOptions,
+   ): Promise<SkillDefinition[]> {
+     const log = getLogger();
++    // P2-1：默认注入企业 managed skills 目录候选（调用方未显式指定时）。
++    // managed 层最高优先级，覆盖同名 user/project；SID_CODE_DISABLE_POLICY_SKILLS=1 时 loader 内部跳过。
++    const { sidPaths } = await import("../config/paths.ts");
++    const effectiveOptions: ScanOptions = {
++      ...scanOptions,
++      managedDirs: scanOptions?.managedDirs ?? sidPaths.managedExtensionDirs("skills"),
++    };
+     const files = await this.extensionLoader.scan(
+       "skills",
+       projectDir,
+-      scanOptions,
++      effectiveOptions,
+     );
+     const skills: SkillDefinition[] = [];
+ 
+@@ -74,6 +81,28 @@ export class SkillLoader {
+     return skills;
+   }
+ 
++  /**
++   * P0-4：把一个已解析的扩展文件转成 SkillDefinition，并施加命名空间前缀。
++   *
++   * 插件 skills 复用此入口：先走标准 buildSkillDefinition（frontmatter 解析、校验），
++   * 再把 name 改写为 `<prefix>:<name>`。关键——前缀在 sanitize 之后施加，绕开
++   * sanitizeName 会把 `:` 替成 `-`、validateName 会拒 `:` 的问题（否则命名空间被破坏）。
++   *
++   * @param prefix 命名空间前缀（如插件名）；空则等价于 buildSkillDefinition
++   * @param loadedFrom 覆盖 loadedFrom（插件传 "plugin"）
++   */
++  buildNamespacedSkill(
++    file: ParsedExtensionFile,
++    prefix: string,
++    loadedFrom?: SkillDefinition["loadedFrom"],
++  ): SkillDefinition | null {
++    const skill = this.buildSkillDefinition(file);
++    if (!skill) return null;
++    if (prefix) skill.name = `${prefix}:${skill.name}`;
++    if (loadedFrom) skill.loadedFrom = loadedFrom;
++    return skill;
++  }
++
+   /**
+    * 把一个已解析的扩展文件（frontmatter + body）转成 SkillDefinition。
+    * 磁盘扫描与嵌入回退两条路径共用此逻辑，保证两种来源的解析结果一致。
+@@ -153,7 +182,9 @@ export class SkillLoader {
+       name: sanitizedName,
+       description,
+       allowedTools,
+-      whenToUse: fm["when-to-use"] as string ?? fm["whenToUse"] as string,
++      // P1-3 变量/字段兼容：CC 权威字段是 when_to_use（下划线，frontmatterParser.ts），
++      // sid 原生用 when-to-use/whenToUse。三写法兼容，避免从 CC 迁移的 skill 静默丢 whenToUse。
++      whenToUse: (fm["when_to_use"] as string) ?? (fm["when-to-use"] as string) ?? (fm["whenToUse"] as string),
+       argumentHint: fm["argument-hint"] as string ?? fm["argumentHint"] as string,
+       model: fm.model as string,
+       disableModelInvocation: fm["disable-model-invocation"] === true || fm["disableModelInvocation"] === true,
+@@ -163,7 +194,7 @@ export class SkillLoader {
+       timeoutMins,
+       prompt: file.body,
+       source: file.source,
+-      loadedFrom: file.source === "builtin" ? "builtin" : "skills",
++      loadedFrom: file.source === "builtin" ? "builtin" : file.source === "managed" ? "managed" : "skills",
+       filePath: file.filePath,
+       skillRoot,
+       userInvocable,
+diff --git a/src/skill/manager.ts b/src/skill/manager.ts
+index b05bdea..c6ad965 100644
+--- a/src/skill/manager.ts
++++ b/src/skill/manager.ts
+@@ -101,6 +101,46 @@ export class SkillManager {
+     this.skills = Array.from(skillMap.values());
+   }
+ 
++  /**
++   * P0-4：追加插件 skills（命名空间前缀 pluginName:skillName 天然避免与内置/用户冲突）。
++   * 在 discover 之后调用。同名走标准 precedence（后者覆盖），但前缀隔离下几乎不会同名。
++   */
++  addPluginSkills(pluginSkills: SkillDefinition[]): void {
++    if (pluginSkills.length === 0) return;
++    this.addSkillsWithPrecedence(pluginSkills);
++    getLogger().info("SKILL", `追加 ${pluginSkills.length} 个插件 Skill`);
++  }
++
++  // ===== P1-2/P2-2：条件激活门控（gated skill 从模型 listing 隐藏，直到被激活）=====
++
++  /** gated skill 名（小写）：已加载但尚未在模型 listing 中暴露（条件激活/动态发现前） */
++  private gatedSkillNames = new Set<string>();
++
++  /** 设置 gated 集合（覆盖式）。条件激活 skill 初始化时全部 gate。 */
++  setGatedSkills(names: string[]): void {
++    this.gatedSkillNames = new Set(names.map((n) => n.toLowerCase()));
++  }
++
++  /** 解除某个 skill 的 gate（激活后从 listing 隐藏 → 暴露）。 */
++  ungateSkill(name: string): void {
++    this.gatedSkillNames.delete(name.toLowerCase());
++  }
++
++  /** 该 skill 是否被 gate（隐藏于模型 listing）。 */
++  isGated(name: string): boolean {
++    return this.gatedSkillNames.has(name.toLowerCase());
++  }
++
++  /**
++   * 获取应进入模型 listing 的 skill（P1-2/P3-2）：
++   * 已启用 + 未禁模型调用 + 未被 gate（条件激活未触发的 skill 不进初始 listing）。
++   */
++  getListableSkills(): SkillDefinition[] {
++    return this.skills.filter(
++      (s) => !s.disabled && !s.disableModelInvocation && !this.isGated(s.name),
++    );
++  }
++
+   /**
+    * 获取所有已启用的 Skill
+    */
+diff --git a/src/skill/meta-tool.ts b/src/skill/meta-tool.ts
+new file mode 100644
+index 0000000..1ae619e
+--- /dev/null
++++ b/src/skill/meta-tool.ts
+@@ -0,0 +1,288 @@
++/**
++ * 单一 Skill 元工具（P0-1 核心架构对齐）
++ *
++ * 背景（缺口）：此前每个 skill 注册一个独立 `skill__<name>` 工具（tool.ts），导致：
++ *   1. 工具池膨胀（N skill = N 工具定义常驻首轮上下文，靠 MAX_SKILLS=50 硬顶）
++ *   2. 信息重复（N 个工具 description + 一份 skill 摘要 listing，同信息进两次上下文）
++ *   3. 两层发现失效（skill 工具未声明 shouldDefer，"按需调出"从未发生）
++ *
++ * CC 做法：全局只有一个 `Skill` 工具，input_schema = { skill, args? }，按名字分发。
++ * 摘要 listing 常驻 system prompt 供发现；模型按名调用唯一元工具执行。工具数不随 skill 增长。
++ *
++ * 本工具是 skill 模型调用路径的唯一入口，汇合：
++ *   - P0-3 权限判定（authorizeSkill / resolveSkillAsk，子代理 checker 语义 ask→deny）
++ *   - P0-2 生命周期 hooks 注册（registerSkillLifecycleHooks，先权限后 hooks）
++ *   - P1-1 effort/agent 透传（buildDelegateTask）
++ *   - P3-1 args 参数用通用说明，不塞 argumentHint（argument-hint 只给用户 slash 补全）
++ */
++
++import type { LegacyTool as Tool, LegacyToolResult as ToolResult } from "../tool/types.ts";
++import type { ProviderRegistry } from "../llm/registry.ts";
++import type { Registry as ToolRegistry } from "../tool/registry.ts";
++import type { HookSystem } from "../hook/system.ts";
++import type { Checker, PermissionRule } from "../permission/types.ts";
++import type { SkillDefinition } from "./types.ts";
++import type { SkillManager } from "./manager.ts";
++import { SubAgent } from "../agent/sub-agent.ts";
++import { getLogger } from "../debug/logger.ts";
++import { scanSkillResources } from "./resources.ts";
++import {
++  authorizeSkill,
++  resolveSkillAsk,
++  registerSkillLifecycleHooks,
++  normalizeSkillEffort,
++  resolveSkillAgentType,
++} from "./executor.ts";
++import { z } from "zod/v4";
++
++/** 元工具名（对齐 CC 的 SKILL_TOOL_NAME='Skill'） */
++export const SKILL_TOOL_NAME = "Skill";
++
++/**
++ * 元工具输入 schema：{ skill: string, args?: string }。
++ * P3-1：args 用通用说明，不塞任何单个 skill 的 argumentHint（那是给用户 slash 补全的）。
++ */
++const metaSchema = z.object({
++  skill: z.string().describe("要调用的 Skill 名称（见 system prompt 的 Skill 摘要列表）"),
++  args: z.string().optional().describe("传递给 Skill 的输入参数（可选）"),
++});
++
++export class SkillMetaTool implements Tool {
++  readonly zodSchema = metaSchema;
++
++  private manager: SkillManager;
++  private providerRegistry: ProviderRegistry;
++  private toolRegistry: ToolRegistry;
++  private hookSystem?: HookSystem;
++  private permissionChecker?: Checker;
++  private permissionRules?: PermissionRule;
++
++  constructor(
++    manager: SkillManager,
++    providerRegistry: ProviderRegistry,
++    toolRegistry: ToolRegistry,
++  ) {
++    this.manager = manager;
++    this.providerRegistry = providerRegistry;
++    this.toolRegistry = toolRegistry;
++  }
++
++  /** P0-2：注入 HookSystem（setter 回填，仿 app.ts wireToolHookSystem） */
++  setHookSystem(hookSystem: HookSystem): void {
++    this.hookSystem = hookSystem;
++  }
++
++  /** P0-3：注入权限检查器（子代理 dontAsk 语义，由主会话回填） */
++  setPermissionChecker(checker: Checker): void {
++    this.permissionChecker = checker;
++  }
++
++  /** P0-3：注入统一权限规则（含 Skill(name) 规则），由 cli 回填 */
++  setPermissionRules(rules: PermissionRule): void {
++    this.permissionRules = rules;
++  }
++
++  name(): string {
++    return SKILL_TOOL_NAME;
++  }
++
++  description(): string {
++    return (
++      "调用一个可用的 Skill（专业能力包）。可用 Skill 及其用途见 system prompt 的" +
++      " Skill 摘要列表。按 skill 名称调用，args 传入参数。"
++    );
++  }
++
++  inputSchema(): Record<string, unknown> {
++    return z.toJSONSchema(this.zodSchema) as Record<string, unknown>;
++  }
++
++  readOnly(): boolean {
++    // 元工具是否只读取决于被调用的 skill——保守起见声明为非只读（skill 可能 write/edit/bash）。
++    // 具体 skill 的写能力由其 allowedTools + 子代理内权限判定把控。
++    return false;
++  }
++
++  /**
++   * P0-1 + P3-2：导出可被模型调用的 skill 摘要条目，供 system prompt 的常驻 skill listing 使用。
++   *
++   * 数据源从 SkillManager 取（此前来自各 SkillTool 实例，现工具收敛为单一元工具）。
++   * disableModelInvocation / disabled 的 skill 不进模型 listing（模型看到也调不了）。
++   */
++  getListingEntries(): import("./budget.ts").SkillListingEntry[] {
++    // P1-2/P3-2：只列可 listing 的 skill（排除被 gate 的条件激活 skill）。
++    // 条件 skill 激活后由 SkillActivationCoordinator 经 reminder 增量注入，不进静态 system prompt。
++    return this.manager
++      .getListableSkills()
++      .map((s) => ({
++        name: s.name,
++        description: s.description,
++        whenToUse: s.whenToUse,
++        isBundled: s.loadedFrom === "bundled" || s.isBuiltin === true,
++      }));
++  }
++
++  async execute(input: unknown, signal?: AbortSignal): Promise<ToolResult> {
++    const log = getLogger();
++    const params = input as { skill?: string; args?: string };
++    const skillName = (params.skill || "").trim();
++    const userInput = params.args || "";
++
++    if (!skillName) {
++      return { output: "错误：必须指定 skill 名称。", isError: true };
++    }
++
++    // 按名分发（不区分大小写）
++    const skill = this.manager.getSkill(skillName);
++    if (!skill) {
++      const available = this.manager
++        .getSkills()
++        .filter((s) => !s.disableModelInvocation)
++        .map((s) => s.name);
++      return {
++        output: `错误：未知 Skill "${skillName}"。可用: ${available.join(", ") || "（无）"}`,
++        isError: true,
++      };
++    }
++
++    // disableModelInvocation 的 skill 经元工具调用被拒（但仍在用户 / 列表）
++    if (skill.disableModelInvocation) {
++      return {
++        output: `错误：Skill "${skill.name}" 已禁止模型自动调用（仅可用户通过 /${skill.name} 触发）。`,
++        isError: true,
++      };
++    }
++
++    if (skill.disabled) {
++      return { output: `错误：Skill "${skill.name}" 已被禁用。`, isError: true };
++    }
++
++    // ── P0-3：权限判定（先于 hooks 注册与执行）──
++    const auth = authorizeSkill(skill, { permissionRules: this.permissionRules });
++    if (auth.decision === "deny") {
++      log.warn("SKILL", `skill "${skill.name}" 被权限拒绝`);
++      return { output: `权限拒绝：${auth.reason ?? skill.name}`, isError: true };
++    }
++    if (auth.decision === "ask") {
++      // 模型路径用子代理 checker（dontAsk 语义：ask→deny）
++      const allowed = await resolveSkillAsk(skill, auth.reason ?? "", {
++        checker: this.permissionChecker,
++      });
++      if (!allowed) {
++        return { output: `权限未授予：Skill "${skill.name}" 需确认但未获批准。`, isError: true };
++      }
++    }
++
++    // ── P0-2：授权通过后注册生命周期 hooks（MCP 来源已在内部拒绝）──
++    // 模型路径 skill 走 delegate 子代理执行。子代理有独立 hookSystem 时，hooks 应注册到子代理侧；
++    // 但当前 SubAgent.fromRegistry 复用主 hookSystem，故注册到主 hookSystem 并在 delegate 返回后卸载，
++    // 避免 delegate skill 的 hooks 泄漏到主会话（对齐 §18 P0-2 实施方案第 3 点的作用域决策）。
++    const registeredHookCount = registerSkillLifecycleHooks(skill, this.hookSystem);
++
++    try {
++      const mode = skill.mode || "delegate";
++      if (mode === "activate") {
++        return await this.executeActivate(skill, userInput);
++      }
++      return await this.executeDelegate(skill, userInput, signal);
++    } finally {
++      // delegate skill 的 hooks 是本次调用作用域，返回后卸载（activate 注入主对话则长期存活，
++      // 但 activate 走的是 inline 语义，此处 delegate 分支才卸载）。为简化：只要注册过就卸载，
++      // activate 模式若需长期 hooks 应通过 inline 斜杠路径（SkillCommand）注入。
++      if (registeredHookCount > 0 && this.hookSystem) {
++        const removed = this.hookSystem.removeSkillHooks(skill.name);
++        if (removed > 0) {
++          log.debug("SKILL", `delegate skill "${skill.name}" 返回，卸载 ${removed} 个会话 hook`);
++        }
++      }
++    }
++  }
++
++  /** 激活模式：将 Skill 指令和资源目录作为工具结果返回（注入当前对话上下文） */
++  private async executeActivate(skill: SkillDefinition, userInput: string): Promise<ToolResult> {
++    const log = getLogger();
++    log.info("SKILL", `激活 Skill: ${skill.name}`, { mode: "activate" });
++
++    const folderStructure = skill.skillRoot ? await scanSkillResources(skill.skillRoot) : "";
++    const header = skill.skillRoot ? `Base directory for this skill: ${skill.skillRoot}\n\n` : "";
++    const resources = folderStructure ? `\n\n可用资源:\n${folderStructure}` : "";
++    const inputSection = userInput ? `\n\n用户输入:\n${userInput}` : "";
++
++    this.manager.activateSkill(skill.name);
++
++    return {
++      output: `${header}${skill.prompt}${resources}${inputSection}`,
++      isError: false,
++    };
++  }
++
++  /** delegate 模式：子代理执行，返回最终输出（P1-1：透传 effort/agent） */
++  private async executeDelegate(
++    skill: SkillDefinition,
++    userInput: string,
++    signal?: AbortSignal,
++  ): Promise<ToolResult> {
++    const log = getLogger();
++    log.info("SKILL", `执行 Skill: ${skill.name}`, {
++      mode: "delegate",
++      input: userInput.slice(0, 200),
++    });
++
++    // 资源清单 + 绝对目录路径（delegate 子 agent 工作目录是项目目录，需绝对路径读 skill 资源）
++    const resourceHint = await this.buildResourceHint(skill);
++    const userPrompt = skill.prompt + resourceHint + (userInput ? `\n\n用户输入:\n${userInput}` : "");
++
++    // P1-1：effort/agent 透传
++    const effort = normalizeSkillEffort(skill.effort);
++    const agentType = await resolveSkillAgentType(skill.agent, skill.name);
++
++    const subAgent = SubAgent.fromRegistry(
++      this.providerRegistry,
++      this.toolRegistry,
++      this.hookSystem,
++      skill.model,
++    );
++    if (this.permissionChecker) subAgent.setPermissionChecker(this.permissionChecker);
++
++    const maxTurns = Math.min(skill.maxTurns || 30, 50);
++    const timeoutMins = Math.min(skill.timeoutMins || 2, 30);
++    const timeout = timeoutMins * 60_000;
++
++    const result = await subAgent.executeCustom(
++      {
++        systemPrompt: `你是一个专门执行 "${skill.name}" 任务的代理。${skill.description}`,
++        userPrompt,
++        allowedTools: skill.allowedTools || [],
++        maxTurns,
++        timeout,
++        // P1-1：effort 透传（provider reasoningEffort 生效）
++        effort,
++        // P1-1：agent 优先作为 agent 类型（memory/system prompt 跟随）；否则沿用 skill:<name>
++        type: agentType ?? `skill:${skill.name}`,
++      },
++      signal,
++    );
++
++    log.info("SKILL", `Skill ${skill.name} 完成`, {
++      success: result.success,
++      turns: result.turns,
++    });
++
++    return { output: result.output, isError: !result.success };
++  }
++
++  /** 构建资源清单提示（delegate 子代理用绝对路径读 skill references/scripts） */
++  private async buildResourceHint(skill: SkillDefinition): Promise<string> {
++    if (!skill.skillRoot) return "";
++    try {
++      const folderStructure = await scanSkillResources(skill.skillRoot);
++      if (!folderStructure) return "";
++      return (
++        `\n\n---\nSkill 资源目录（绝对路径）: ${skill.skillRoot}\n` +
++        `以下资源需用**绝对路径**读取（你的工作目录是项目目录，不是 skill 目录）:\n${folderStructure}`
++      );
++    } catch {
++      return "";
++    }
++  }
++}
+diff --git a/src/skill/prompt-processor.ts b/src/skill/prompt-processor.ts
+index 95908ab..a9b8f50 100644
+--- a/src/skill/prompt-processor.ts
++++ b/src/skill/prompt-processor.ts
+@@ -8,8 +8,8 @@
+  *   2. $ARGUMENTS / $@ / $* / {{args}} → 完整参数字符串
+  *   3. $1 $2 ... → 位置参数
+  *   4. $arg_name → 命名参数（frontmatter arguments 字段）
+- *   5. ${SKILL_DIR} → Skill 自身目录
+- *   6. ${SESSION_ID} → 当前会话 ID
++ *   5. ${SKILL_DIR} / ${CLAUDE_SKILL_DIR} → Skill 自身目录
++ *   6. ${SESSION_ID} / ${CLAUDE_SESSION_ID} → 当前会话 ID
+  *   7. !`cmd` → 内联 shell 命令执行（仅非 MCP Skill）
+  *
+  * 安全：MCP Skill（loadedFrom="mcp"）被视为不可信来源，
+@@ -66,18 +66,21 @@ export async function processSkillPrompt(
+   content = substituteArguments(content, args, options.argumentNames);
+ 
+   // Step 5: ${SKILL_DIR} 替换
++  // P1-3 变量兼容：同时认 CC 的 ${CLAUDE_SKILL_DIR}（loadSkillsDir.ts）与 sid 原生 ${SKILL_DIR}，
++  // 避免从 CC 迁移的 skill 变量原样残留在 prompt。两套名等价替换。
++  const skillDirRe = /\$\{(?:CLAUDE_)?SKILL_DIR\}/g;
+   if (isMcp) {
+     content = content.replace(
+-      /\$\{SKILL_DIR\}/g,
++      skillDirRe,
+       "[MCP Skill 不支持 SKILL_DIR 变量]",
+     );
+   } else if (options.skillRoot) {
+     const skillDir = options.skillRoot.replace(/\\/g, "/");
+-    content = content.replace(/\$\{SKILL_DIR\}/g, skillDir);
++    content = content.replace(skillDirRe, skillDir);
+   }
+ 
+-  // Step 6: ${SESSION_ID} 替换
+-  content = content.replace(/\$\{SESSION_ID\}/g, context.sessionId);
++  // Step 6: ${SESSION_ID} 替换（同时认 CC 的 ${CLAUDE_SESSION_ID}）
++  content = content.replace(/\$\{(?:CLAUDE_)?SESSION_ID\}/g, context.sessionId);
+ 
+   // Step 7: 内联 shell 命令 —— 仅非 MCP Skill
+   if (isMcp) {
+diff --git a/src/skill/tool.ts b/src/skill/tool.ts
+index 78ac724..82060dc 100644
+--- a/src/skill/tool.ts
++++ b/src/skill/tool.ts
+@@ -229,8 +229,35 @@ ${folderStructure}
+ export function collectSkillListingEntries(
+   tools: ReadonlyArray<unknown>,
+ ): import("./budget.ts").SkillListingEntry[] | undefined {
+-  const entries = tools
+-    .filter((t): t is SkillTool => t instanceof SkillTool)
+-    .map((t) => t.getListingEntry());
+-  return entries.length > 0 ? entries : undefined;
++  const entries: import("./budget.ts").SkillListingEntry[] = [];
++
++  for (const t of tools) {
++    // P0-1：磁盘/内置 skill 现由单一 SkillMetaTool 汇总（一次性拿全部条目）
++    const maybeMeta = t as { getListingEntries?: () => import("./budget.ts").SkillListingEntry[] };
++    if (typeof maybeMeta.getListingEntries === "function") {
++      entries.push(...maybeMeta.getListingEntries());
++      continue;
++    }
++    // 向后兼容：残留的单实例 SkillTool（若有）
++    if (t instanceof SkillTool) {
++      entries.push(t.getListingEntry());
++      continue;
++    }
++    // Bundled skill 工具（BundledSkillTool）仍是独立工具，鸭子类型取其条目
++    const maybeBundled = t as { getListingEntry?: () => import("./budget.ts").SkillListingEntry };
++    if (typeof maybeBundled.getListingEntry === "function" && !(t instanceof SkillTool)) {
++      entries.push(maybeBundled.getListingEntry());
++    }
++  }
++
++  // 去重（同名保留首个：meta 优先于 bundled）
++  const seen = new Set<string>();
++  const deduped = entries.filter((e) => {
++    const key = e.name.toLowerCase();
++    if (seen.has(key)) return false;
++    seen.add(key);
++    return true;
++  });
++
++  return deduped.length > 0 ? deduped : undefined;
+ }
+diff --git a/src/skill/types.ts b/src/skill/types.ts
+index 96e1b66..4fbab6e 100644
+--- a/src/skill/types.ts
++++ b/src/skill/types.ts
+@@ -6,7 +6,7 @@
+ import type { ExtensionSource } from "../extension/types.ts";
+ 
+ /** Skill 加载位置（对齐 Claude Code loadedFrom） */
+-export type SkillLoadedFrom = "builtin" | "bundled" | "skills" | "mcp";
++export type SkillLoadedFrom = "builtin" | "bundled" | "skills" | "mcp" | "plugin" | "managed";
+ 
+ /** Skill 生命周期钩子声明（frontmatter 中的 hooks 字段） */
+ export interface SkillHookEntry {
+diff --git a/src/ui/ToolStatus.tsx b/src/ui/ToolStatus.tsx
+index 179370a..367af59 100644
+--- a/src/ui/ToolStatus.tsx
++++ b/src/ui/ToolStatus.tsx
+@@ -48,6 +48,11 @@ function getToolLabel(name: string, input: unknown): string {
+     const pattern = inp?.pattern || "";
+     return `Glob ${pattern}`;
+   }
++  // P0-1：单一 Skill 元工具（input={skill,args}），摘要显示被调用的 skill 名
++  if (lower === "skill") {
++    const skillName = inp?.skill || "";
++    return skillName ? `Skill (${skillName})` : name;
++  }
+   if (lower.startsWith("subagent") || lower.startsWith("agent__") || lower.startsWith("skill__")) {
+     const agentType = inp?.type || inp?.agentType || "";
+     return agentType ? `${name} (${agentType})` : name;
+diff --git a/src/ui/ui-utils.ts b/src/ui/ui-utils.ts
+index 05f2417..3125775 100644
+--- a/src/ui/ui-utils.ts
++++ b/src/ui/ui-utils.ts
+@@ -59,6 +59,14 @@ export function getToolSummary(name: string, input: unknown): string {
+   }
+   if (lower === "grep") return `"${inp?.pattern || ""}"`;
+   if (lower === "glob") return inp?.pattern || "";
++  // P0-1：单一 Skill 元工具（input={skill,args}），摘要显示 skill 名 + args
++  if (lower === "skill") {
++    const skillName = inp?.skill || "";
++    const args = inp?.args || "";
++    const short = truncateSummary(args, PROMPT_MAX_CHARS);
++    if (!skillName) return "";
++    return short ? `${skillName} "${short}"` : skillName;
++  }
+   if (isSubAgentToolName(lower)) {
+     const agentType = inp?.type || inp?.agentType || "";
+     const prompt = inp?.prompt || inp?.task || "";

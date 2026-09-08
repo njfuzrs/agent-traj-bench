@@ -1,0 +1,430 @@
+diff --git a/tests/config/attachments.test.ts b/tests/config/attachments.test.ts
+index 4e83485..76eef7e 100644
+--- a/tests/config/attachments.test.ts
++++ b/tests/config/attachments.test.ts
+@@ -8,7 +8,7 @@ import {
+   generateClaudeMdAttachment,
+   generateGitStatusAttachment,
+   clearGitStatusCache,
+-  generatePermissionModeAttachment,
++  PERMISSION_MODE_DESCRIPTIONS,
+   generateDiagnosticsAttachment,
+   generateTodoListAttachment,
+ } from "../../src/config/attachments.ts";
+@@ -145,35 +145,37 @@ describe("generateGitStatusAttachment", () => {
+   });
+ });
+ 
+-describe("generatePermissionModeAttachment", () => {
+-  test("默认模式", () => {
+-    const attachment = generatePermissionModeAttachment("default");
+-    expect(attachment.type).toBe("permissionMode");
+-    expect(attachment.priority).toBe(PRIORITY.MODE_REMINDER);
+-    expect(attachment.content).toContain("默认");
+-  });
+-
+-  test("plan 模式", () => {
+-    const attachment = generatePermissionModeAttachment("plan");
+-    expect(attachment.content).toContain("计划模式已激活");
+-    expect(attachment.content).toContain("绝对不能");
+-  });
+-
+-  test("未知模式回退到默认", () => {
+-    const attachment = generatePermissionModeAttachment("unknown_mode");
+-    expect(attachment.content).toContain("默认");
+-  });
+-
++// generatePermissionModeAttachment 的 describe 已删除（2026-07-30，重复注入根因修复 P0）：
++// 该函数随 system 附件通道一起删除，权限模式文案现在只走 user reminder 通道。
++// 但下面那条「键对齐」守卫**必须保留**——它保护的消费方从"附件 + reminder"变成了
++// 只剩 reminder（buildPermissionModeReminder 取不到键会 return null 静默不注入，
++// 比回退到 default 更隐蔽）。断言主体从函数改为直接查常量表。
++describe("PERMISSION_MODE_DESCRIPTIONS — 键与运行时 mode 对齐", () => {
+   // 键盘 Shift+Tab 循环会切到 acceptEdits / auto / always-allow，这些模式必须有专属描述，
+-  // 否则 generatePermissionModeAttachment / buildPermissionModeReminder 会静默回退到 default，
+-  // 导致模型收到的约束与实际模式不符。
++  // 否则 buildPermissionModeReminder 取不到键会返回 null → 整条提醒静默丢失，
++  // 模型收到的约束与实际模式不符。
+   test("键盘循环涉及的模式均有专属描述（非 default 回退）", () => {
+     for (const mode of ["acceptEdits", "auto", "always-allow"]) {
+-      const attachment = generatePermissionModeAttachment(mode);
+-      // 专属描述的标题含模式自身语义，且不等同于 default 的“执行以下操作前必须请求用户确认”
+-      expect(attachment.content).not.toBe(generatePermissionModeAttachment("default").content);
++      const description = PERMISSION_MODE_DESCRIPTIONS[mode];
++      expect(description).toBeDefined();
++      expect(description).not.toBe(PERMISSION_MODE_DESCRIPTIONS.default);
+     }
+   });
++
++  // 非 default / 非 plan 的运行时 mode 都会走 reminder 通道（loop.ts 只排除 default 与 plan），
++  // 每一个都必须有键，否则该 mode 下模型完全收不到约束文案。
++  test("除 default/plan 外的全部运行时 mode 都有键", () => {
++    for (const mode of ["always-allow", "acceptEdits", "deny-write", "dontAsk", "auto", "dangerously-skip-permissions"]) {
++      expect(PERMISSION_MODE_DESCRIPTIONS[mode]).toBeDefined();
++    }
++  });
++
++  // plan 键已随附件通道一起删除：它的唯一消费方被 loop.ts 的 `mode !== "plan"` 排除，
++  // 文案已并入 plan/prompt.ts 的 buildPlanModeReminder full 档（单一事实源）。
++  // 这条守卫防止有人"看到少个 mode 就补回来"，导致两份 plan 文案再次独立漂移。
++  test("plan 键不得复活（文案单一事实源在 plan/prompt.ts）", () => {
++    expect(PERMISSION_MODE_DESCRIPTIONS.plan).toBeUndefined();
++  });
+ });
+ 
+ describe("generateDiagnosticsAttachment", () => {
+diff --git a/tests/config/dynamic-boundary-multiprovider.test.ts b/tests/config/dynamic-boundary-multiprovider.test.ts
+new file mode 100644
+index 0000000..513ff51
+--- /dev/null
++++ b/tests/config/dynamic-boundary-multiprovider.test.ts
+@@ -0,0 +1,114 @@
++/**
++ * 多 provider 不变量守卫 — 「放 system 动态区」≠「不占 user turn」
++ *
++ * 这条不变量是本项目反复踩过的隐性前提（2026-07-30 上下文注入审计）：
++ *
++ *   `buildSystemPrompt` 产出的 DYNAMIC_BOUNDARY 之后的内容，在 **OpenAI 族**
++ *   （deepseek 是本项目主力模型）会被 `openai.ts prependSystemMessage` 切出来、
++ *   以 `role: "user"` 追加到 messages 末尾。因此把易变内容"搬进 system 动态区"
++ *   **省不下任何 user turn 字节**，只是多绕一层间接。
++ *
++ * 历史上有两个方案基于"搬进动态区就不占 user turn"这个错误前提设计，
++ * 都在落地前被推翻（权限模式附件、deferred-tools 列表）。把它固化成可执行断言，
++ * 下一次有人再提同类优化时，跑一次测试就能看到真实落地形态。
++ *
++ * 要真正减少 user turn 占用只有两条路：① 不注入；② 走增量 delta 只发变化量。
++ *
++ * 关联：src/config/system-prompt.ts 附件分拣段的 ⛔ 不变量注释；
++ *      docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md §7.3.2
++ */
++
++import { describe, test, expect } from "bun:test";
++import { buildSystemPrompt } from "../../src/config/system-prompt.ts";
++import { OpenAIProvider } from "../../src/llm/openai.ts";
++import { DYNAMIC_BOUNDARY, splitSystemByDynamicBoundary } from "../../src/api/cache-strategy.ts";
++import type { Message } from "../../src/llm/types.ts";
++
++class TestableOpenAIProvider extends OpenAIProvider {
++  testPrependSystem(messages: any[], system: string, model: string) {
++    (this as any).prependSystemMessage(messages, system, model);
++    return messages;
++  }
++}
++
++const provider = new TestableOpenAIProvider("test-key", "deepseek-chat");
++
++/** 一条最小的真实 user 消息，模拟"用户指令" */
++function userMessages(): Message[] {
++  return [{ role: "user", content: [{ type: "text", text: "用户的真实指令" }] }] as any;
++}
++
++/** 走 provider 的真实转换路径：user 消息 → prependSystemMessage 注入 system */
++function convertWithSystem(system: string) {
++  // convertMessages 的产物形态对本不变量无关，这里直接用等价的最小 wire 消息，
++  // 关键是让 prependSystemMessage 在一个非空 messages 数组上工作。
++  const wire: any[] = [{ role: "user", content: "用户的真实指令" }];
++  return provider.testPrependSystem(wire, system, "deepseek-chat");
++}
++
++describe("不变量：system 动态区在 OpenAI 族会落成一条 user 消息", () => {
++  test("buildSystemPrompt 产出的动态区非空（日期附件恒在，是本不变量的前提）", () => {
++    const system = buildSystemPrompt({ tools: [] });
++    expect(system).toContain(DYNAMIC_BOUNDARY);
++    const { dynamicContent } = splitSystemByDynamicBoundary(system);
++    expect(dynamicContent).toBeDefined();
++    expect(dynamicContent!.length).toBeGreaterThan(0);
++  });
++
++  test("动态区非空 → OpenAI 族 messages 必然多出一条 role:user（不占 user turn 是错的）", () => {
++    const system = buildSystemPrompt({
++      tools: [],
++      // 挑几个真实会落动态区的附件，让动态区有实质内容
++      projectRules: "# 项目规则\n这是一段 CLAUDE.md 内容",
++    });
++    const { dynamicContent } = splitSystemByDynamicBoundary(system);
++    expect(dynamicContent).toBeDefined();
++    expect(dynamicContent!.length).toBeGreaterThan(0);
++
++    const before = 1; // 转换前只有用户那一条
++    const out = convertWithSystem(system);
++
++    // 1 条 system（静态区）+ 原有 1 条 user + 1 条**新增的 user**（动态区）
++    expect(out).toHaveLength(before + 2);
++    expect(out[0].role).toBe("system");
++
++    const userMsgs = out.filter((m) => m.role === "user");
++    expect(userMsgs).toHaveLength(2);
++
++    // 新增那条在**末尾**，且承载的就是动态区内容
++    const last = out[out.length - 1];
++    expect(last.role).toBe("user");
++    expect(last.content).toContain(dynamicContent!);
++  });
++
++  test("动态区内容逐字节出现在 user 消息里（不是摘要、不是丢弃）", () => {
++    const marker = "__DYNAMIC_REGION_CANARY__";
++    const system = `STATIC_PREFIX${DYNAMIC_BOUNDARY}${marker}`;
++    const out = convertWithSystem(system);
++
++    // 静态区不含 marker，说明它确实被切走了
++    expect(out[0].content).toBe("STATIC_PREFIX");
++    expect(out[0].content).not.toContain(marker);
++    // marker 原样出现在末尾 user 消息 → 字节没省，只是换了承载位置
++    const last = out[out.length - 1];
++    expect(last.role).toBe("user");
++    expect(last.content).toContain(marker);
++  });
++
++  test("动态区为空 → 不新增 user 消息（对照组，证明上面那条不是恒真）", () => {
++    const out = convertWithSystem("只有静态内容，没有边界标记");
++    expect(out).toHaveLength(2); // 1 system + 原有 1 user
++    expect(out.filter((m) => m.role === "user")).toHaveLength(1);
++  });
++
++  test("Anthropic 族不受影响：system 整段走 system 参数，不进 messages", () => {
++    // 反证不变量的适用范围：它是 OpenAI 族特有的落地形态，不是跨 provider 通用行为。
++    // Anthropic provider 把 system 原样交给 API 的 system 参数（含 boundary 处的
++    // cache_control 分段），messages 数组不会因动态区多出任何一条。
++    const msgs = userMessages();
++    expect(msgs).toHaveLength(1);
++    expect(msgs.every((m) => m.role === "user")).toBe(true);
++    // 这里只锁"messages 不被 system 内容污染"这一点——具体 cache_control 打点
++    // 由 tests/api/cache-strategy.test.ts 与 anthropic 侧测试覆盖。
++  });
++});
+diff --git a/tests/config/system-prompt.test.ts b/tests/config/system-prompt.test.ts
+index 4d56b39..50fcf92 100644
+--- a/tests/config/system-prompt.test.ts
++++ b/tests/config/system-prompt.test.ts
+@@ -139,20 +139,28 @@ describe("buildSystemPrompt", () => {
+     expect(prompt).not.toContain("<git-status>");
+   });
+ 
+-  test("包含权限模式附件（非默认模式）", () => {
+-    const prompt = buildSystemPrompt({
+-      tools: [],
+-      permissionMode: "plan",
+-    });
+-    expect(prompt).toContain("计划模式已激活");
+-  });
+-
+-  test("默认权限模式不注入附件", () => {
+-    const prompt1 = buildSystemPrompt({ tools: [] });
+-    const prompt2 = buildSystemPrompt({ tools: [], permissionMode: "default" });
+-    // 默认模式不注入权限附件
+-    expect(prompt1).not.toContain("权限模式");
+-    expect(prompt2).not.toContain("权限模式");
++  // 原「包含权限模式附件（非默认模式）」用例已删除（2026-07-30，重复注入根因修复 P0）：
++  // 权限模式文案不再进 system prompt，plan 的约束改由 plan/prompt.ts 的
++  // buildPlanModeReminder（user reminder 通道）承载。
++  //
++  // 下面这条从"default 模式不注入"升级为"**任何** mode 都不注入"的守卫——
++  // 它是防回归的关键：若有人把附件通道加回来，双通道重复注入立刻复现。
++  test("任何权限模式都不往 system prompt 注入 mode 文案（去双通道守卫）", () => {
++    for (const mode of [
++      undefined,
++      "default",
++      "plan",
++      "acceptEdits",
++      "deny-write",
++      "dontAsk",
++      "auto",
++      "always-allow",
++      "dangerously-skip-permissions",
++    ]) {
++      const prompt = buildSystemPrompt({ tools: [], permissionMode: mode });
++      expect(prompt).not.toContain("权限模式");
++      expect(prompt).not.toContain("计划模式已激活");
++    }
+   });
+ 
+   test("包含诊断信息附件", () => {
+diff --git a/tests/plan/plan-reminder-gate.test.ts b/tests/plan/plan-reminder-gate.test.ts
+new file mode 100644
+index 0000000..3fb7d01
+--- /dev/null
++++ b/tests/plan/plan-reminder-gate.test.ts
+@@ -0,0 +1,95 @@
++/**
++ * plan 约束的**唯一通道**门控 — 三条进入路径都必须注入
++ *
++ * 背景（2026-07-30 重复注入根因修复 P0 的连带回归）：
++ * plan 约束原有两条通道（system prompt 附件 + user reminder）。删掉附件通道后，
++ * `App.buildPlanModeReminderIfActive()` 成为唯一通道，门控漏一条路径就等于
++ * "该路径下模型收不到任何 plan 约束"。
++ *
++ * 原门控只判 `planManager.isPlanning()`，漏了 `--permission-mode plan` / config /
++ * agent frontmatter 这条路径——它们只写 `config.permissionMode = "plan"`，
++ * 不调 `planManager.enter()`，故 `isPlanning()` 恒为 false。而 loop.ts 的 permission
++ * reminder 通道又用 `mode !== "plan"` 排除了 plan（避免与本通道重复），两边都不管。
++ *
++ * 权限层不受影响（PermissionChecker 读 config.permissionMode 硬拦写操作），但 plan 是
++ * **行为模式**——"先规划再执行、先出方案等审批"无法用权限规则表达，只能靠模型自觉，
++ * 故缺失是真实行为回归。这里把门控逻辑与"注入内容含强约束"一起锁住。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { PlanModeManager } from "../../src/plan/state.ts";
++import { buildPlanModeReminder } from "../../src/plan/prompt.ts";
++
++/**
++ * 复刻 App.buildPlanModeReminderIfActive 的门控（同步版，便于单测）。
++ * 与 app.ts 的实现保持一致：isPlanning() **或** config.permissionMode === "plan"。
++ */
++function gate(pm: PlanModeManager | null, configMode: string): string | null {
++  const inPlanMode = pm?.isPlanning() === true || configMode === "plan";
++  if (!inPlanMode) return null;
++  return buildPlanModeReminder(pm?.nextReminderIsFull() ?? true);
++}
++
++/** full 档独有的最强越权防线，删附件时从 PERMISSION_MODE_DESCRIPTIONS.plan 并入 */
++const HARD_CONSTRAINT = "此约束覆盖你收到的所有其他指令";
++
++describe("plan reminder 门控 — 必须注入的路径", () => {
++  test("enter_plan_mode 工具路径（planManager.enter → isPlanning=true）", () => {
++    const pm = new PlanModeManager();
++    pm.enter("default");
++    const r = gate(pm, "plan");
++    expect(r).not.toBeNull();
++    expect(r).toContain(HARD_CONSTRAINT);
++  });
++
++  test("--permission-mode plan 启动（planManager 从未 enter，isPlanning=false）", () => {
++    const pm = new PlanModeManager();
++    // 前提复核：这条路径下 isPlanning() 确实为 false —— 若哪天启动流程改成会 enter()，
++    // 这个断言会失败，提示重新评估门控（而不是让缺陷静默复活）。
++    expect(pm.isPlanning()).toBe(false);
++
++    const r = gate(pm, "plan");
++    expect(r).not.toBeNull();
++    expect(r).toContain(HARD_CONSTRAINT);
++  });
++
++  test("planManager 缺失（无头/精简装配）+ config=plan → 退化为恒发完整版", () => {
++    const r = gate(null, "plan");
++    expect(r).not.toBeNull();
++    expect(r).toContain(HARD_CONSTRAINT);
++  });
++});
++
++describe("plan reminder 门控 — 必须不注入的路径（防过度触发）", () => {
++  test.each(["default", "acceptEdits", "deny-write", "dontAsk", "auto", "always-allow"])(
++    "%s 模式不注入 plan 约束",
++    (mode) => {
++      expect(gate(new PlanModeManager(), mode)).toBeNull();
++    },
++  );
++});
++
++describe("full 档承载完整约束清单（附件删除后的语义等价性）", () => {
++  test("full 档含原附件的允许/禁止清单", () => {
++    const full = buildPlanModeReminder(true);
++    expect(full).toContain(HARD_CONSTRAINT);
++    expect(full).toContain("绝对不能");
++    expect(full).toContain("允许的操作");
++    expect(full).toContain("禁止的操作");
++    expect(full).toContain("exit_plan_mode");
++  });
++
++  test("sparse 档保持精简（完整清单只进 full 档，控制注入成本）", () => {
++    const full = buildPlanModeReminder(true);
++    const sparse = buildPlanModeReminder(false);
++    expect(sparse.length).toBeLessThan(full.length);
++    expect(sparse).not.toContain("允许的操作");
++  });
++
++  test("两档都带 system-reminder 围栏（不变量 1）", () => {
++    for (const r of [buildPlanModeReminder(true), buildPlanModeReminder(false)]) {
++      expect(r.trimStart().startsWith("<system-reminder>")).toBe(true);
++      expect(r.trimEnd().endsWith("</system-reminder>")).toBe(true);
++    }
++  });
++});
+diff --git a/tests/session/reminder-dedup-reset.test.ts b/tests/session/reminder-dedup-reset.test.ts
+new file mode 100644
+index 0000000..cafd472
+--- /dev/null
++++ b/tests/session/reminder-dedup-reset.test.ts
+@@ -0,0 +1,81 @@
++/**
++ * /clear 必须归零 reminder 通道的跨轮去重键
++ *
++ * 背景（2026-07-30 重复注入根因修复时发现的连带缺陷）：
++ * loop.ts 里三个 reminder 去重/基线键挂在 `SessionState.sessionData` 上，是**故意**的——
++ * 它们必须跨用户消息存活，否则每条新消息都会重建、去重形同白做。
++ *
++ * 但"跨消息"不等于"跨 /clear"。`/clear` 清空对话历史后模型完全失忆，而去重键还记着
++ * "已经播报过了" → 新一轮对话**永远不再播报**延迟工具列表，延迟加载机制在 /clear 后失效。
++ * compact 路径早有 deferredToolsPendingAfterCompact 兜住同类问题，/clear 此前漏了。
++ *
++ * `resetCounters()` 只清用量统计、不碰 sessionData，所以这里锁的是
++ * `resetReminderDedupKeys()` 存在且覆盖全部三个键，并且两者职责不互相越界。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { SessionState } from "../../src/session/state.ts";
++
++/** loop.ts 实际写入 sessionData 的三个 reminder 跨轮键 */
++const REMINDER_DEDUP_KEYS = [
++  "announcedDeferredTools",
++  "lastSeenPermissionMode",
++  "lastSeenContextPressureLevel",
++] as const;
++
++function seeded(): SessionState {
++  const s = new SessionState("test-session");
++  s.set("announcedDeferredTools", new Set(["bg_task", "cron"]));
++  s.set("lastSeenPermissionMode", "acceptEdits");
++  s.set("lastSeenContextPressureLevel", "warn");
++  return s;
++}
++
++describe("resetReminderDedupKeys — /clear 归零 reminder 去重键", () => {
++  test("三个键全部被清除", () => {
++    const s = seeded();
++    for (const k of REMINDER_DEDUP_KEYS) expect(s.get(k)).toBeDefined();
++
++    s.resetReminderDedupKeys();
++
++    for (const k of REMINDER_DEDUP_KEYS) {
++      expect(s.get(k)).toBeUndefined();
++      expect(s.has(k)).toBe(false);
++    }
++  });
++
++  test("清除后延迟工具会重新全量播报（announced 集合视角）", () => {
++    const s = seeded();
++    s.resetReminderDedupKeys();
++    // loop.ts 的读法：取不到就是空 Set → 全部 deferred 工具都算 added → 重新播报
++    const announced = (s.get("announcedDeferredTools") as Set<string> | undefined) ?? new Set<string>();
++    expect(announced.size).toBe(0);
++
++    const deferredNames = ["bg_task", "cron", "worktree"];
++    const added = deferredNames.filter((n) => !announced.has(n));
++    expect(added).toEqual(deferredNames);
++  });
++
++  test("不影响其它 sessionData 键（只清 reminder 那三个，不是清空整个 map）", () => {
++    const s = seeded();
++    s.set("someOtherKey", "keep-me");
++    s.resetReminderDedupKeys();
++    expect(s.get("someOtherKey")).toBe("keep-me");
++  });
++
++  // 职责边界：这两个 reset 各管一摊，任一方越界都会引入新缺陷
++  // （resetCounters 若清 sessionData 会误伤无关键；resetReminderDedupKeys 若清统计会重复扣账）。
++  test("resetCounters 不碰 reminder 去重键（故两者都必须在 /clear 里调用）", () => {
++    const s = seeded();
++    s.resetCounters();
++    for (const k of REMINDER_DEDUP_KEYS) expect(s.get(k)).toBeDefined();
++  });
++
++  test("resetReminderDedupKeys 不碰用量统计", () => {
++    const s = seeded();
++    s.updateUsage("deepseek-chat", { input_tokens: 100, output_tokens: 50 } as any, 10);
++    const before = s.getTotalUsage();
++    s.resetReminderDedupKeys();
++    expect(s.getTotalUsage()).toEqual(before);
++  });
++});

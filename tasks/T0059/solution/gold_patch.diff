@@ -1,0 +1,138 @@
+diff --git a/src/agent/agent-definition.ts b/src/agent/agent-definition.ts
+index 2155254..9212776 100644
+--- a/src/agent/agent-definition.ts
++++ b/src/agent/agent-definition.ts
+@@ -124,6 +124,19 @@ export function getBuiltInAgentTypes(): string[] {
+   return Object.keys(BUILTIN_AGENTS);
+ }
+ 
++/**
++ * 获取内置 Agent 完整定义列表（缺口 F）。
++ *
++ * 与 getBuiltInAgentTypes（仅返回类型名）互补：sub_agent 工具的 description 需要把
++ * 每种类型的能力（description）+ 工具集边界（tools）暴露给模型，否则模型派活时只能
++ * 凭类型名猜能力，可能把"需要写文件"的活派给只读的 explore，撞墙后才反馈失败。
++ *
++ * 返回顺序与 BUILTIN_AGENTS 声明顺序一致（Object.values 保序）。
++ */
++export function getBuiltInAgentDefinitions(): AgentDefinition[] {
++  return Object.values(BUILTIN_AGENTS);
++}
++
+ /** 解析 Agent 定义（先查 builtIn，再查 user dir） */
+ export function resolveAgent(type: string): AgentDefinition | undefined {
+   return BUILTIN_AGENTS[type];
+diff --git a/src/agent/tool.ts b/src/agent/tool.ts
+index df046f5..522447c 100644
+--- a/src/agent/tool.ts
++++ b/src/agent/tool.ts
+@@ -8,7 +8,7 @@ import type { LegacyTool as Tool, LegacyToolResult as ToolResult } from "../tool
+ import type { ProviderRegistry } from "../llm/registry.ts";
+ import { Registry as ToolRegistry } from "../tool/registry.ts";
+ import { SubAgent } from "./sub-agent.ts";
+-import { getBuiltInAgentTypes } from "./agent-definition.ts";
++import { getBuiltInAgentTypes, getBuiltInAgentDefinitions } from "./agent-definition.ts";
+ import { getLogger } from "../debug/logger.ts";
+ import {
+   createAgentTask,
+@@ -102,9 +102,23 @@ export class SubAgentTool implements Tool {
+   }
+ 
+   description(): string {
+-    const types = getBuiltInAgentTypes();
++    // 缺口 F：把每种子代理类型的能力 + 工具集边界写进 description，
++    // 而非只列类型名。否则模型派活时只能凭类型名猜能力，可能把"需要写文件"的活
++    // 派给只读的 explore，子代理撞墙后才反馈失败，浪费一整个子代理回合。
++    const defs = getBuiltInAgentDefinitions();
++    const typeLines = defs
++      .map((d) => {
++        const tools = d.tools && d.tools.length > 0 ? d.tools.join("/") : "全部";
++        const readonlyTag = d.readOnly ? "，只读" : "";
++        return `- ${d.agentType}：${d.description}（可用工具：${tools}${readonlyTag}）`;
++      })
++      .join("\n");
+     return `启动一个子代理来执行独立的子任务。子代理有自己独立的上下文，不会污染主对话。
+-可用类型: ${types.join("、")}
++
++可用类型（注意各自的工具集边界——只读类型不能写文件/执行命令）：
++${typeLines}
++
++派活前请按子任务是否需要写入/执行来选类型：只需搜索分析用 explore，需要改文件或跑命令用 task。
+ 子代理完成后只返回最终结果。
+ 设置 run_in_background=true 可以后台执行，立即返回 task_id，完成后通过通知告知结果。
+ 设置 isolation=worktree 可在独立 Git Worktree 中执行（文件改动隔离，仅同步模式）。`;
+diff --git a/src/config/system-prompt.ts b/src/config/system-prompt.ts
+index 383022a..dc6a08b 100644
+--- a/src/config/system-prompt.ts
++++ b/src/config/system-prompt.ts
+@@ -21,6 +21,7 @@ import {
+   generateMemoryAttachment,
+   generateRecalledMemoryAttachment,
+   generateSessionMemoryAttachment,
++  generateSkillListingAttachment,
+ } from "./attachments.ts";
+ import { getLogger } from "../debug/logger.ts";
+ 
+@@ -62,6 +63,13 @@ export interface SystemPromptContext {
+   /** Session Memory 内容（压缩后注入，Task 7） */
+   sessionMemoryContent?: string;
+ 
++  /**
++   * 缺口 E：Skill 摘要条目列表。接通此前的死代码 generateSkillListingAttachment——
++   * 把"有哪些 skill、何时用"的摘要常驻 system prompt（约 1% 窗口），让模型即使在
++   * skill 工具被 defer 时仍能发现 skill 存在，真正调用时再 tool_search 调出 skill__* 工具。
++   */
++  skillEntries?: import("../skill/budget.ts").SkillListingEntry[];
++
+   // 语言偏好
+   /** 首选输出语言: "zh" 中文优先, "en" 英文优先。不设置时默认中文 */
+   preferredLanguage?: "zh" | "en";
+@@ -201,6 +209,20 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
+     attachments.push(generatePermissionModeAttachment(ctx.permissionMode));
+   }
+ 
++  // 缺口 E：Skill 摘要列表（接通此前的死代码）。
++  // 优先级 SKILL_LISTING(8) 排在 CLAUDE.md 之前，确保模型先发现可用 skill。
++  // 预算按模型上下文窗口的 1% 控制（generateSkillListingAttachment 内部处理）。
++  if (ctx.skillEntries && ctx.skillEntries.length > 0) {
++    const contextWindow = ctx.model
++      ? new TokenEstimator().getContextLimit(ctx.model, ctx.availableModels)
++      : undefined;
++    const skillAttachment = generateSkillListingAttachment(
++      ctx.skillEntries,
++      contextWindow && contextWindow > 0 ? contextWindow : undefined,
++    );
++    if (skillAttachment) attachments.push(skillAttachment);
++  }
++
+   // CLAUDE.md 项目规则
+   if (ctx.projectRules) {
+     attachments.push(generateClaudeMdAttachment(ctx.projectRules, ctx.projectRulesPath));
+diff --git a/src/skill/tool.ts b/src/skill/tool.ts
+index cbd1ac7..0a83b67 100644
+--- a/src/skill/tool.ts
++++ b/src/skill/tool.ts
+@@ -54,6 +54,23 @@ export class SkillTool implements Tool {
+     return desc;
+   }
+ 
++  /**
++   * 缺口 E：导出 Skill 摘要条目（供 system prompt 的 skill 摘要列表使用）。
++   *
++   * 此前 generateSkillListingAttachment 是死代码，skill 摘要从未进系统提示词；
++   * 一旦 skill 工具被 defer，模型连 whenToUse 都看不到。这里把每个 SkillTool 的
++   * 摘要导出，由调用方收集后注入常驻 system prompt，实现"摘要常驻发现 + 工具按需调出"
++   * 的两层结构（不依赖工具是否被 defer）。
++   */
++  getListingEntry(): import("./budget.ts").SkillListingEntry {
++    return {
++      name: this.skill.name,
++      description: this.skill.description,
++      whenToUse: this.skill.whenToUse,
++      isBundled: this.skill.loadedFrom === "bundled" || this.skill.isBuiltin === true,
++    };
++  }
++
+   inputSchema(): Record<string, unknown> {
+     return z.toJSONSchema(this.zodSchema) as Record<string, unknown>;
+   }

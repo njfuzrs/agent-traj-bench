@@ -1,0 +1,124 @@
+diff --git a/src/agent/sub-agent.ts b/src/agent/sub-agent.ts
+index efc364e..fe88650 100644
+--- a/src/agent/sub-agent.ts
++++ b/src/agent/sub-agent.ts
+@@ -74,6 +74,10 @@ export interface SubAgentTask {
+   /** M4(Dynamic Workflows): 子代理工作目录（worktree 真并行用）。设置时整个执行包在
+    *  withAgentCwd 上下文里，文件类工具经 getCwd() 自动以此为基准，并发隔离无需 chdir。 */
+   cwd?: string;
++  /** M4(Dynamic Workflows): 推理强度。workflow agent({effort}) 透传而来。
++   *  low|medium|high → provider reasoningEffort "high"；xhigh|max → "max"
++   *  （provider 层仅接受 high|max，对齐 SendParams.reasoningEffort 契约）。 */
++  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+ }
+ 
+ /** 子代理执行结果 */
+@@ -685,6 +689,17 @@ export class SubAgent {
+       let toolUseCount = 0;
+       let tokenCount = 0;
+ 
++      // M4(Dynamic Workflows): effort → provider reasoningEffort（仅 high|max 两档）。
++      // low/medium/high → "high"；xhigh/max → "max"（对齐 SendParams.reasoningEffort 契约）。
++      const sendParamsExtra =
++        task.effort !== undefined
++          ? {
++              reasoningEffort: (task.effort === "xhigh" || task.effort === "max"
++                ? "max"
++                : "high") as "high" | "max",
++            }
++          : undefined;
++
+       const loopResult = await runAgentLoop({
+         provider: activeProvider,
+         model: activeModel,
+@@ -693,6 +708,7 @@ export class SubAgent {
+         maxTurns,
+         signal: mergedSignal,
+         loopDetector,
++        sendParamsExtra,
+         onBeforeTurn: (turn) => {
+           // 消费 SendMessage 注入的消息（从第 2 轮开始检查）
+           if (taskId && turn > 1) {
+diff --git a/src/tool/workflow.ts b/src/tool/workflow.ts
+index 9373140..3721ca5 100644
+--- a/src/tool/workflow.ts
++++ b/src/tool/workflow.ts
+@@ -269,7 +269,39 @@ export class WorkflowTool implements Tool {
+     // 8) 跑沙箱
+     try {
+       log.info("WORKFLOW", `▶ 启动 workflow "${meta.name}" (runId=${runId}, source=${source})`);
+-      const { value } = await runInSandbox(src, runtime.buildApi());
++
++      // 内联子 workflow 原语(嵌套仅一层):共享同一 runtime 的调度器/计数器/budget/journal,
++      // 但用子脚本自己的 args,且子脚本里再调 workflow() 抛错(强制单层)。
++      const childWorkflow = async (
++        nameOrRef: string | { scriptPath: string },
++        childArgs?: unknown,
++      ): Promise<unknown> => {
++        // 解析子脚本来源
++        let childSrc: string;
++        if (typeof nameOrRef === "string") {
++          const p = join(workflowScriptsDir(), `${nameOrRef}.js`);
++          if (!existsSync(p)) {
++            throw new Error(`[workflow] 内联子 workflow 未找到: ${nameOrRef}(期望 ${p})`);
++          }
++          childSrc = readFileSync(p, "utf-8");
++        } else if (nameOrRef && typeof nameOrRef === "object" && nameOrRef.scriptPath) {
++          if (!existsSync(nameOrRef.scriptPath)) {
++            throw new Error(`[workflow] 内联子 workflow scriptPath 不存在: ${nameOrRef.scriptPath}`);
++          }
++          childSrc = readFileSync(nameOrRef.scriptPath, "utf-8");
++        } else {
++          throw new Error("[workflow] workflow(nameOrRef) 需要 string 名字或 {scriptPath}");
++        }
++        // 子脚本里再调 workflow() → 抛错(嵌套仅一层)
++        const nestedThrow = () => {
++          throw new Error("[workflow] 嵌套仅一层:子 workflow 内不能再调 workflow()");
++        };
++        const childApi = runtime.buildApi(nestedThrow, { args: childArgs });
++        const { value } = await runInSandbox(childSrc, childApi);
++        return value;
++      };
++
++      const { value } = await runInSandbox(src, runtime.buildApi(childWorkflow));
+ 
+       const outputObj = {
+         workflow: meta.name,
+diff --git a/src/workflow/runtime.ts b/src/workflow/runtime.ts
+index 39a1f86..52a637a 100644
+--- a/src/workflow/runtime.ts
++++ b/src/workflow/runtime.ts
+@@ -274,15 +274,19 @@ export class WorkflowRuntime {
+   /**
+    * 组装注入沙箱的 API。
+    * @param workflowFn  M6 注入的内联子 workflow 实现(可选)
++   * @param argsOverride 覆盖注入的 args(子 workflow 用,传自己的 args 而非父的)
+    */
+-  buildApi(workflowFn?: WorkflowApi["workflow"]): WorkflowApi {
++  buildApi(
++    workflowFn?: WorkflowApi["workflow"],
++    argsOverride?: { args: unknown },
++  ): WorkflowApi {
+     return {
+       agent: this.agent,
+       parallel: this.parallel,
+       pipeline: this.pipeline,
+       phase: this.phase,
+       log: this.log,
+-      args: this.args,
++      args: argsOverride ? argsOverride.args : this.args,
+       budget: this.budget,
+       workflow: workflowFn,
+     };
+diff --git a/src/workflow/sub-agent-runner.ts b/src/workflow/sub-agent-runner.ts
+index 802b923..cef7d00 100644
+--- a/src/workflow/sub-agent-runner.ts
++++ b/src/workflow/sub-agent-runner.ts
+@@ -108,6 +108,7 @@ export class SubAgentRunner implements AgentRunner {
+           model: opts?.model, // executeInner 内再次优先用它
+           schema: opts?.schema, // M2: 结构化输出
+           cwd, // M4: worktree 真并行
++          effort: opts?.effort, // M4: 推理强度透传(low..max → provider high|max)
+         },
+         ctx.signal,
+       );

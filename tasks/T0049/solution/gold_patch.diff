@@ -1,0 +1,611 @@
+diff --git a/src/query/compact/g16-g26-decision.ts b/src/query/compact/g16-g26-decision.ts
+new file mode 100644
+index 0000000..8f5bed2
+--- /dev/null
++++ b/src/query/compact/g16-g26-decision.ts
+@@ -0,0 +1,58 @@
++/**
++ * G16 / G26 架构评估决策记录
++ *
++ * 生成时间：2026-07
++ * 决策：有意延期（Accepted Deferral）
++ *
++ * ## G16 — mid-stream 工具执行
++ *
++ * ### 差距描述
++ * claude-code 在流式响应中每收到一个完整 tool_use block 就立即入队执行（streaming 与
++ * 执行重叠）。sid-code 等整段流式响应结束后才批量执行所有 tool_use block。
++ *
++ * ### 影响
++ * 长响应（如模型一次派 5+ 个工具调用）的端到端延迟更高：sid 多等一段"剩余流式输出时间"。
++ * 典型场景：模型先输出文字解释再给出工具调用 → sid 多等文字输出完的时间。
++ *
++ * ### 不实现的理由
++ * 1. **架构侵入性高**：需要重构整个 processStream → response 处理 → 工具执行管线。
++ *    当前 loop.ts 的流式处理（Promise.race + 看门狗 + turn-level abort + 心跳超时）
++ *    假设"response 是一个完整单元"。mid-stream 执行打破这个假设，需要重新设计：
++ *    - 流式累积器（识别完整 tool_use block 边界）
++ *    - 并行执行协调（流式还在产出新工具 vs 已提交的工具在执行）
++ *    - abort 语义变复杂（abort 流还是 abort 工具还是两者）
++ *    - 错误回滚（半流的 tool_use 如何与已执行的 tool_result 配对）
++ * 2. **ROI 不足**：绝大多数响应 <3s（Sonnet 速度下），工具执行本身是主要延迟来源。
++ *    mid-stream 优化的收益仅在"长文字 + 多工具"的稀有场景显著。
++ * 3. **测试/稳定性风险**：当前"整段完成后批量执行"模式已有 5000+ 测试覆盖且生产稳定。
++ *    mid-stream 重构几乎无法在不引入新 flake 的情况下完成。
++ *
++ * ### 缓解措施
++ * - 已有 G20 sibling-abort：即使批量执行，用户中断时能立即停止所有在跑兄弟工具。
++ * - 流式输出已通过 onStreamText 实时展示给用户，体感上不是"卡住"。
++ *
++ * ### 重新评估条件
++ * - 如果未来支持超长响应（>10s 文字 + 5+ 工具）成为常态场景
++ * - 或用户反馈明确指向"工具执行延迟"而非"LLM 生成延迟"
++ *
++ * ---
++ *
++ * ## G26 — by-round 消息分组
++ *
++ * ### 差距描述
++ * claude-code `grouping.ts` 按 API 轮次分组消息，避免压缩时切碎 tool_use/tool_result 对。
++ * sid-code 按消息条数切边界。
++ *
++ * ### 不实现的理由
++ * sid 已有等效防线（事后修复哲学）：
++ * 1. `checkMessageHistoryIntegrity()`：每次发送前校验 tool_use/tool_result 配对完整性
++ * 2. `backfillOrphanToolResults()`：检测到孤儿 tool_use 时自动补齐占位 tool_result
++ * 3. G22 `partialCompact` 新实现的 `findSafeCompactBoundary()` 已按轮次边界切割
++ *
++ * 两种路线（前置分组 vs 后置修复）功能等价，sid 选择后置修复以保持压缩路径简单。
++ *
++ * ### 重新评估条件
++ * - 如果 backfill 兜底频繁触发（说明切碎很常见）→ 值得前移到分组
++ * - 可通过 grep 日志 "backfillOrphanToolResults" 监控频率
++ */
++export {};
+diff --git a/src/query/tool-executor.ts b/src/query/tool-executor.ts
+index 0c33c89..12ff492 100644
+--- a/src/query/tool-executor.ts
++++ b/src/query/tool-executor.ts
+@@ -30,22 +30,46 @@ const MAX_TOOL_CONCURRENCY = (() => {
+   return Number.isFinite(n) && n > 0 ? n : 10;
+ })();
+ 
++/** withConcurrencyLimit 可选行为钩子 */
++interface ConcurrencyLimitOptions {
++  /** 某个任务 reject 时回调（在结果写入 results 之后触发） */
++  onReject?: (reason: unknown, idx: number) => void;
++  /**
++   * 某任务 reject 后是否停止启动"尚未开始"的队列任务。
++   * 用于 G20 sibling-abort：一旦检测到中断，不再消费剩余队列（已在跑的由共享信号取消）。
++   */
++  stopOnReject?: (reason: unknown) => boolean;
++}
++
+ /** 信号量：限流并发工具执行 */
+ async function withConcurrencyLimit<T>(
+   tasks: Array<() => Promise<T>>,
+   limit: number,
++  opts?: ConcurrencyLimitOptions,
+ ): Promise<PromiseSettledResult<T>[]> {
+   const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+   let nextIdx = 0;
++  let stopped = false;
+ 
+   async function runNext(): Promise<void> {
+     while (nextIdx < tasks.length) {
+       const idx = nextIdx++;
++      // G20：已触发 sibling-abort 时，跳过尚未启动的队列任务（占位为 rejected，
++      // 由上层协议兜底补齐 tool_result；若停止原因是 abort，上层会先向上抛不会用到占位）。
++      if (stopped) {
++        results[idx] = {
++          status: "rejected",
++          reason: new Error("sibling-abort: 兄弟工具已中断，跳过未启动的并发任务"),
++        };
++        continue;
++      }
+       try {
+         const value = await tasks[idx]();
+         results[idx] = { status: "fulfilled", value };
+       } catch (reason: any) {
+         results[idx] = { status: "rejected", reason };
++        opts?.onReject?.(reason, idx);
++        if (opts?.stopOnReject?.(reason)) stopped = true;
+       }
+     }
+   }
+@@ -59,6 +83,30 @@ async function withConcurrencyLimit<T>(
+   return results;
+ }
+ 
++/**
++ * 创建一个"子 AbortController"，链接到父信号：
++ * - 父信号已 abort → 子立即 abort（透传 reason）
++ * - 父信号后续 abort → 子跟随 abort
++ * 子控制器可被 sibling-abort 独立触发（不影响父信号）。
++ * 返回 dispose 用于解绑监听，避免长生命周期父信号累积监听器泄漏。
++ */
++function createLinkedAbortController(
++  parent: AbortSignal | undefined,
++): { controller: AbortController; dispose: () => void } {
++  const controller = new AbortController();
++  if (!parent) return { controller, dispose: () => {} };
++  if (parent.aborted) {
++    controller.abort((parent as any).reason);
++    return { controller, dispose: () => {} };
++  }
++  const onParentAbort = () => controller.abort((parent as any).reason);
++  parent.addEventListener("abort", onParentAbort, { once: true });
++  return {
++    controller,
++    dispose: () => parent.removeEventListener("abort", onParentAbort),
++  };
++}
++
+ /**
+  * P2-1（占位消息治理）：为成功但输出为空的工具生成有语义的"无输出"描述。
+  * 让模型能区分"命令成功但无输出"与"出错/未执行"，并避免空 tool_result 在协议层
+@@ -200,12 +248,21 @@ export async function executeTools(
+ 
+     // 权限检查
+     if (deps.permissionChecker) {
++      // G14：观测输入回填——权限/hook 看到展开后的规范化视图（如 ~ → 绝对路径），
++      // 工具实际执行仍用原始 input（保持 prompt cache 前缀稳定）。
++      let observableInput: unknown = block.input;
++      if (typeof tool.backfillObservableInput === "function") {
++        try {
++          const expanded = tool.backfillObservableInput(block.input);
++          if (expanded !== undefined) observableInput = expanded;
++        } catch { /* 回填钩子异常静默回退原始 input */ }
++      }
+       const permReq: PermissionRequest = {
+         toolName: block.name,
+-        input: block.input,
+-        description: (block.input as any)?.description
+-          ? `${block.name}: ${(block.input as any).description}`
+-          : `${block.name}: ${JSON.stringify(block.input).slice(0, 120)}`,
++        input: observableInput,
++        description: (observableInput as any)?.description
++          ? `${block.name}: ${(observableInput as any).description}`
++          : `${block.name}: ${JSON.stringify(observableInput).slice(0, 120)}`,
+       };
+       const decision = await deps.permissionChecker.check(permReq, tool);
+ 
+@@ -217,7 +274,7 @@ export async function executeTools(
+           // 三路竞争：hook / classifier / 用户交互
+           const { resolvePermission } = await import("../permission/async-decision.ts");
+           const result = await resolvePermission(
+-            { toolName: block.name, input: block.input as Record<string, unknown>, description: desc },
++            { toolName: block.name, input: observableInput as Record<string, unknown>, description: desc },
+             {
+               isInteractive: true,
+               isSubAgent: false,
+@@ -225,7 +282,7 @@ export async function executeTools(
+                 ? async () => {
+                     try {
+                       const hookResult = await deps.hookSystem.firePermissionRequestEvent?.(
+-                        block.name, block.input as Record<string, unknown>, deps.config.permissionMode,
++                        block.name, observableInput as Record<string, unknown>, deps.config.permissionMode,
+                       );
+                       if (!hookResult?.finalOutput) return null;
+                       if (hookResult.finalOutput.isBlockingDecision()) {
+@@ -308,35 +365,67 @@ export async function executeTools(
+     if (concurrent.length > MAX_TOOL_CONCURRENCY) {
+       log.debug("TOOL", `并行工具 ${concurrent.length} 个超过并发上限 ${MAX_TOOL_CONCURRENCY}，超出部分排队`);
+     }
+-    const readResults = await withConcurrencyLimit(
+-      concurrent.map(({ block, tool, idx }) =>
+-        () => executeSingleTool(block, tool, deps).then(r => ({ idx, result: r }))
+-      ),
+-      MAX_TOOL_CONCURRENCY,
+-    );
+-    // abort 优先：任一工具被取消，立即向上抛（由 loop.ts catch 兜底补齐）
+-    for (const r of readResults) {
+-      if (r.status === "rejected" && isAbortError(r.reason)) {
+-        throw r.reason;
++    // G20 sibling-abort：为这一批并发工具建一个链接到父信号的子 AbortController。
++    // 任一兄弟工具被取消（用户 ESC / 上游 abort）时，主动 abort 子信号，
++    // 让其余仍在跑的兄弟工具立即收到取消而非白跑到底（浪费时间/产生多余副作用）。
++    // 子信号独立于父信号：sibling-abort 触发时不反向 abort 父信号。
++    const { controller: siblingController, dispose: disposeSibling } =
++      createLinkedAbortController(deps.getAbortSignal());
++    try {
++      const readResults = await withConcurrencyLimit(
++        concurrent.map(({ block, tool, idx }) =>
++          () => {
++            // G24 interruptBehavior：工具声明 "block" = 用户中断时它选择继续跑完（不被 sibling-abort
++            // 联动取消），此类工具用父信号（仅真正的顶层 abort 能停）而非可被兄弟触发的子信号；
++            // 默认 "cancel"（含未声明）走子信号，参与 sibling-abort 联动。
++            let behavior: "cancel" | "block" = "cancel";
++            try {
++              behavior = tool.interruptBehavior?.() ?? "cancel";
++            } catch { behavior = "cancel"; }
++            const sig = behavior === "block" ? deps.getAbortSignal() : siblingController.signal;
++            return executeSingleTool(block, tool, deps, sig).then(r => ({ idx, result: r }));
++          }
++        ),
++        MAX_TOOL_CONCURRENCY,
++        {
++          // 某个兄弟工具因 abort 结束 → 立即取消其余在跑的兄弟 + 停止启动未开始的队列任务。
++          stopOnReject: (reason) => {
++            if (isAbortError(reason) && !siblingController.signal.aborted) {
++              log.info("TOOL", "并发工具中断：联动取消其余兄弟工具（sibling-abort）");
++              siblingController.abort((reason as any)?.reason ?? reason);
++              return true;
++            }
++            return false;
++          },
++        },
++      );
++      // abort 优先：任一工具被取消，立即向上抛（由 loop.ts catch 兜底补齐）
++      for (const r of readResults) {
++        if (r.status === "rejected" && isAbortError(r.reason)) {
++          throw r.reason;
++        }
+       }
+-    }
+-    for (let i = 0; i < readResults.length; i++) {
+-      const r = readResults[i];
+-      if (r.status === "fulfilled") {
+-        resultMap.set(r.value.idx, r.value.result);
+-      } else {
+-        // 非 abort 的 rejected（如 hook 异常）：executeSingleTool 的 catch 理论上会
+-        // 返回 error tool_result，走不到这里；但若异常发生在 catch 之外（pre hook 等），
+-        // Promise 会 rejected。此处把它转成 error tool_result，避免孤儿 tool_use。
+-        const { block, idx } = concurrent[i];
+-        log.error("TOOL", `并行工具 ${block.name} 异常未被内部捕获: ${r.reason?.message ?? r.reason}`);
+-        resultMap.set(idx, {
+-          type: "tool_result",
+-          tool_use_id: block.id,
+-          content: `工具执行异常: ${r.reason?.message ?? String(r.reason)}`,
+-          is_error: true,
+-        });
++      for (let i = 0; i < readResults.length; i++) {
++        const r = readResults[i];
++        if (r.status === "fulfilled") {
++          resultMap.set(r.value.idx, r.value.result);
++        } else {
++          // 非 abort 的 rejected（如 hook 异常）：executeSingleTool 的 catch 理论上会
++          // 返回 error tool_result，走不到这里；但若异常发生在 catch 之外（pre hook 等），
++          // Promise 会 rejected。此处把它转成 error tool_result，避免孤儿 tool_use。
++          const { block, idx } = concurrent[i];
++          log.error("TOOL", `并行工具 ${block.name} 异常未被内部捕获: ${r.reason?.message ?? r.reason}`);
++          resultMap.set(idx, {
++            type: "tool_result",
++            tool_use_id: block.id,
++            content: `工具执行异常: ${r.reason?.message ?? String(r.reason)}`,
++            is_error: true,
++          });
++        }
+       }
++    } finally {
++      // 解绑父信号监听，避免长生命周期父信号累积监听器泄漏
++      disposeSibling();
+     }
+   }
+ 
+@@ -398,11 +487,16 @@ export async function executeTools(
+   return { results, followup };
+ }
+ 
+-/** 执行单个工具 */
++/** 执行单个工具
++ *
++ * signalOverride：G20 sibling-abort 场景下，并发工具使用链接到父信号的子信号，
++ * 以便某个兄弟工具被取消时联动取消其余在跑的兄弟。未传则回退 deps.getAbortSignal()。
++ */
+ export async function executeSingleTool(
+   block: ToolUseBlock,
+   tool: Tool,
+   deps: ToolExecutorDeps,
++  signalOverride?: AbortSignal,
+ ): Promise<ContentBlock> {
+   const log = getLogger();
+ 
+@@ -464,7 +558,7 @@ export async function executeSingleTool(
+     const progressCallback = deps.onToolProgress
+       ? (event: import("../tool/types.ts").ToolProgressData) => deps.onToolProgress!(block.name, block.id, event)
+       : undefined;
+-    const result = await tool.execute(effectiveInput, deps.getAbortSignal(), progressCallback);
++    const result = await tool.execute(effectiveInput, signalOverride ?? deps.getAbortSignal(), progressCallback);
+     const elapsed = Date.now() - startTime;
+ 
+     deps.sessionState.addToolDuration(elapsed);
+diff --git a/src/tool/bridge.ts b/src/tool/bridge.ts
+new file mode 100644
+index 0000000..6321685
+--- /dev/null
++++ b/src/tool/bridge.ts
+@@ -0,0 +1,109 @@
++/**
++ * G19：LegacyTool ↔ 新泛型 Tool 桥接适配器
++ *
++ * 允许用 buildTool() 构建的新版 Tool 注册到现有 Registry（仅接受 LegacyTool）。
++ * 这是渐进迁移的关键基础设施——新工具可逐一用新接口写，通过 bridge 注册到产线 registry，
++ * 无需等全量迁移完成或改 registry 内部类型。
++ *
++ * 桥接方向：新 Tool → LegacyTool 包装（toLegacyTool）
++ * 反向（LegacyTool → Tool）暂不需要——registry 直接消费 LegacyTool。
++ */
++
++import type {
++  Tool,
++  LegacyTool,
++  LegacyToolResult,
++  ToolProgressData,
++  ToolDescriptionContext,
++  ToolUseContext,
++  PermissionResult,
++} from "./types.ts";
++
++/**
++ * 将新版 Tool<Input, Output> 适配为 LegacyTool，可直接 registry.register()。
++ *
++ * 映射规则：
++ * - name: string → name(): string（getter 包装）
++ * - description(ctx?) → description(ctx?)（透传）
++ * - inputSchema() → inputSchema()（透传）
++ * - call(input, ctx, onProgress) → execute(input, signal, onProgress)（适配 ToolUseContext 合成）
++ * - isReadOnly(input) → readOnly()（无参回退 isReadOnly()）
++ * - isConcurrencySafe(input) → isConcurrencySafe(input)（透传）
++ * - checkPermissions → checkPermissions（透传）
++ * - ToolCapabilityFields 全部透传（zodSchema/searchHint/shouldDefer/interruptBehavior/...）
++ */
++export function toLegacyTool<Input = unknown, Output = string>(
++  tool: Tool<Input, Output>,
++): LegacyTool {
++  const legacy: LegacyTool = {
++    name() {
++      return tool.name;
++    },
++
++    description(ctx?: ToolDescriptionContext) {
++      return tool.description(ctx);
++    },
++
++    inputSchema() {
++      return tool.inputSchema();
++    },
++
++    async execute(
++      input: unknown,
++      signal?: AbortSignal,
++      onProgress?: (event: ToolProgressData) => void,
++    ): Promise<LegacyToolResult> {
++      // 合成最小化的 ToolUseContext（执行器真正使用的字段只有 abortSignal）
++      const ctx: ToolUseContext = {
++        options: {
++          tools: [],
++          mainLoopModel: "",
++          mcpClients: [],
++          isNonInteractive: false,
++        },
++        abortSignal: signal ?? new AbortController().signal,
++        fileStateCache: null as any, // 新工具若需要可自行从闭包捕获
++        messages: [],
++        permissionMode: "default",
++      };
++
++      const result = await tool.call(input as Input, ctx, onProgress);
++
++      return {
++        output: typeof result.data === "string" ? result.data : JSON.stringify(result.data),
++        isError: result.isError,
++      };
++    },
++
++    readOnly() {
++      return tool.isReadOnly();
++    },
++
++    isConcurrencySafe(input: unknown) {
++      return tool.isConcurrencySafe(input as Input);
++    },
++
++    usageGuide() {
++      return tool.usageGuide?.() ?? "";
++    },
++  };
++
++  // 透传 ToolCapabilityFields
++  if (tool.zodSchema) legacy.zodSchema = tool.zodSchema;
++  if (tool.searchHint) legacy.searchHint = tool.searchHint;
++  if (tool.shouldDefer) legacy.shouldDefer = tool.shouldDefer;
++  if (tool.alwaysLoad) legacy.alwaysLoad = tool.alwaysLoad;
++  if (tool.interruptBehavior) legacy.interruptBehavior = tool.interruptBehavior;
++  if (tool.maxResultSizeChars !== undefined) legacy.maxResultSizeChars = tool.maxResultSizeChars;
++  if (tool.toAutoClassifierInput) legacy.toAutoClassifierInput = tool.toAutoClassifierInput.bind(tool);
++  if (tool.backfillObservableInput) legacy.backfillObservableInput = tool.backfillObservableInput.bind(tool);
++
++  // 权限检查透传
++  if (tool.checkPermissions) {
++    legacy.checkPermissions = async (input: unknown, context: ToolUseContext): Promise<PermissionResult> => {
++      return tool.checkPermissions!(input as Input, context);
++    };
++  }
++
++  return legacy;
++}
+diff --git a/src/tool/edit.ts b/src/tool/edit.ts
+index 4964a0c..85f8a19 100644
+--- a/src/tool/edit.ts
++++ b/src/tool/edit.ts
+@@ -394,6 +394,20 @@ export class EditTool implements Tool {
+     return `编辑 ${filePath}: "${oldStr.slice(0, 60)}" → "${newStr.slice(0, 60)}"`;
+   }
+ 
++  /**
++   * G14：观测输入回填——把 file_path 展开为绝对路径，供权限校验/hook 观测。
++   * 执行输入不变（保持 prompt cache 前缀稳定）。
++   */
++  backfillObservableInput(input: unknown): unknown | undefined {
++    const filePath = (input as any)?.file_path;
++    if (!filePath || typeof filePath !== "string") return undefined;
++    try {
++      const expanded = normalizeToolPath(filePath);
++      if (expanded === filePath) return undefined;
++      return { ...(input as any), file_path: expanded };
++    } catch { return undefined; }
++  }
++
+   /** 工具级权限检查：敏感文件路径要求确认，其余 passthrough */
+   async checkPermissions(input: unknown, _context: ToolUseContext): Promise<PermissionResult> {
+     const filePath = (input as any)?.file_path;
+diff --git a/src/tool/read.ts b/src/tool/read.ts
+index 234a96b..344af7c 100644
+--- a/src/tool/read.ts
++++ b/src/tool/read.ts
+@@ -158,6 +158,21 @@ export class ReadTool implements Tool {
+     return { behavior: "passthrough" };
+   }
+ 
++  /**
++   * G14：观测输入回填——把 file_path 展开为绝对路径，供权限校验/hook 观测。
++   * 执行输入不变（保持 prompt cache 前缀稳定）。read 是只读工具，回填让 deny 规则
++   * 能正确命中 ~/相对路径 形态（否则规则只写绝对路径时会被绕过）。
++   */
++  backfillObservableInput(input: unknown): unknown | undefined {
++    const filePath = (input as any)?.file_path;
++    if (!filePath || typeof filePath !== "string") return undefined;
++    try {
++      const expanded = normalizeToolPath(filePath);
++      if (expanded === filePath) return undefined;
++      return { ...(input as any), file_path: expanded };
++    } catch { return undefined; }
++  }
++
+   name(): string {
+     return "read";
+   }
+diff --git a/src/tool/registry.ts b/src/tool/registry.ts
+index 1e13d6b..524deba 100644
+--- a/src/tool/registry.ts
++++ b/src/tool/registry.ts
+@@ -10,7 +10,7 @@
+  * `Tool` 接口后，此处一并升级，deprecation 自然消除。
+  */
+ 
+-import type { LegacyTool } from "./types.ts";
++import type { LegacyTool, ToolDescriptionContext } from "./types.ts";
+ import type { ToolDefinition } from "../llm/types.ts";
+ import { z } from "zod/v4";
+ import { getLogger } from "../debug/index.ts";
+@@ -47,8 +47,8 @@ function cachedZodToJsonSchema(zodSchema: object): Record<string, unknown> {
+  * z.toJSONSchema 失败时（极少数 schema 含不可序列化结构）降级回退 inputSchema()，
+  * 并打 warn 日志，避免单个工具拖垮整个定义列表。
+  */
+-function toolToDefinition(t: LegacyTool): ToolDefinition {
+-  let desc = t.description();
++function toolToDefinition(t: LegacyTool, descCtx?: ToolDescriptionContext): ToolDefinition {
++  let desc = t.description(descCtx);
+   if (t.usageGuide) {
+     const guide = t.usageGuide();
+     if (guide) desc += `\n\n使用指南:\n${guide}`;
+@@ -88,6 +88,12 @@ export interface AssembleOptions {
+   mode?: "normal" | "plan" | "simple";
+   /** 子代理类型 */
+   agentType?: string;
++  /**
++   * G24：description() 的上下文（对标 claude-code 入参感知描述）。
++   * 透传给 toolToDefinition → t.description(ctx)，让工具据交互模式/权限模式动态调整描述。
++   * 未提供时按零参调用 description()，与既有实现完全兼容。
++   */
++  descriptionContext?: ToolDescriptionContext;
+ }
+ 
+ /** simple 模式下可用的工具 */
+@@ -173,7 +179,8 @@ export class Registry {
+   /** 返回所有工具的 LLM 定义（用于发送给 AI） */
+   definitions(options?: AssembleOptions): ToolDefinition[] {
+     const tools = options ? this.assembleToolPool(options) : this.all();
+-    const defs = tools.map(toolToDefinition);
++    const descCtx = options?.descriptionContext;
++    const defs = tools.map((t) => toolToDefinition(t, descCtx));
+     // D2 前缀稳定性：工具定义按 name 固定字典序输出，杜绝注册顺序抖动（尤其 MCP 异步连接顺序）。
+     // P2-2: StructuredOutput 始终排最后——其动态 schema 变化只影响自身的 cache 命中，
+     // 不影响前面所有工具的 Anthropic Prompt Cache prefix 匹配。
+@@ -283,9 +290,10 @@ export class Registry {
+   /** 获取非延迟工具的定义（用于初始 prompt，减少 token 消耗） */
+   activeDefinitions(options?: AssembleOptions): ToolDefinition[] {
+     const tools = options ? this.assembleToolPool(options) : this.all();
++    const descCtx = options?.descriptionContext;
+     const defs = tools
+       .filter((t) => !this.isToolDeferred(t))
+-      .map(toolToDefinition);
++      .map((t) => toolToDefinition(t, descCtx));
+     // 10.2：与 definitions() 保持一致的字典序排列，杜绝注册顺序导致的 prompt cache 失效。
+     // StructuredOutput 始终排最后（其动态 schema 不影响前面工具的缓存前缀匹配）。
+     defs.sort((a, b) => {
+diff --git a/src/tool/types.ts b/src/tool/types.ts
+index 3f840b3..a90be84 100644
+--- a/src/tool/types.ts
++++ b/src/tool/types.ts
+@@ -34,8 +34,10 @@ export interface ToolDescriptionContext {
+  * ToolSearch 协议字段 + 中断行为 —— 新旧两版接口共享的"能力声明"。
+  *
+  * 字段先行：`searchHint` / `shouldDefer` / `alwaysLoad` 由 registry 的
+- * activeDefinitions() 消费（按 shouldDefer 过滤首轮上下文），`interruptBehavior`
+- * 为后续接线预留。`zodSchema` 由执行器与 registry 消费（运行时校验 + JSON Schema 生成）。
++ * activeDefinitions() 消费（按 shouldDefer 过滤首轮上下文）。`interruptBehavior`
++ * 由 tool-executor 并发路径消费（G24）：声明 "block" 的工具在 sibling-abort 时用父信号
++ * 而非可联动取消的子信号，即用户中断兄弟工具时它选择继续跑完。`zodSchema` 由执行器与
++ * registry 消费（运行时校验 + JSON Schema 生成）。
+  */
+ export interface ToolCapabilityFields<Input = unknown> {
+   /**
+@@ -77,6 +79,20 @@ export interface ToolCapabilityFields<Input = unknown> {
+    * 纯读取语义、无副作用——分类器只读它，不据此改变执行输入。
+    */
+   toAutoClassifierInput?(input: Input): string | undefined;
++
++  /**
++   * G14：给权限校验/hook 看的"观测输入视图"回填（对标 claude-code backfillObservableInput）。
++   *
++   * 背景：模型发出的原始 input 可能是未展开的形态（如 `~/.ssh/config`、相对路径 `../x`），
++   * 工具内部执行前才 normalize 成绝对路径。若权限 deny 规则/hook 直接吃原始 input，
++   * `~` 形态可能绕过对绝对路径写的 deny 规则。此钩子让工具"预展开"出一份规范化视图
++   * （如把 file_path 展开为绝对路径），**仅供权限校验与 hook 观测**。
++   *
++   * 关键：返回值不回灌进 tool.execute 的执行输入——执行仍用原始 input，
++   * 以保持 Anthropic Prompt Cache 前缀稳定（input 变动会击穿缓存）。观测视图与执行视图分离。
++   * 返回 `undefined` 表示无需回填（回退原始 input 观测）。纯函数、无副作用。
++   */
++  backfillObservableInput?(input: Input): Input | undefined;
+ }
+ 
+ // ===== 旧版接口（渐进式迁移期间保留） =====
+@@ -99,6 +115,10 @@ export interface LegacyToolResult {
+  * @deprecated 自 2026-06 工具接口现代化起，新工具请使用新版泛型 `Tool<Input, Output, Progress>`。
+  * 当前 25 个工具类仍是 LegacyTool 实现（渐进式迁移中，尚未完成向新版 Tool 的接口级迁移），
+  * 但已全部接入 zod schema 运行时校验。待全部工具完成接口迁移后，此接口将被删除。
++ *
++ * G19 迁移路径：新工具直接用 `buildTool()` 写成 `Tool<Input, Output>`，再经
++ * `tool/bridge.ts` 的 `toLegacyTool()` 适配后 `registry.register()`——无需等全量迁移，
++ * 也无需改 registry 内部类型。既有工具改到时逐一切换，不做大爆炸重写。
+  */
+ export interface LegacyTool extends ToolCapabilityFields {
+   name(): string;
+diff --git a/src/tool/write.ts b/src/tool/write.ts
+index 4b0b687..7f6b08c 100644
+--- a/src/tool/write.ts
++++ b/src/tool/write.ts
+@@ -54,6 +54,20 @@ export class WriteTool implements Tool {
+     return `写入文件 ${filePath}${preview ? `: ${preview}` : ""}`;
+   }
+ 
++  /**
++   * G14：观测输入回填——把 file_path 展开为绝对路径，供权限校验/hook 观测。
++   * 执行输入不变（保持 prompt cache 前缀稳定）。
++   */
++  backfillObservableInput(input: unknown): unknown | undefined {
++    const filePath = (input as any)?.file_path;
++    if (!filePath || typeof filePath !== "string") return undefined;
++    try {
++      const expanded = normalizeToolPath(filePath);
++      if (expanded === filePath) return undefined; // 已是绝对路径，无需回填
++      return { ...(input as any), file_path: expanded };
++    } catch { return undefined; }
++  }
++
+   /** 工具级权限检查：敏感文件路径要求确认，其余 passthrough */
+   async checkPermissions(input: unknown, _context: ToolUseContext): Promise<PermissionResult> {
+     const filePath = (input as any)?.file_path;

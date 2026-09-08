@@ -1,0 +1,313 @@
+diff --git a/src/cli.ts b/src/cli.ts
+index 2f0cc65..ce39895 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1251,10 +1251,16 @@ export async function main(): Promise<void> {
+     // 注册假设登记表工具（环节③：把"怀疑自己的假设"从模型自律外化为 harness 机制）。
+     // register 工具持有 ledger，challenge 工具复用同一实例；turnProvider 暂用占位（轮次仅用于
+     // 证据追溯，非关键路径）。queryLoop 经 deps.getHypothesisLedger 读取做矛盾中断 + 交付门禁。
+-    const { HypothesisRegisterTool, HypothesisChallengeTool } = await import("./tool/hypothesis.ts");
+-    const hypothesisRegisterTool = new HypothesisRegisterTool();
+-    toolRegistry.register(hypothesisRegisterTool);
+-    toolRegistry.register(new HypothesisChallengeTool(hypothesisRegisterTool.getLedger()));
++    // 2026-08-01：整段受 isHypothesisEnabled() gate 保护，默认开启，
++    // SID_DISABLE_HYPOTHESIS=1 可关（实测占 31.4% input token，需要逃生口）。
++    // 不注册工具时 deps.getHypothesisLedger 也拿不到 ledger，矛盾中断/交付门禁一并静默。
++    const { isHypothesisEnabled } = await import("./query/hypothesis-ledger.ts");
++    if (isHypothesisEnabled()) {
++      const { HypothesisRegisterTool, HypothesisChallengeTool } = await import("./tool/hypothesis.ts");
++      const hypothesisRegisterTool = new HypothesisRegisterTool();
++      toolRegistry.register(hypothesisRegisterTool);
++      toolRegistry.register(new HypothesisChallengeTool(hypothesisRegisterTool.getLedger()));
++    }
+ 
+     // 注册子代理工具
+     const { SubAgentTool } = await import("./agent/tool.ts");
+diff --git a/src/config/system-prompt.ts b/src/config/system-prompt.ts
+index 2093e10..37309e1 100644
+--- a/src/config/system-prompt.ts
++++ b/src/config/system-prompt.ts
+@@ -822,6 +822,24 @@ function buildToolGuideSection(tools: Tool[], options?: { excludeMcp?: boolean }
+     }
+   }
+ 
++  // 2026-08-01：假设纪律那段常驻引导按 hypothesis_register **是否真的注册**决定去留。
++  // SID_DISABLE_HYPOTHESIS=1 时工具不注册，这段静态文案若照旧注入，就是在教模型调用
++  // 一个不存在的工具（必然 tool_use 失败），同时白占 system prompt 的 token。
++  // 判据取实际工具列表而非再读一次 env：工具注册是唯一事实源，避免两处判据漂移。
++  const hasHypothesis = tools.some((t) => t.name() === "hypothesis_register");
++  const hypothesisDiscipline = hasHypothesis
++    ? `
++  - **这类任务除了挂 todo 清单，形成事实性判断时还要走假设纪律**：
++    - 形成第一个"我认为是 X"的判断时，用 \`hypothesis_register\` 登记它、写清证伪条件（"看到什么证据就推翻"），而不是直接当结论写下去
++    - 对某文件下事实性结论（行数、参数值、是否存在某逻辑）前，必须先 read 该文件，不能仅凭 grep 命中外推
++    - 标记"已完成/已落地"的检查项必须附 \`file:line\` 证据指针
++    - 待核验项 ≥5 个时，出最终报告前建议用 \`sub_agent\`(type: verify) 抽检 2-3 条最有把握的"已完成"结论
++    - 不需要走这套纪律的场景：日常编码、翻译、简单修改、读代码理解逻辑、单点问答。判断标准：你即将写下一个会被据此改代码或下决策的事实判断时，才走假设纪律`
++    : `
++  - **形成事实性判断时的取证纪律**：
++    - 对某文件下事实性结论（行数、参数值、是否存在某逻辑）前，必须先 read 该文件，不能仅凭 grep 命中外推
++    - 标记"已完成/已落地"的检查项必须附 \`file:line\` 证据指针`;
++
+   return `
+ <tool-guide>
+ ## 可用工具
+@@ -855,12 +873,7 @@ ${customGuides.length > 0 ? "\n" + customGuides.join("\n") : ""}
+   - **排查 / 审计 / 多点核验类长任务尤其要挂清单**：当任务是"逐项核验一组缺陷/孤儿函数/状态字段/规范条目是否落地"时（≥3 项即算），先把每个待核验项落成一条 todo（如「核验 X 函数是否零调用」「核验 Y 字段是否漏重置」），逐条 grep/read 核实后再勾销。这能防止"扫到一半漏掉同范式的其它残留"。
+   - 正例：用户给 13 条待修缺陷要你核验 → 立即建 13 条 todo，每核验一条标记 completed，附 \`file:line\` 结论。
+   - 反例：同样 13 条，却凭记忆线性扫一遍直接成文、不建清单 → 极易漏项（实测覆盖度系统性偏低）。这是被明确禁止的工作方式。
+-  - **这类任务除了挂 todo 清单，形成事实性判断时还要走假设纪律**：
+-    - 形成第一个"我认为是 X"的判断时，用 \`hypothesis_register\` 登记它、写清证伪条件（"看到什么证据就推翻"），而不是直接当结论写下去
+-    - 对某文件下事实性结论（行数、参数值、是否存在某逻辑）前，必须先 read 该文件，不能仅凭 grep 命中外推
+-    - 标记"已完成/已落地"的检查项必须附 \`file:line\` 证据指针
+-    - 待核验项 ≥5 个时，出最终报告前建议用 \`sub_agent\`(type: verify) 抽检 2-3 条最有把握的"已完成"结论
+-    - 不需要走这套纪律的场景：日常编码、翻译、简单修改、读代码理解逻辑、单点问答。判断标准：你即将写下一个会被据此改代码或下决策的事实判断时，才走假设纪律
++${hypothesisDiscipline}
+ - **方案不确定先规划**: 当实现路径存在真实架构歧义（多种合理方案、需求不明确、高风险重构）时，用 enter_plan_mode 先对齐方案再编码。日常任务拿不准时倾向于直接开始工作，遇到具体选择点再问用户——「先动手再问」比「每个任务都 plan」更高效
+ - **大任务先分治**: 当任务可拆成多个相对独立的子方向（如系统排查要过多个模块、审计要查多个维度、需要同时搜索多处来源）时，用 sub_agent 工具分派多个子代理并行深挖，每个子代理有独立上下文、互不污染。判据：子方向 ≥ 3 个，或单个方向读起来会撑爆主上下文时，优先分治，而不是自己一个个串行读。类型选择：只读探查派 explore，要改文件 / 跑命令派 task，验证某个结论是否成立派 verify。注意这与上面「并行调只读工具」是两回事——并行 read/grep 只是同一上下文里多发几个只读调用，分治是把整段子任务连同其上下文交给独立子代理；方向多、单方向重时用分治。子代理内部不能再派子代理，分治只能由主线程发起
+ </tool-guide>`;
+diff --git a/src/help.ts b/src/help.ts
+index 51c9a54..5d35025 100644
+--- a/src/help.ts
++++ b/src/help.ts
+@@ -176,6 +176,7 @@ Worktree 隔离:
+   SID_CODE_DISABLE_PROJECT_RULES  设为 1 跳过 CLAUDE.md 加载（评测隔离）
+   SID_ENABLE_LOOP_DETECTION     循环检测默认关闭（实测 shape 检测误判率≈100%、exact 召回≈0），设为 1 可显式开启
+   SID_ENABLE_BARE_ELLIPSIS_CHECK  裸符号省略号检测 [...]/(...)  默认关闭（实测真阳性 0、误报高），设为 1 可显式开启
++  SID_DISABLE_HYPOTHESIS        设为 1 关闭假设登记表（含矛盾中断/交付门禁）。默认开启：实测能拦住错误根因，但也占约 31% input token，纯执行类任务可关
+ 
+   系统路径:
+   SID_CONFIG_DIR                配置根目录覆盖（缺省 ~/.sid-code）
+diff --git a/src/query/hypothesis-ledger.ts b/src/query/hypothesis-ledger.ts
+index c2b3992..ff9f5cc 100644
+--- a/src/query/hypothesis-ledger.ts
++++ b/src/query/hypothesis-ledger.ts
+@@ -92,6 +92,23 @@ export interface Hypothesis {
+    * 前者是**打扰预算**(注入几次就够了)。合成一个会让"上限用尽"顺带把事实抹掉。
+    */
+   reopenChallengeCount: number;
++  /**
++   * 已被模型**复核过**的打脸次数(≤ challengedAfterConfirm)。
++   *
++   * 存在理由(2026-08-01 成本收益实测,会话 20260801-120158-d91920a0):
++   * 此前 `challengedAfterConfirm` 只增不减,而交付门禁的闸门读的正是它
++   * (`hasChallengedConfirmed()`)——于是一条假设只要被撞过一次,门禁对该会话
++   * **永久武装**:模型复核后重新 confirm,闸门条件依然为真,下一次收尾再拦一遍。
++   * 实测末尾 turn 64/66 连续两次拦截、turn 65/67 把三条已确认假设原地重confirm,
++   * 4 轮零新增结论——这就是用户看到的"鬼打墙"。
++   *
++   * 修法不是把事实抹掉(那会丢掉门禁文案要的留痕),而是把「事实」与「是否已复核」
++   * 分开:`challengedAfterConfirm` 仍永久累加,门禁只看**未复核**的差值
++   * (`challengedAfterConfirm > challengesAcknowledged`)。语义因此完整:
++   *   - 复核过 → 闸门放下,不再重复拦;
++   *   - 复核后**又**来新证据 → 差值再次为正,闸门重新武装(防线未被削弱)。
++   */
++  challengesAcknowledged: number;
+ }
+ 
+ /** 登记一条假设的入参 */
+@@ -309,6 +326,23 @@ export const MAX_REOPEN_CHALLENGES = 2;
+  */
+ export const SESSION_CUE_FREQ_THRESHOLD = 6;
+ 
++/**
++ * 假设登记表机制总开关(默认**开启**,设 `SID_DISABLE_HYPOTHESIS=1` 关闭)。
++ *
++ * 为什么需要一个逃生口(2026-08-01 成本收益实测,会话 20260801-120158-d91920a0):
++ * 该机制在一次审计类任务里占掉 **31.4% 的 input token、31.1% 的 API 墙钟时间**
++ * (21/65 个有工具的轮是"只调假设工具、零信息获取"的纯假设轮,且没有任何一轮把
++ * 裁决与 read/grep 合并)。收益是真实的——同一会话 H1–H5 全部被证伪,拦住了一份
++ * 全错的交付物——但一个吃掉三成成本的机制此前**硬注册、无法关闭**,风险不对称:
++ * 换到不需要根因推理的任务(纯执行、纯格式化、跑测试)上,成本照付而收益为零。
++ *
++ * 默认仍为开启(与 SID_ENABLE_LOOP_DETECTION 那类"默认关"的启发式不同):它的收益
++ * 已被实测证实,不是待验证的猜想。这里只补上可逆性,不改变默认行为。
++ */
++export function isHypothesisEnabled(): boolean {
++  return process.env.SID_DISABLE_HYPOTHESIS !== "1";
++}
++
+ /**
+  * 从本轮 tool_result 里挑出可作为"新证据"的文本(机制2 的输入)。
+  *
+@@ -421,19 +455,34 @@ export class HypothesisLedger {
+       challengedFingerprints: [],
+       challengedAfterConfirm: 0,
+       reopenChallengeCount: 0,
++      challengesAcknowledged: 0,
+     };
+     this.items.set(id, h);
+     return h;
+   }
+ 
+-  /** 裁决一条假设(机制2 的人/模型响应入口) */
+-  challenge(input: ChallengeInput): Hypothesis {
++  /**
++   * 裁决一条假设(机制2 的人/模型响应入口)。
++   *
++   * 返回 `{ h, redundant }`:`redundant=true` 表示这次裁决没有改变任何状态,也没有
++   * 结清任何未复核的打脸——即"绕一圈回到同一结论"的空转(实测 26 次裁决里 11 次
++   * 是这种,占 42%)。调用方据此回一句短提示而非完整登记表,省掉下一轮的往返。
++   */
++  challenge(input: ChallengeInput): { h: Hypothesis; redundant: boolean } {
+     const h = this.items.get(input.id);
+     if (!h) throw new Error(`未找到假设 ${input.id}`);
+     const ev = { ...input.evidence, turn: input.evidence.turn ?? input.turn };
++    // 空转判定必须在改状态**之前**取快照:状态未变 + 没有待复核的打脸 + 证据不是新的。
++    const statusBefore = h.status;
++    const pendingBefore = h.challengedAfterConfirm - h.challengesAcknowledged;
++    const evFp = fingerprint(`${ev.note} ${ev.source ?? ""}`);
++    const evidenceIsNew = !h.challengedFingerprints.includes(evFp);
+     if (input.verdict === "confirm") {
+       h.supporting.push(ev);
+       h.status = "confirmed";
++      // 关键修复:确认即视为"已复核这些打脸"。事实(challengedAfterConfirm)不动,
++      // 只推进复核水位——门禁因此放下,而复核后新来的证据仍会让差值重新为正。
++      h.challengesAcknowledged = h.challengedAfterConfirm;
+     } else if (input.verdict === "refute") {
+       h.refuting.push(ev);
+       h.status = "refuted";
+@@ -458,9 +507,12 @@ export class HypothesisLedger {
+     }
+     h.updatedTurn = input.turn ?? h.updatedTurn;
+     // 裁决后,把本条证据指纹记入已处理集合(防止同证据再次触发中断)
+-    const fp = fingerprint(`${ev.note} ${ev.source ?? ""}`);
+-    if (!h.challengedFingerprints.includes(fp)) h.challengedFingerprints.push(fp);
+-    return h;
++    if (evidenceIsNew) h.challengedFingerprints.push(evFp);
++    // 空转 = 状态没变 + 本来就没有待复核的打脸 + 证据也不是新的。
++    // 三个条件必须同时成立才算空转:状态变了是实质进展;有待复核打脸时的 confirm
++    // 是"复核动作"(会推进 challengesAcknowledged),都不该被判为空转。
++    const redundant = h.status === statusBefore && pendingBefore === 0 && !evidenceIsNew;
++    return { h, redundant };
+   }
+ 
+   /**
+@@ -614,17 +666,25 @@ export class HypothesisLedger {
+    * 交付门禁的**第二道闸门**:`hasUnsettled()` 口径刻意不变(confirmed 仍不算未结清,
+    * 否则每条确认假设都会拦一道、正常交付被误伤),但"确认后又被打脸"的假设必须单独拦
+    * ——这正是"提前宣布胜利"绕过审查的那扇后窗。
++   *
++   * 2026-08-01(成本收益实测)口径修正:判据从"被打脸过"改为"有**未复核**的打脸"
++   * ——`challengedAfterConfirm > challengesAcknowledged`。旧口径只增不减,让门禁在
++   * 一条假设被撞一次后对整个会话永久武装:模型复核并重新 confirm 后闸门依然为真,
++   * 下次收尾再拦一遍(实测末尾连拦 2 次、4 轮零新增结论)。改成差值后语义完整:
++   * 复核过就放下,复核后又来新证据则重新武装。
+    */
+   challengedConfirmed(): Hypothesis[] {
+     return [...this.items.values()].filter(
+-      (h) => h.status === "confirmed" && h.challengedAfterConfirm > 0,
++      (h) => h.status === "confirmed" && h.challengedAfterConfirm > h.challengesAcknowledged,
+     );
+   }
+ 
+-  /** 缺口1:是否存在"确认后又被证据挑战过"的假设(门禁闸门用)。 */
++  /** 缺口1:是否存在"确认后又被证据挑战过、且尚未复核"的假设(门禁闸门用)。 */
+   hasChallengedConfirmed(): boolean {
+     for (const h of this.items.values()) {
+-      if (h.status === "confirmed" && h.challengedAfterConfirm > 0) return true;
++      if (h.status === "confirmed" && h.challengedAfterConfirm > h.challengesAcknowledged) {
++        return true;
++      }
+     }
+     return false;
+   }
+@@ -850,6 +910,18 @@ export class HypothesisLedger {
+         // 打扰预算刻意**不**从快照恢复语义上的"已用尽"——resume 是新一段排查，
+         // 让每条已确认假设重新有 MAX_REOPEN_CHALLENGES 次机会。同样是"宁可多提醒"。
+         reopenChallengeCount: 0,
++        // 复核水位如实回灌:它与 challengedAfterConfirm 成对决定门禁是否武装。
++        // 只回灌其中一个会造出假状态——单独丢 acknowledged 会让 resume 后凭空多出
++        // 一次拦截(旧会话已复核过的打脸重新变成"未复核")。缺字段时按 0 降级，
++        // 并 clamp 到 challengedAfterConfirm 以内，防手改快照造出负差值。
++        challengesAcknowledged: Math.min(
++          typeof h.challengesAcknowledged === "number" && h.challengesAcknowledged >= 0
++            ? h.challengesAcknowledged
++            : 0,
++          typeof h.challengedAfterConfirm === "number" && h.challengedAfterConfirm >= 0
++            ? h.challengedAfterConfirm
++            : 0,
++        ),
+       });
+       // 从 id(形如 "H3")提取编号,兜底 seq
+       const m = /^H(\d+)$/.exec(h.id);
+diff --git a/src/query/loop.ts b/src/query/loop.ts
+index df32640..a33724f 100644
+--- a/src/query/loop.ts
++++ b/src/query/loop.ts
+@@ -1211,7 +1211,15 @@ export async function* queryLoop(
+     // hypothesisGuideInjected 与 turnCount===1 双保险，保证同一条消息内不重复注入。
+     // AND 检测（路径+动词）+ system-prompt 常驻引导兜底，详见
+     // docs/bugfixes/todo/最终结论与TODO-彻底修复防线零触发.md。
+-    if (state.turnCount === 1 && !state.hypothesisGuideInjected) {
++    // 2026-08-01：机制可被 SID_DISABLE_HYPOTHESIS=1 关闭，此时工具未注册，
++    // 引导必须一并静默——否则会催模型去调一个不存在的工具（必然 tool_use 失败）。
++    // 判据用 ledger 可达性而非直接读 env：与下面 judgment 通道（`if (ledger && ...)`）
++    // 同源，只有一处事实源，不会出现"env 关了但某条通道漏改"的漂移。
++    if (
++      state.turnCount === 1 &&
++      !state.hypothesisGuideInjected &&
++      deps.getHypothesisLedger?.() != null
++    ) {
+       const userText = extractLastUserInput(ctxMgr);
+       if (detectInvestigationContext(userText)) {
+         // 缺口3 修复项2：turn-1 通道降级为极简一句。完整引导（含"为什么要登记"
+diff --git a/src/tool/hypothesis.ts b/src/tool/hypothesis.ts
+index 9015670..0a41a81 100644
+--- a/src/tool/hypothesis.ts
++++ b/src/tool/hypothesis.ts
+@@ -240,6 +240,12 @@ export class HypothesisChallengeTool implements Tool {
+     verdict: string,
+     direction: string | undefined,
+     turn: number,
++    /**
++     * 本次裁决是否为空转(状态未变 + 无待复核证据 + 证据非新)。
++     * 落进事件才能在现网回答"空转率是多少"——2026-08-01 实测 42% 靠离线重算得出,
++     * 当时事件里没有这个字段,只能凭 verdict 序列反推。
++     */
++    redundant: boolean,
+   ): void {
+     if (!this.traceSink) return;
+     try {
+@@ -264,6 +270,10 @@ export class HypothesisChallengeTool implements Tool {
+           refutingWithSource: withSource(h.refuting),
+           /** 缺口1:确认后又被证据打脸的次数(0 表示没被挑战过) */
+           challengedAfterConfirm: h.challengedAfterConfirm,
++          /** 其中已被复核过的次数;与上一字段的差值 >0 才武装交付门禁 */
++          challengesAcknowledged: h.challengesAcknowledged,
++          /** 本次裁决是否空转(离线算空转率用,不必再从 verdict 序列反推) */
++          redundant,
+           /** 该假设从登记到本次裁决跨了几轮(turn 口径同 createdTurn,由 turnProvider 决定) */
+           turn,
+           createdTurn: h.createdTurn,
+@@ -341,7 +351,7 @@ fdb47f30 的教训正是:已推出"进程没崩"的正确证据,却因不愿推
+     }
+     try {
+       const turn = this.turnProvider();
+-      const h = this.ledger.challenge({
++      const { h, redundant } = this.ledger.challenge({
+         id: p.id,
+         verdict: p.verdict,
+         evidence: { ...p.evidence, turn },
+@@ -356,7 +366,20 @@ fdb47f30 的教训正是:已推出"进程没崩"的正确证据,却因不愿推
+       // 修没修对的唯一硬指标:若 confirm 大多只有 0-1 条无 source 证据,说明"提前宣布
+       // 胜利"依然普遍,翻案机制该收紧;若普遍 2 条以上带 source,说明确认是扎实的。
+       // 带 source 的比例单独记:出处指针是证据可回溯性的代理指标(对齐 digest 的 Provenance)。
+-      this.emitSettled(h, p.verdict, p.evidence_direction, turn);
++      this.emitSettled(h, p.verdict, p.evidence_direction, turn, redundant);
++      // 2026-08-01 成本收益实测:26 次裁决里 11 次(42%)是"绕一圈回到同一结论"的空转。
++      // 空转轮的边际成本等于一次真实工作轮(实测纯假设轮平均 32.9s、与工作轮 32.5s
++      // 几乎相同,因为整个上下文要全价重发),而产出信息量为零。
++      //
++      // 这里回一句短提示而不是完整登记表:载荷越长,模型越倾向"再读一遍再回一次",
++      // 空转就自我延续。明确告诉它"状态没变、无需再裁决"是打断该循环的最短路径。
++      if (redundant) {
++        return {
++          output:
++            `${h.id} 已是 ${h.status},本次裁决未改变状态、也没有待复核的新证据——无需重复裁决。\n` +
++            `若要继续推进:补充**新**证据后再裁决,或直接交付(该假设已结清)。`,
++        };
++      }
+       const unsettled = this.ledger.unsettled();
+       const tailParts: string[] = [];
+       if (unsettled.length > 0) {

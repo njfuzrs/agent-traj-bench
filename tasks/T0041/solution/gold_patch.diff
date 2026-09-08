@@ -1,0 +1,2143 @@
+diff --git a/src/app.ts b/src/app.ts
+index 81a64bf..f64d786 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -32,6 +32,13 @@ import { clearPromptCache } from "./config/system-prompt.ts";
+ import { getLogger, getMemoryMonitor, getSessionMetrics } from "./debug/index.ts";
+ import { QueryEngine } from "./query/engine.ts";
+ import { HookSystem } from "./hook/system.ts";
++import {
++  SDKQueryEngine,
++  type SDKQueryEngineDriver,
++  StructuredIO,
++  CommandQueue,
++  runHeadless as sdkRunHeadless,
++} from "./sdk/index.ts";
+ import { JitContextManager } from "./config/jit-context.ts";
+ import { isAbortError } from "./llm/errors.ts";
+ import { execSync } from "child_process";
+@@ -860,6 +867,12 @@ export class App {
+   async runHeadless(input: string): Promise<string> {
+     await this.init();
+ 
++    // stream-json 模式：走 SDK 编程接口（NDJSON 双向流式）
++    if (this.config.outputFormat === "stream-json") {
++      await this.runHeadlessSDK(input);
++      return "";
++    }
++
+     let streamBuffer = "";
+     this.queryEngine.setStreamTextCallback((text) => { streamBuffer += text; });
+ 
+@@ -947,6 +960,108 @@ export class App {
+     process.exit(runError ? 1 : 0);
+   }
+ 
++  /**
++   * 构建 SDKQueryEngineDriver：把现有 QueryEngine 适配为 SDK 引擎驱动。
++   *
++   * 关键：不重建 queryLoop，而是包装 this.queryEngine 的事件流（依赖反转，
++   * spec §2.1 #4）。SDK 用户因此获得与交互式用户一致的 Agent 内核。
++   */
++  private buildSDKDriver(): SDKQueryEngineDriver {
++    return {
++      submitMessage: (input: string) => this.queryEngine.submitMessage(input),
++      getUsage: () => this.sessionState.getTotalUsage(),
++      getCostUsd: () => this.sessionState.totalCostUSD,
++      getMessages: () => this.ctxMgr.getMessages(),
++      listTools: () =>
++        this.toolRegistry.all().map((t) => ({
++          name: t.name,
++          description: typeof t.description === "function" ? t.description() : "",
++        })),
++      getApiDurationMs: () => this.sessionState.getElapsedMs(),
++      setStreamTextCallback: (cb) => this.queryEngine.setStreamTextCallback(cb),
++    };
++  }
++
++  /**
++   * SDK stream-json 无头模式：NDJSON 双向流式通信
++   *
++   * 通过 stdin/stdout 与外部调用者（Python SDK / IDE / CI）通信：
++   * - 初始 prompt 入队执行
++   * - stdin 后续 user 消息触发多轮对话
++   * - 每条 SDKMessage 以 NDJSON 写出 stdout
++   *
++   * session_end hook 与优雅关闭复用与文本/JSON 模式一致的收尾逻辑。
++   */
++  private async runHeadlessSDK(input: string): Promise<void> {
++    this.abortController = new AbortController();
++
++    const structuredIO = new StructuredIO(process.stdin, process.stdout);
++    const commandQueue = new CommandQueue();
++    const driver = this.buildSDKDriver();
++
++    const engine = new SDKQueryEngine(
++      {
++        cwd: process.cwd(),
++        sessionId: this.sessionState.sessionId,
++        model: this.config.model,
++        maxTurns: this.config.maxTurns || undefined,
++        systemPrompt: this.config.systemPrompt || undefined,
++        jsonSchema: this.config.jsonSchema,
++      },
++      driver,
++    );
++
++    let runError: Error | null = null;
++    let aborted = false;
++    try {
++      await sdkRunHeadless(engine, {
++        outputFormat: "stream-json",
++        verbose: this.config.verbose,
++        initialPrompt: input,
++        structuredIO,
++        commandQueue,
++      });
++    } catch (err: any) {
++      runError = err instanceof Error ? err : new Error(String(err));
++      aborted =
++        runError.name === "AbortError" || /abort/i.test(runError.message ?? "");
++      structuredIO.rejectAllPending("session ended");
++      process.stderr.write(`\n[runHeadlessSDK] 异常: ${runError.message}\n`);
++    } finally {
++      this.abortController = null;
++    }
++
++    // session_end hook（与文本/JSON 模式一致：abort/error/exit 三态）
++    const endReason: "exit" | "error" | "abort" = aborted
++      ? "abort"
++      : runError
++      ? "error"
++      : "exit";
++    try {
++      await this.hookSystem.fireSessionEndEvent(
++        endReason,
++        this.buildSessionEndStats(),
++        runError
++          ? { error: { message: runError.message, name: runError.name, stack: runError.stack } }
++          : undefined,
++      );
++    } catch (hookErr: any) {
++      process.stderr.write(
++        `[runHeadlessSDK] SessionEnd hook 失败: ${hookErr?.message ?? hookErr}\n`,
++      );
++    }
++
++    // 清理 + 优雅关闭（与 runHeadless 收尾一致）
++    unwatchCLAUDEmd();
++    this.mcpManager?.closeAll();
++    getMemoryMonitor().stop();
++    getLogger().close();
++
++    const { runShutdownSequence } = await import("./utils/graceful-shutdown.ts");
++    await runShutdownSequence();
++    process.exit(runError ? 1 : 0);
++  }
++
+   /** TUI 模式 */
+   async runTUI(initialPrompt?: string): Promise<void> {
+     const log = getLogger();
+diff --git a/src/cli.ts b/src/cli.ts
+index 5dbeb64..8926889 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -30,6 +30,8 @@ type CLIArgs = Partial<Config> & {
+   "delete-session"?: string;
+   "cleanup-sessions"?: boolean;
+   "upload-traces"?: boolean;
++  /** --json-schema 指向的文件路径，后续解析为 config.jsonSchema */
++  jsonSchemaFile?: string;
+ };
+ 
+ /** 解析命令行参数 */
+@@ -61,6 +63,8 @@ function parseCLIArgs(): CLIArgs {
+         print: { type: "boolean", short: "p" },
+         "output-format": { type: "string" },
+         "max-turns": { type: "string" },
++        verbose: { type: "boolean" },
++        "json-schema": { type: "string" },
+ 
+         // 系统提示词
+         "system-prompt": { type: "string" },
+@@ -124,6 +128,8 @@ function parseCLIArgs(): CLIArgs {
+     print: values.print,
+     outputFormat: values["output-format"],
+     maxTurns: values["max-turns"] ? parseInt(values["max-turns"]) : undefined,
++    verbose: values.verbose,
++    jsonSchemaFile: values["json-schema"],
+     systemPrompt: values["system-prompt"],
+     appendSystemPrompt: values["append-system-prompt"],
+     systemPromptFile: values["system-prompt-file"],
+@@ -571,6 +577,20 @@ export async function main(): Promise<void> {
+         console.error("错误: 无头模式需要提供提示词");
+         process.exit(1);
+       }
++      // 解析 --json-schema 文件 → config.jsonSchema（结构化输出约束）
++      if (cliArgs.jsonSchemaFile) {
++        try {
++          const { readFileSync } = await import("node:fs");
++          config.jsonSchema = JSON.parse(readFileSync(cliArgs.jsonSchemaFile, "utf-8"));
++        } catch (err) {
++          console.error(
++            `错误: 无法读取/解析 --json-schema 文件 "${cliArgs.jsonSchemaFile}": ${
++              err instanceof Error ? err.message : String(err)
++            }`,
++          );
++          process.exit(1);
++        }
++      }
+       startupTimer.end();
+       await app.runHeadless(cliArgs.prompt);
+     } else {
+diff --git a/src/config/config.ts b/src/config/config.ts
+index fbc9a9b..c82d2cb 100644
+--- a/src/config/config.ts
++++ b/src/config/config.ts
+@@ -89,6 +89,10 @@ export interface Config {
+   print: boolean;
+   outputFormat: string;
+   maxTurns: number;
++  /** stream-json/json 模式下输出全量消息数组（而非仅最终消息） */
++  verbose?: boolean;
++  /** 结构化输出的 JSON Schema 约束（--json-schema 文件解析后注入） */
++  jsonSchema?: Record<string, unknown>;
+ 
+   // 系统提示词配置
+   systemPrompt: string;
+@@ -301,6 +305,8 @@ export function defaultConfig(): Config {
+     print: false,
+     outputFormat: "text",
+     maxTurns: 0,
++    verbose: false,
++    jsonSchema: undefined,
+     systemPrompt: "",
+     appendSystemPrompt: "",
+     systemPromptFile: "",
+diff --git a/src/sdk/command-queue.ts b/src/sdk/command-queue.ts
+new file mode 100644
+index 0000000..4b09b37
+--- /dev/null
++++ b/src/sdk/command-queue.ts
+@@ -0,0 +1,108 @@
++/**
++ * 命令队列：优先级排序 + 批量合并
++ *
++ * SDK 模式下外部调用者可能连续投递多条消息（IDE 批量编辑、CI 多步骤）。
++ * 队列负责：
++ * - 优先级排序（now > next > later，稳定排序保证同优先级 FIFO）
++ * - 批量合并（连续同 workload 的 prompt 合并为一次 LLM 调用，省 token）
++ *
++ * 对齐 Claude Code 的优先级队列设计（spec §4.6）。
++ */
++
++export interface QueuedCommand {
++  /** 命令模式 */
++  mode: "prompt" | "meta" | "notification";
++  /** 命令内容 */
++  value: string;
++  /** 唯一标识 */
++  uuid?: string;
++  /** 优先级 */
++  priority: "now" | "next" | "later";
++  /** 工作负载标签（用于批量合并匹配） */
++  workload?: string;
++  /** 是否为元消息（不记录到 transcript） */
++  isMeta?: boolean;
++}
++
++const PRIORITY_ORDER: Record<QueuedCommand["priority"], number> = {
++  now: 0,
++  next: 1,
++  later: 2,
++};
++
++export class CommandQueue {
++  private queue: QueuedCommand[] = [];
++  /** 单调递增序号，保证同优先级稳定 FIFO（Array.sort 在跨引擎下不保证稳定） */
++  private seq = 0;
++  private seqMap = new WeakMap<QueuedCommand, number>();
++
++  /** 入队 */
++  enqueue(command: QueuedCommand): void {
++    this.seqMap.set(command, this.seq++);
++    this.queue.push(command);
++    this.queue.sort((a, b) => {
++      const byPriority = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
++      if (byPriority !== 0) return byPriority;
++      // 同优先级按入队顺序
++      return (this.seqMap.get(a) ?? 0) - (this.seqMap.get(b) ?? 0);
++    });
++  }
++
++  /** 出队（可选过滤器） */
++  dequeue(filter?: (cmd: QueuedCommand) => boolean): QueuedCommand | undefined {
++    const idx = filter ? this.queue.findIndex(filter) : 0;
++    if (idx < 0 || idx >= this.queue.length) return undefined;
++    return this.queue.splice(idx, 1)[0];
++  }
++
++  /** 查看队首（不移除） */
++  peek(filter?: (cmd: QueuedCommand) => boolean): QueuedCommand | undefined {
++    return filter ? this.queue.find(filter) : this.queue[0];
++  }
++
++  /**
++   * 批量出队：连续可合并的 prompt 命令合并为一条
++   * 非 prompt 命令直接返回（不合并）
++   */
++  dequeueBatch(): QueuedCommand | undefined {
++    const head = this.dequeue();
++    if (!head || head.mode !== "prompt") return head;
++
++    const batch: QueuedCommand[] = [head];
++    while (this.canBatchWith(head, this.peek())) {
++      batch.push(this.dequeue()!);
++    }
++
++    if (batch.length === 1) return head;
++
++    // 合并多条 prompt 为一条；uuid 取最后一条有 uuid 的命令
++    return {
++      ...head,
++      value: batch.map((c) => c.value).join("\n\n"),
++      uuid: batch.filter((c) => c.uuid).pop()?.uuid ?? head.uuid,
++    };
++  }
++
++  /** 判断 next 是否可与 head 批量合并 */
++  private canBatchWith(
++    head: QueuedCommand,
++    next: QueuedCommand | undefined,
++  ): boolean {
++    return (
++      next !== undefined &&
++      next.mode === "prompt" &&
++      next.workload === head.workload &&
++      next.isMeta === head.isMeta
++    );
++  }
++
++  /** 队列是否为空 */
++  isEmpty(): boolean {
++    return this.queue.length === 0;
++  }
++
++  /** 队列长度 */
++  size(): number {
++    return this.queue.length;
++  }
++}
+diff --git a/src/sdk/control-schemas.ts b/src/sdk/control-schemas.ts
+new file mode 100644
+index 0000000..59704f3
+--- /dev/null
++++ b/src/sdk/control-schemas.ts
+@@ -0,0 +1,127 @@
++/**
++ * 控制协议 Schema
++ *
++ * 控制协议是 SDK 宿主与 CLI 之间的双向 request-response 通道，
++ * 与数据消息共用同一个 NDJSON 通道（单通道全序，避免跨通道时序问题）。
++ *
++ * 用途：
++ * - initialize 握手（system_prompt / json_schema / max_turns 等）
++ * - 权限请求竞速（can_use_tool ↔ Hook）
++ * - 运行时控制（set_model / interrupt / get_context_usage）
++ * - MCP 跨进程消息桥接（mcp_message）
++ */
++
++import { z } from "zod";
++import { lazySchema } from "./lazy-schema.ts";
++
++// ─── 控制请求类型 ───
++
++/** 初始化请求 */
++export const SDKControlInitializeSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("initialize"),
++    system_prompt: z.string().optional(),
++    json_schema: z.record(z.unknown()).optional(),
++    max_turns: z.number().optional(),
++    max_budget_usd: z.number().optional(),
++  }),
++);
++
++/** 中断请求 */
++export const SDKControlInterruptSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("interrupt"),
++  }),
++);
++
++/** 权限请求（CLI → SDK 宿主） */
++export const SDKControlPermissionRequestSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("can_use_tool"),
++    tool_name: z.string(),
++    input: z.record(z.unknown()),
++    tool_use_id: z.string(),
++    description: z.string().optional(),
++  }),
++);
++
++/** 权限响应（SDK 宿主 → CLI） */
++export const SDKControlPermissionResponseSchema = lazySchema(() =>
++  z.object({
++    behavior: z.enum(["allow", "deny", "always_allow"]),
++    tool_use_id: z.string(),
++  }),
++);
++
++/** 设置模型 */
++export const SDKControlSetModelSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("set_model"),
++    model: z.string(),
++  }),
++);
++
++/** 查询上下文用量 */
++export const SDKControlGetContextUsageSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("get_context_usage"),
++  }),
++);
++
++/** MCP 跨进程消息（CLI ↔ SDK 宿主） */
++export const SDKControlMcpMessageSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("mcp_message"),
++    server_name: z.string(),
++    message: z.record(z.unknown()),
++  }),
++);
++
++// ─── 控制请求包装 ───
++
++export const SDKControlRequestInnerSchema = lazySchema(() =>
++  z.union([
++    SDKControlInitializeSchema(),
++    SDKControlInterruptSchema(),
++    SDKControlPermissionRequestSchema(),
++    SDKControlSetModelSchema(),
++    SDKControlGetContextUsageSchema(),
++    SDKControlMcpMessageSchema(),
++  ]),
++);
++
++export const SDKControlRequestSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("control_request"),
++    request_id: z.string(),
++    request: SDKControlRequestInnerSchema(),
++  }),
++);
++
++// ─── 控制响应包装 ───
++
++export const SDKControlResponseSuccessSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("success"),
++    request_id: z.string(),
++    response: z.unknown().optional(),
++  }),
++);
++
++export const SDKControlResponseErrorSchema = lazySchema(() =>
++  z.object({
++    subtype: z.literal("error"),
++    request_id: z.string(),
++    error: z.string(),
++  }),
++);
++
++export const SDKControlResponseSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("control_response"),
++    response: z.union([
++      SDKControlResponseSuccessSchema(),
++      SDKControlResponseErrorSchema(),
++    ]),
++  }),
++);
+diff --git a/src/sdk/headless-runner.ts b/src/sdk/headless-runner.ts
+new file mode 100644
+index 0000000..13b1a92
+--- /dev/null
++++ b/src/sdk/headless-runner.ts
+@@ -0,0 +1,148 @@
++/**
++ * runHeadless 编排器
++ *
++ * 分层设计（spec §5.6）：
++ * - runHeadlessStreaming：内层引擎。命令队列消费 + 多轮 SDKQueryEngine 调用，
++ *   产出 StdoutMessage 流，不关心输出格式。
++ * - runHeadless：外层编排。初始化 + 输出格式分发（text/json/stream-json）+ 优雅关闭。
++ *
++ * 注意：CLI 实际接线在 app.ts 中以真实 QueryEngine driver 调用 runHeadless，
++ * 这里提供可独立测试的纯编排逻辑（driver 注入）。
++ */
++
++import type { Writable } from "node:stream";
++import type { StructuredIO } from "./structured-io.ts";
++import type { SDKQueryEngine } from "./query-engine.ts";
++import type { CommandQueue, QueuedCommand } from "./command-queue.ts";
++import type { SDKMessage, StdoutMessage } from "./types.ts";
++
++/**
++ * runHeadlessStreaming — 内层引擎
++ *
++ * 从 StructuredIO 读取输入消息，入队并贪婪消费命令队列，
++ * 把每轮 SDKQueryEngine 的 SDKMessage 流逐条 yield。
++ *
++ * 终止条件：输入流结束（stdin EOF）且队列排空。
++ */
++export async function* runHeadlessStreaming(
++  structuredIO: StructuredIO,
++  engine: SDKQueryEngine,
++  commandQueue: CommandQueue,
++  _options: {
++    maxTurns?: number;
++    maxBudgetUsd?: number;
++    idleTimeoutMs?: number;
++  } = {},
++): AsyncGenerator<StdoutMessage> {
++  let running = false;
++
++  // 贪婪消费队列（合并批量），逐条 yield 引擎消息
++  async function* drainQueue(): AsyncGenerator<StdoutMessage> {
++    if (running) return;
++    running = true;
++    try {
++      let command: QueuedCommand | undefined;
++      while ((command = commandQueue.dequeueBatch())) {
++        for await (const message of engine.submitMessage(command.value, {
++          uuid: command.uuid,
++        })) {
++          yield message;
++        }
++      }
++    } finally {
++      running = false;
++    }
++  }
++
++  // 先消费已入队的初始命令
++  yield* drainQueue();
++
++  // 再从 stdin 读取后续消息，入队并触发消费
++  for await (const input of structuredIO.read()) {
++    if (input.type === "user") {
++      const content = input.message.content;
++      const value =
++        typeof content === "string"
++          ? content
++          : content
++              .filter((b): b is { type: "text"; text: string } => b.type === "text")
++              .map((b) => b.text)
++              .join("\n");
++      commandQueue.enqueue({
++        mode: "prompt",
++        value,
++        uuid: input.uuid,
++        priority: "next",
++      });
++      yield* drainQueue();
++    }
++  }
++}
++
++/** 提取 result(success) 的最终文本 */
++function extractResultText(messages: SDKMessage[]): string {
++  const last = messages[messages.length - 1];
++  if (last && last.type === "result" && last.subtype === "success") {
++    return last.result;
++  }
++  return "";
++}
++
++/**
++ * runHeadless — 外层编排
++ *
++ * 三种输出格式：
++ * - stream-json：通过 StructuredIO 实时写出每条 SDKMessage（NDJSON）
++ * - json：收集所有消息，verbose 输出全量数组，否则仅最终 result
++ * - text：仅输出最终文本
++ */
++export async function runHeadless(
++  engine: SDKQueryEngine,
++  options: {
++    outputFormat: "text" | "json" | "stream-json";
++    verbose?: boolean;
++    initialPrompt?: string;
++    structuredIO?: StructuredIO;
++    commandQueue?: CommandQueue;
++    output?: Writable;
++  },
++): Promise<void> {
++  const { outputFormat, verbose, initialPrompt } = options;
++  const out: Writable = options.output ?? process.stdout;
++
++  if (outputFormat === "stream-json") {
++    const structuredIO = options.structuredIO;
++    const commandQueue = options.commandQueue;
++    if (!structuredIO || !commandQueue) {
++      throw new Error("stream-json 模式需要传入 structuredIO 与 commandQueue");
++    }
++
++    if (initialPrompt) {
++      commandQueue.enqueue({ mode: "prompt", value: initialPrompt, priority: "now" });
++    }
++
++    for await (const msg of runHeadlessStreaming(structuredIO, engine, commandQueue)) {
++      await structuredIO.write(msg);
++    }
++    return;
++  }
++
++  // text / json：收集后统一输出
++  const messages: SDKMessage[] = [];
++  if (initialPrompt) {
++    for await (const msg of engine.submitMessage(initialPrompt)) {
++      messages.push(msg);
++    }
++  }
++
++  if (outputFormat === "json") {
++    if (verbose) {
++      out.write(JSON.stringify(messages) + "\n");
++    } else {
++      out.write(JSON.stringify(messages[messages.length - 1] ?? null) + "\n");
++    }
++  } else {
++    // text
++    out.write(extractResultText(messages) + "\n");
++  }
++}
+diff --git a/src/sdk/index.ts b/src/sdk/index.ts
+new file mode 100644
+index 0000000..1e66ded
+--- /dev/null
++++ b/src/sdk/index.ts
+@@ -0,0 +1,49 @@
++/**
++ * sid-code SDK — 公共 API 入口
++ *
++ * 将 sid-code 从"交互式 CLI"升级为"可编程的 Agent 运行时"。
++ * 外部调用者（Python SDK / IDE 插件 / CI 脚本）通过子进程 spawn + NDJSON
++ * 协议与 sid-code 通信。
++ *
++ * 三层架构：
++ * - 类型定义层：schemas / control-schemas / types（Schema-First）
++ * - 会话引擎层：SDKQueryEngine / runHeadless（无头编排）
++ * - 传输协议层：StructuredIO / NDJSON（双向流式通信）
++ */
++
++// ─── 类型定义层 ───
++export * from "./types.ts";
++export { lazySchema } from "./lazy-schema.ts";
++export * as schemas from "./schemas.ts";
++export * as controlSchemas from "./control-schemas.ts";
++export { SDKMessageSchema } from "./schemas.ts";
++export { SDKControlRequestSchema, SDKControlResponseSchema } from "./control-schemas.ts";
++
++// ─── 传输协议层 ───
++export { ndjsonStringify, ndjsonParse, ndjsonLines } from "./ndjson.ts";
++export { StructuredIO } from "./structured-io.ts";
++
++// ─── 会话引擎层 ───
++export { convertToSDKMessage } from "./message-converter.ts";
++export type { ConvertContext } from "./message-converter.ts";
++export { CommandQueue } from "./command-queue.ts";
++export type { QueuedCommand } from "./command-queue.ts";
++export { SDKQueryEngine } from "./query-engine.ts";
++export type { SDKQueryEngineConfig, SDKQueryEngineDriver } from "./query-engine.ts";
++
++// ─── 控制协议 / 桥接 / 恢复 ───
++export { createSDKCanUseTool } from "./permission-bridge.ts";
++export type { PermissionBridgeOptions } from "./permission-bridge.ts";
++export {
++  SdkControlClientTransport,
++  SdkControlServerTransport,
++  createLinkedTransportPair,
++} from "./mcp-bridge.ts";
++export { deserializeMessagesWithInterruptDetection } from "./session-recovery.ts";
++export type { TurnInterruptionState, DeserializeResult } from "./session-recovery.ts";
++export {
++  extractStructuredOutput,
++  buildStructuredOutputPrompt,
++} from "./structured-output.ts";
++export type { StructuredOutputConfig } from "./structured-output.ts";
++export { runHeadless, runHeadlessStreaming } from "./headless-runner.ts";
+diff --git a/src/sdk/lazy-schema.ts b/src/sdk/lazy-schema.ts
+new file mode 100644
+index 0000000..20355f2
+--- /dev/null
++++ b/src/sdk/lazy-schema.ts
+@@ -0,0 +1,22 @@
++/**
++ * lazySchema — 延迟构造 Zod Schema
++ *
++ * 解决两个问题：
++ * 1. Schema 之间的循环引用（A 引用 B、B 引用 A 时直接构造会死循环）
++ * 2. 启动性能（未使用的 Schema 不会被构造）
++ *
++ * 对齐 Claude Code 的 lazySchema() 设计：所有 SDK Schema 用工厂函数包装，
++ * 首次调用时构造并缓存，后续调用返回缓存实例。
++ */
++
++import type { z } from "zod";
++
++export function lazySchema<T extends z.ZodTypeAny>(factory: () => T): () => T {
++  let cached: T | undefined;
++  return () => {
++    if (!cached) {
++      cached = factory();
++    }
++    return cached;
++  };
++}
+diff --git a/src/sdk/mcp-bridge.ts b/src/sdk/mcp-bridge.ts
+new file mode 100644
+index 0000000..07cbaf6
+--- /dev/null
++++ b/src/sdk/mcp-bridge.ts
+@@ -0,0 +1,120 @@
++/**
++ * SDK MCP 工具桥接（SdkControlTransport）
++ *
++ * 让 SDK 宿主进程注册的自定义 MCP 工具能被 CLI 子进程调用：
++ *
++ *   SDK 宿主进程                              CLI 子进程
++ *   ┌──────────────────────┐                ┌──────────────────────────┐
++ *   │  SDK MCP Server      │                │  MCP Client (sid-code)    │
++ *   │       ▼              │                │       ▼                  │
++ *   │  SdkControlServer    │   stdin/stdout │  SdkControlClient        │
++ *   │  Transport           │◄──────────────►│  Transport               │
++ *   └──────────────────────┘   控制协议      └──────────────────────────┘
++ *
++ * CLI 侧把 MCP JSON-RPC 包装为 control_request(subtype: mcp_message)，
++ * SDK 宿主解包转发给 MCP Server，响应通过 control_response 回传。
++ *
++ * 对齐 Claude Code SdkControlTransport（spec §5.3）。
++ */
++
++/** MCP JSON-RPC 消息（简化版，对齐 @modelcontextprotocol/sdk） */
++export interface JSONRPCMessage {
++  jsonrpc: "2.0";
++  id?: string | number;
++  method?: string;
++  params?: unknown;
++  result?: unknown;
++  error?: { code: number; message: string };
++}
++
++/** MCP Transport 接口（简化版） */
++export interface MCPTransport {
++  send(message: JSONRPCMessage): Promise<void>;
++  onmessage?: (message: JSONRPCMessage) => void;
++  start(): Promise<void>;
++  close(): Promise<void>;
++}
++
++/**
++ * CLI 侧 Transport：将 MCP 消息包装为控制协议消息发往 SDK 宿主
++ */
++export class SdkControlClientTransport implements MCPTransport {
++  private serverName: string;
++  private sendMcpMessage: (
++    serverName: string,
++    message: JSONRPCMessage,
++  ) => Promise<JSONRPCMessage>;
++
++  onmessage?: (message: JSONRPCMessage) => void;
++
++  constructor(
++    serverName: string,
++    sendMcpMessage: (name: string, msg: JSONRPCMessage) => Promise<JSONRPCMessage>,
++  ) {
++    this.serverName = serverName;
++    this.sendMcpMessage = sendMcpMessage;
++  }
++
++  async send(message: JSONRPCMessage): Promise<void> {
++    const response = await this.sendMcpMessage(this.serverName, message);
++    this.onmessage?.(response);
++  }
++
++  async start(): Promise<void> {}
++  async close(): Promise<void> {}
++}
++
++/**
++ * SDK 宿主侧 Transport：接收控制协议消息，转发给 MCP Server
++ */
++export class SdkControlServerTransport implements MCPTransport {
++  private sendResponse: (message: JSONRPCMessage) => void;
++  onmessage?: (message: JSONRPCMessage) => void;
++
++  constructor(sendResponse: (message: JSONRPCMessage) => void) {
++    this.sendResponse = sendResponse;
++  }
++
++  async send(message: JSONRPCMessage): Promise<void> {
++    this.sendResponse(message);
++  }
++
++  /** 从控制协议接收消息，转发给 MCP Server */
++  receiveFromControl(message: JSONRPCMessage): void {
++    this.onmessage?.(message);
++  }
++
++  async start(): Promise<void> {}
++  async close(): Promise<void> {}
++}
++
++/**
++ * 同进程 MCP Transport 对（用于内置 SDK 工具）
++ * 通过 queueMicrotask 异步投递，避免同步调用栈溢出
++ */
++export function createLinkedTransportPair(): [MCPTransport, MCPTransport] {
++  class InProcessTransport implements MCPTransport {
++    private peer?: InProcessTransport;
++    onmessage?: (message: JSONRPCMessage) => void;
++
++    setPeer(peer: InProcessTransport): void {
++      this.peer = peer;
++    }
++
++    async send(message: JSONRPCMessage): Promise<void> {
++      const peer = this.peer;
++      queueMicrotask(() => {
++        peer?.onmessage?.(message);
++      });
++    }
++
++    async start(): Promise<void> {}
++    async close(): Promise<void> {}
++  }
++
++  const a = new InProcessTransport();
++  const b = new InProcessTransport();
++  a.setPeer(b);
++  b.setPeer(a);
++  return [a, b];
++}
+diff --git a/src/sdk/message-converter.ts b/src/sdk/message-converter.ts
+new file mode 100644
+index 0000000..00305cd
+--- /dev/null
++++ b/src/sdk/message-converter.ts
+@@ -0,0 +1,161 @@
++/**
++ * 消息转换器：QueryEngineEvent → SDKMessage
++ *
++ * 将内部事件流转换为标准化 SDK 消息协议。
++ * 返回 null 表示该事件不转发给 SDK 调用者（内部控制信号）。
++ *
++ * 映射关系见 spec §3.6 / §4.4。done 与 max_turns 的 result 消息中
++ * 部分字段（result 文本 / duration_api_ms）由 SDKQueryEngine 在合成时补齐，
++ * 这里给出结构骨架。
++ */
++
++import type { QueryEngineEvent } from "../query/types.ts";
++import type { SDKMessage } from "./types.ts";
++import type { Usage } from "../llm/types.ts";
++
++export interface ConvertContext {
++  sessionId: string;
++  totalUsage: Usage;
++  startTime: number;
++  turnCount: number;
++  totalCostUsd: number;
++  /** 单调时钟（可注入，便于测试）；默认 Date.now */
++  now?: () => number;
++  /** UUID 生成（可注入，便于测试）；默认 crypto.randomUUID */
++  uuid?: () => string;
++}
++
++function nowOf(ctx: ConvertContext): number {
++  return (ctx.now ?? Date.now)();
++}
++
++function uuidOf(ctx: ConvertContext): string {
++  return (ctx.uuid ?? (() => crypto.randomUUID()))();
++}
++
++/**
++ * 将 QueryEngineEvent 转换为 SDKMessage
++ * @returns SDKMessage 或 null（不转发）
++ */
++export function convertToSDKMessage(
++  event: QueryEngineEvent,
++  ctx: ConvertContext,
++): SDKMessage | null {
++  switch (event.kind) {
++    case "user_message_added":
++      // 用户消息由 SDKQueryEngine 在添加时直接 yield，这里不重复
++      return null;
++
++    case "assistant_message":
++      return {
++        type: "assistant",
++        uuid: uuidOf(ctx),
++        session_id: ctx.sessionId,
++        message: event.message,
++        stop_reason: null,
++        usage: { ...ctx.totalUsage },
++      };
++
++    case "stream_text":
++      return {
++        type: "stream_event",
++        event: { type: "content_block_delta", text: event.text },
++      };
++
++    case "tool_start":
++      return {
++        type: "tool_progress",
++        tool_name: event.toolName,
++        status: "start",
++        input: event.toolInput,
++      };
++
++    case "tool_end":
++      return {
++        type: "tool_progress",
++        tool_name: event.toolName,
++        status: "end",
++        result: event.result
++          ? {
++              is_error: event.result.isError,
++              elapsed_ms: event.result.elapsedMs,
++            }
++          : undefined,
++      };
++
++    case "compact":
++      return {
++        type: "system",
++        subtype: "compact_boundary",
++      };
++
++    case "context_warning":
++      return {
++        type: "system",
++        subtype: "status",
++        message: `上下文剩余 ${event.remaining}%`,
++      };
++
++    case "max_turns":
++      return {
++        type: "result",
++        subtype: "error_max_turns",
++        errors: [`达到最大轮次限制: ${event.maxTurns}`],
++        duration_ms: nowOf(ctx) - ctx.startTime,
++        num_turns: ctx.turnCount,
++        total_cost_usd: ctx.totalCostUsd,
++        usage: { ...ctx.totalUsage },
++        session_id: ctx.sessionId,
++      };
++
++    case "done":
++      return {
++        type: "result",
++        subtype: "success",
++        duration_ms: nowOf(ctx) - ctx.startTime,
++        duration_api_ms: 0, // 由 SDKQueryEngine 用 SessionState 补齐
++        is_error: false,
++        num_turns: event.turns,
++        result: "", // 由 SDKQueryEngine 填充最终文本
++        stop_reason: "end_turn",
++        total_cost_usd: ctx.totalCostUsd,
++        usage: { ...ctx.totalUsage },
++        session_id: ctx.sessionId,
++      };
++
++    case "hook_blocked":
++      return {
++        type: "system",
++        subtype: "hook_response",
++        hook_event: "user_prompt_submit",
++        decision: event.reason,
++      };
++
++    case "loop_detected":
++      return {
++        type: "system",
++        subtype: "status",
++        message: `循环检测: ${event.detail}`,
++      };
++
++    case "loop_recovery":
++      return {
++        type: "system",
++        subtype: "status",
++        message: `循环恢复尝试 ${event.attempt}/${event.maxAttempts}`,
++      };
++
++    case "system":
++      return {
++        type: "system",
++        subtype: "status",
++        message: event.text,
++      };
++
++    case "tombstone":
++      return null; // 内部控制信号，不转发
++
++    default:
++      return null;
++  }
++}
+diff --git a/src/sdk/ndjson.ts b/src/sdk/ndjson.ts
+new file mode 100644
+index 0000000..e102444
+--- /dev/null
++++ b/src/sdk/ndjson.ts
+@@ -0,0 +1,60 @@
++/**
++ * NDJSON 安全序列化/反序列化
++ *
++ * NDJSON（Newline-Delimited JSON）用换行符分隔每条 JSON 消息。
++ * 关键陷阱：U+2028（行分隔符）和 U+2029（段落分隔符）在 JSON 中合法，
++ * 但部分解析器/管道会把它们当作换行，破坏 NDJSON 的行分隔假设。
++ * 序列化时必须转义。
++ *
++ * 实现注意：用 String.fromCharCode 构造匹配字符，避免源码里出现裸 U+2028/U+2029
++ * （它们本身是 JS 行终止符，会破坏源码解析）。
++ */
++
++const LS = String.fromCharCode(0x2028); // U+2028 行分隔符
++const PS = String.fromCharCode(0x2029); // U+2029 段落分隔符
++const LS_RE = new RegExp(LS, "g");
++const PS_RE = new RegExp(PS, "g");
++
++/**
++ * NDJSON 安全序列化
++ * 转义 U+2028/U+2029，防止行分隔符误切割 JSON
++ */
++export function ndjsonStringify(obj: unknown): string {
++  return JSON.stringify(obj)
++    .replace(LS_RE, "\\u2028")
++    .replace(PS_RE, "\\u2029");
++}
++
++/**
++ * NDJSON 安全反序列化
++ * 逐行解析，空行返回 null
++ */
++export function ndjsonParse(line: string): unknown {
++  const trimmed = line.trim();
++  if (!trimmed) return null;
++  return JSON.parse(trimmed);
++}
++
++/**
++ * 从 ReadableStream 创建 NDJSON 行迭代器
++ *
++ * 处理跨 chunk 的不完整行：缓冲未遇到换行的尾部，下一个 chunk 拼接。
++ * 兼容 Node.js Readable（Buffer/string chunk）。
++ */
++export async function* ndjsonLines(
++  input: NodeJS.ReadableStream,
++): AsyncGenerator<string> {
++  let buffer = "";
++  for await (const chunk of input) {
++    buffer += typeof chunk === "string" ? chunk : chunk.toString("utf-8");
++    const lines = buffer.split("\n");
++    // 最后一段可能是不完整行，留到下一个 chunk
++    buffer = lines.pop() ?? "";
++    for (const line of lines) {
++      const trimmed = line.trim();
++      if (trimmed) yield trimmed;
++    }
++  }
++  // 处理最后一行（无换行符结尾）
++  if (buffer.trim()) yield buffer.trim();
++}
+diff --git a/src/sdk/permission-bridge.ts b/src/sdk/permission-bridge.ts
+new file mode 100644
+index 0000000..91329d9
+--- /dev/null
++++ b/src/sdk/permission-bridge.ts
+@@ -0,0 +1,109 @@
++/**
++ * SDK 模式权限桥接（控制协议 ↔ 权限检查）
++ *
++ * SDK 模式下没有 TUI 弹窗，权限决策来自两个并行来源，先决定者胜出：
++ * 1. Hook（PreToolUse）—— 本地静态规则 / 脚本
++ * 2. SDK 宿主 —— 通过控制协议 can_use_tool 请求询问外部调用者
++ *
++ * Promise.race：谁先决定用谁的结果。Hook 先决定 → 取消 SDK 请求；
++ * SDK 先响应 → 取消 Hook（abort signal）。
++ *
++ * 对齐 Claude Code StructuredIO.createCanUseTool() 的竞速设计（spec §5.2）。
++ * 注意：sid-code 的 HookDecision 为 "allow" | "deny" | "block"，
++ * 没有 shouldAutoApprove()，这里用 decision === "allow" 表示 Hook 主动放行。
++ */
++
++import type { StructuredIO } from "./structured-io.ts";
++import type { SDKControlPermissionResponse } from "./types.ts";
++import { SDKControlPermissionResponseSchema } from "./control-schemas.ts";
++import type { HookSystem } from "../hook/system.ts";
++
++export type PermissionBehavior = "allow" | "deny" | "always_allow";
++
++export interface PermissionBridgeOptions {
++  structuredIO: StructuredIO;
++  hookSystem?: HookSystem;
++}
++
++/**
++ * 创建 SDK 模式下的权限检查函数
++ *
++ * 返回的函数签名与内核权限检查器对齐：(toolName, toolInput, toolUseId) → behavior
++ */
++export function createSDKCanUseTool(opts: PermissionBridgeOptions) {
++  const { structuredIO, hookSystem } = opts;
++
++  return async (
++    toolName: string,
++    toolInput: unknown,
++    toolUseId: string,
++  ): Promise<PermissionBehavior> => {
++    const hookAbortController = new AbortController();
++
++    // Hook 评估（无 Hook 时永不 resolve，交给 SDK 宿主决定）
++    const hookPromise: Promise<PermissionBehavior | null> = hookSystem
++      ? executePermissionHook(hookSystem, toolName, toolInput, hookAbortController.signal)
++      : new Promise<PermissionBehavior | null>(() => {});
++
++    // SDK 宿主权限请求
++    const sdkPromise = structuredIO.sendRequest<SDKControlPermissionResponse>(
++      {
++        subtype: "can_use_tool",
++        tool_name: toolName,
++        input: (toolInput ?? {}) as Record<string, unknown>,
++        tool_use_id: toolUseId,
++      },
++      SDKControlPermissionResponseSchema(),
++      hookAbortController.signal,
++    );
++
++    // 竞速
++    const winner = await Promise.race([
++      hookPromise.then((r) => ({ source: "hook" as const, result: r })),
++      sdkPromise.then((r) => ({ source: "sdk" as const, result: r })),
++    ]);
++
++    if (winner.source === "hook" && winner.result) {
++      // Hook 先决定 → 取消 SDK 请求
++      hookAbortController.abort();
++      return winner.result;
++    }
++
++    if (winner.source === "sdk") {
++      // SDK 宿主先响应
++      structuredIO.trackResolvedToolUseId(toolUseId);
++      return winner.result.behavior;
++    }
++
++    // Hook 放弃决定（resolve null）→ 等待 SDK 宿主
++    const sdkResult = await sdkPromise;
++    structuredIO.trackResolvedToolUseId(toolUseId);
++    return sdkResult.behavior;
++  };
++}
++
++/**
++ * 执行 PreToolUse Hook，映射为权限 behavior
++ * @returns "deny"（阻塞）/ "allow"（主动放行）/ null（不做决定）
++ */
++async function executePermissionHook(
++  hookSystem: HookSystem,
++  toolName: string,
++  toolInput: unknown,
++  signal: AbortSignal,
++): Promise<PermissionBehavior | null> {
++  try {
++    const result = await hookSystem.firePreToolUseEvent(
++      toolName,
++      (toolInput ?? {}) as Record<string, unknown>,
++    );
++    if (signal.aborted) return null;
++    const out = result.finalOutput;
++    if (!out) return null;
++    if (out.isBlockingDecision()) return "deny";
++    if (out.decision === "allow") return "allow";
++    return null; // Hook 未做决定，交给 SDK 宿主
++  } catch {
++    return null;
++  }
++}
+diff --git a/src/sdk/query-engine.ts b/src/sdk/query-engine.ts
+new file mode 100644
+index 0000000..8eed852
+--- /dev/null
++++ b/src/sdk/query-engine.ts
+@@ -0,0 +1,240 @@
++/**
++ * SDKQueryEngine — 独立无头会话引擎
++ *
++ * 设计原则（spec §2.1 #4 依赖反转）：
++ *   不重建 queryLoop / QueryEngine（那会和 app.init() 的内核重复，违反"不内核解耦"）。
++ *   而是通过注入的 driver 包装现有 QueryEngine 的事件流，
++ *   把内部 QueryEngineEvent 转换为标准 SDKMessage。
++ *
++ * 与 App 中 QueryEngine 的关键差异：
++ * - 输出标准化 SDKMessage 而非内部 QueryEngineEvent
++ * - 合成 system/init 与 result 终止消息
++ * - 累计 usage / cost，填充终止消息
++ * - 支持结构化输出补充提示词
++ *
++ * 共享引擎：driver 背后就是交互式 TUI 用的同一个 queryLoop，
++ * SDK 用户获得与交互式用户一致的 Agent 能力。
++ */
++
++import type { Message, Usage } from "../llm/types.ts";
++import type { QueryEngineEvent } from "../query/types.ts";
++import type { SDKMessage, SDKResultMessage } from "./types.ts";
++import { convertToSDKMessage, type ConvertContext } from "./message-converter.ts";
++
++export interface SDKQueryEngineConfig {
++  cwd: string;
++  sessionId: string;
++  model: string;
++  maxTurns?: number;
++  maxBudgetUsd?: number;
++  systemPrompt?: string;
++  jsonSchema?: Record<string, unknown>;
++  /** 是否转发 stream_event 增量（stream-json verbose 模式） */
++  includeStreamEvents?: boolean;
++  /** 可注入时钟（测试用），默认 Date.now */
++  now?: () => number;
++  /** 可注入 UUID（测试用），默认 crypto.randomUUID */
++  uuid?: () => string;
++}
++
++/**
++ * 引擎驱动：抽象出 SDKQueryEngine 对内核的全部依赖。
++ * 生产环境由 app.ts 用真实 QueryEngine 实现；测试用 mock。
++ */
++export interface SDKQueryEngineDriver {
++  /** 提交用户输入，返回内部事件流（即 QueryEngine.submitMessage） */
++  submitMessage(input: string): AsyncGenerator<QueryEngineEvent>;
++  /** 当前累计用量 */
++  getUsage(): Usage;
++  /** 当前累计花费（USD） */
++  getCostUsd(): number;
++  /** 当前完整消息历史（用于结构化输出提取 / result 文本） */
++  getMessages(): readonly Message[];
++  /** 工具清单（用于 system/init） */
++  listTools?(): { name: string; description: string }[];
++  /** API 耗时（ms），用于 result.duration_api_ms */
++  getApiDurationMs?(): number;
++  /** 设置流式文本回调（仅 includeStreamEvents 时使用） */
++  setStreamTextCallback?(cb: ((text: string) => void) | null): void;
++}
++
++export class SDKQueryEngine {
++  private config: SDKQueryEngineConfig;
++  private driver: SDKQueryEngineDriver;
++  private startTime = 0;
++  private turnCount = 0;
++  private aborted = false;
++
++  constructor(config: SDKQueryEngineConfig, driver: SDKQueryEngineDriver) {
++    this.config = config;
++    this.driver = driver;
++  }
++
++  private get now(): () => number {
++    return this.config.now ?? Date.now;
++  }
++
++  private get uuid(): () => string {
++    return this.config.uuid ?? (() => crypto.randomUUID());
++  }
++
++  /**
++   * 提交消息，返回 SDKMessage 异步生成器
++   *
++   * 生命周期：
++   * 1. yield system/init
++   * 2. yield user
++   * 3. 消费 driver 事件流 → 转换 yield assistant/tool_progress/...
++   * 4. yield result(success/error)（唯一终止信号）
++   */
++  async *submitMessage(
++    prompt: string,
++    options?: { uuid?: string },
++  ): AsyncGenerator<SDKMessage> {
++    this.startTime = this.now();
++    this.turnCount = 0;
++
++    // ① system/init
++    yield {
++      type: "system",
++      subtype: "init",
++      session_id: this.config.sessionId,
++      tools: this.driver.listTools?.() ?? [],
++      model: this.config.model,
++      cwd: this.config.cwd,
++    };
++
++    // ② user
++    const userMessage: Message = {
++      role: "user",
++      content: [{ type: "text", text: prompt }],
++    };
++    yield {
++      type: "user",
++      uuid: options?.uuid ?? this.uuid(),
++      session_id: this.config.sessionId,
++      message: userMessage,
++    };
++
++    // ③ 消费内核事件流
++    let terminalEmitted = false;
++    let runError: Error | null = null;
++
++    try {
++      for await (const event of this.driver.submitMessage(prompt)) {
++        if (event.kind === "assistant_message") {
++          this.turnCount++;
++        }
++
++        const ctx = this.buildCtx();
++        const sdkMsg = convertToSDKMessage(event, ctx);
++
++        if (!sdkMsg) continue;
++
++        // stream_event 仅在 includeStreamEvents 时转发
++        if (sdkMsg.type === "stream_event" && !this.config.includeStreamEvents) {
++          continue;
++        }
++
++        // 终止消息（result）单独处理：补齐文本/API 耗时后 yield，然后结束
++        if (sdkMsg.type === "result") {
++          yield this.finalizeResult(sdkMsg as SDKResultMessage);
++          terminalEmitted = true;
++          return;
++        }
++
++        yield sdkMsg;
++      }
++    } catch (err) {
++      runError = err instanceof Error ? err : new Error(String(err));
++      this.aborted =
++        runError.name === "AbortError" || /abort/i.test(runError.message);
++    }
++
++    // ④ 若内核未产出 done/max_turns（异常/提前返回），合成终止消息
++    if (!terminalEmitted) {
++      if (runError) {
++        yield {
++          type: "result",
++          subtype: "error_during_execution",
++          errors: [runError.message],
++          duration_ms: this.now() - this.startTime,
++          num_turns: this.turnCount,
++          total_cost_usd: this.driver.getCostUsd(),
++          usage: this.driver.getUsage(),
++          session_id: this.config.sessionId,
++        };
++      } else {
++        // 正常结束但无 done 事件（如 hook_blocked 提前 return）
++        yield this.finalizeResult({
++          type: "result",
++          subtype: "success",
++          duration_ms: this.now() - this.startTime,
++          duration_api_ms: this.driver.getApiDurationMs?.() ?? 0,
++          is_error: false,
++          num_turns: this.turnCount,
++          result: "",
++          stop_reason: "end_turn",
++          total_cost_usd: this.driver.getCostUsd(),
++          usage: this.driver.getUsage(),
++          session_id: this.config.sessionId,
++        });
++      }
++    }
++  }
++
++  /** 用最终的助手文本与 API 耗时补齐 success result */
++  private finalizeResult(result: SDKResultMessage): SDKResultMessage {
++    if (result.subtype !== "success") return result;
++    return {
++      ...result,
++      result: result.result || this.extractFinalText(),
++      duration_api_ms:
++        result.duration_api_ms || (this.driver.getApiDurationMs?.() ?? 0),
++      usage: this.driver.getUsage(),
++      total_cost_usd: this.driver.getCostUsd(),
++    };
++  }
++
++  /** 从消息历史提取最后一条助手消息的文本 */
++  private extractFinalText(): string {
++    const messages = this.driver.getMessages();
++    for (let i = messages.length - 1; i >= 0; i--) {
++      const m = messages[i];
++      if (m.role === "assistant") {
++        return m.content
++          .filter((b): b is { type: "text"; text: string } => b.type === "text")
++          .map((b) => b.text)
++          .join("");
++      }
++    }
++    return "";
++  }
++
++  private buildCtx(): ConvertContext {
++    return {
++      sessionId: this.config.sessionId,
++      totalUsage: this.driver.getUsage(),
++      startTime: this.startTime,
++      turnCount: this.turnCount,
++      totalCostUsd: this.driver.getCostUsd(),
++      now: this.now,
++      uuid: this.uuid,
++    };
++  }
++
++  /** 当前消息历史 */
++  getMessages(): readonly Message[] {
++    return this.driver.getMessages();
++  }
++
++  /** 当前累计用量 */
++  getUsage(): Usage {
++    return this.driver.getUsage();
++  }
++
++  /** 是否被中断 */
++  wasAborted(): boolean {
++    return this.aborted;
++  }
++}
+diff --git a/src/sdk/schemas.ts b/src/sdk/schemas.ts
+new file mode 100644
+index 0000000..10a4770
+--- /dev/null
++++ b/src/sdk/schemas.ts
+@@ -0,0 +1,236 @@
++/**
++ * SDK 消息 Schema（真理源）
++ *
++ * 所有 SDK 类型从这里的 Zod Schema 推导，同时提供：
++ * - 编译期类型安全（src/sdk/types.ts 通过 z.infer 推导）
++ * - 运行时校验（StructuredIO 解析输入时 safeParse）
++ *
++ * 对齐 Claude Code 的 SDKMessage 协议，按 sid-code 实际需求裁剪。
++ * 内部 QueryEngineEvent → SDKMessage 的映射见 message-converter.ts。
++ */
++
++import { z } from "zod";
++import { lazySchema } from "./lazy-schema.ts";
++
++// ─── 基础类型 ───
++
++export const UsageSchema = lazySchema(() =>
++  z.object({
++    inputTokens: z.number(),
++    outputTokens: z.number(),
++    cacheCreationInputTokens: z.number().optional(),
++    cacheReadInputTokens: z.number().optional(),
++  }),
++);
++
++/** 内容块：对齐 src/llm/types.ts 的 ContentBlock（text / tool_use / tool_result） */
++export const ContentBlockSchema = lazySchema(() =>
++  z.discriminatedUnion("type", [
++    z.object({ type: z.literal("text"), text: z.string() }),
++    z.object({
++      type: z.literal("tool_use"),
++      id: z.string(),
++      name: z.string(),
++      input: z.unknown(),
++    }),
++    z.object({
++      type: z.literal("tool_result"),
++      tool_use_id: z.string(),
++      content: z.string(),
++      is_error: z.boolean().optional(),
++    }),
++  ]),
++);
++
++/** 消息：对齐 src/llm/types.ts 的 Message（_meta 透传不校验） */
++export const MessageSchema = lazySchema(() =>
++  z.object({
++    role: z.enum(["user", "assistant"]),
++    content: z.array(ContentBlockSchema()),
++    _meta: z.record(z.unknown()).optional(),
++  }),
++);
++
++// ─── SDK 数据消息 ───
++
++/** 用户消息 */
++export const SDKUserMessageSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("user"),
++    uuid: z.string(),
++    session_id: z.string(),
++    message: MessageSchema(),
++    timestamp: z.string().optional(),
++  }),
++);
++
++/** 助手消息 */
++export const SDKAssistantMessageSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("assistant"),
++    uuid: z.string(),
++    session_id: z.string(),
++    message: MessageSchema(),
++    stop_reason: z.string().nullable(),
++    usage: UsageSchema(),
++  }),
++);
++
++/** 流式增量消息 */
++export const SDKStreamEventSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("stream_event"),
++    event: z.unknown(), // StreamEvent 原始事件
++  }),
++);
++
++/** 成功结果 */
++export const SDKResultSuccessSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("result"),
++    subtype: z.literal("success"),
++    duration_ms: z.number(),
++    duration_api_ms: z.number(),
++    is_error: z.boolean(),
++    num_turns: z.number(),
++    result: z.string(),
++    stop_reason: z.string().nullable(),
++    total_cost_usd: z.number(),
++    usage: UsageSchema(),
++    session_id: z.string(),
++    structured_output: z.unknown().optional(),
++  }),
++);
++
++/** 错误结果 */
++export const SDKResultErrorSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("result"),
++    subtype: z.enum([
++      "error_during_execution",
++      "error_max_turns",
++      "error_max_budget_usd",
++    ]),
++    errors: z.array(z.string()),
++    duration_ms: z.number(),
++    num_turns: z.number(),
++    total_cost_usd: z.number(),
++    usage: UsageSchema(),
++    session_id: z.string(),
++  }),
++);
++
++/** 结果消息（成功或错误） */
++export const SDKResultMessageSchema = lazySchema(() =>
++  z.discriminatedUnion("subtype", [
++    SDKResultSuccessSchema(),
++    SDKResultErrorSchema(),
++  ]),
++);
++
++// ─── 系统消息 ───
++
++/** 会话初始化 */
++export const SDKSystemInitSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("system"),
++    subtype: z.literal("init"),
++    session_id: z.string(),
++    tools: z.array(
++      z.object({
++        name: z.string(),
++        description: z.string(),
++      }),
++    ),
++    model: z.string(),
++    cwd: z.string(),
++  }),
++);
++
++/** 上下文压缩边界 */
++export const SDKCompactBoundarySchema = lazySchema(() =>
++  z.object({
++    type: z.literal("system"),
++    subtype: z.literal("compact_boundary"),
++    summary: z.string().optional(),
++  }),
++);
++
++/** API 重试通知 */
++export const SDKAPIRetrySchema = lazySchema(() =>
++  z.object({
++    type: z.literal("system"),
++    subtype: z.literal("api_retry"),
++    error: z.string(),
++    attempt: z.number(),
++    delay_ms: z.number(),
++  }),
++);
++
++/** 状态变更 */
++export const SDKStatusSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("system"),
++    subtype: z.literal("status"),
++    message: z.string(),
++  }),
++);
++
++// ─── 工具进度消息 ───
++
++/** 工具执行进度 */
++export const SDKToolProgressSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("tool_progress"),
++    tool_name: z.string(),
++    status: z.enum(["start", "end"]),
++    tool_use_id: z.string().optional(),
++    input: z.unknown().optional(),
++    result: z
++      .object({
++        is_error: z.boolean().optional(),
++        elapsed_ms: z.number().optional(),
++      })
++      .optional(),
++  }),
++);
++
++// ─── Hook 生命周期消息 ───
++
++export const SDKHookStartedSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("system"),
++    subtype: z.literal("hook_started"),
++    hook_event: z.string(),
++    hook_name: z.string(),
++  }),
++);
++
++export const SDKHookResponseSchema = lazySchema(() =>
++  z.object({
++    type: z.literal("system"),
++    subtype: z.literal("hook_response"),
++    hook_event: z.string(),
++    decision: z.string().optional(),
++  }),
++);
++
++// ─── 聚合 Schema ───
++
++/** 所有 SDK 消息类型的联合 */
++export const SDKMessageSchema = lazySchema(() =>
++  z.union([
++    SDKUserMessageSchema(),
++    SDKAssistantMessageSchema(),
++    SDKStreamEventSchema(),
++    SDKResultSuccessSchema(),
++    SDKResultErrorSchema(),
++    SDKSystemInitSchema(),
++    SDKCompactBoundarySchema(),
++    SDKAPIRetrySchema(),
++    SDKStatusSchema(),
++    SDKToolProgressSchema(),
++    SDKHookStartedSchema(),
++    SDKHookResponseSchema(),
++  ]),
++);
+diff --git a/src/sdk/session-recovery.ts b/src/sdk/session-recovery.ts
+new file mode 100644
+index 0000000..1e52ce1
+--- /dev/null
++++ b/src/sdk/session-recovery.ts
+@@ -0,0 +1,84 @@
++/**
++ * 会话中断检测与恢复
++ *
++ * 从持久化的消息历史恢复会话时，检测上一次运行是否在中途被中断：
++ * - 过滤未解析的 tool_use（有 tool_use 但无对应 tool_result）—— 否则 API 报错
++ * - 过滤空白助手消息
++ * - 末尾是纯用户输入（无助手响应）→ 标记 interrupted_prompt，可自动续跑
++ *
++ * 对齐 Claude Code deserializeMessagesWithInterruptDetection（spec §5.4）。
++ */
++
++import type { Message } from "../llm/types.ts";
++
++/** 中断状态 */
++export type TurnInterruptionState =
++  | { kind: "none" }
++  | { kind: "interrupted_prompt"; message: Message };
++
++/** 反序列化结果 */
++export interface DeserializeResult {
++  messages: Message[];
++  turnInterruptionState: TurnInterruptionState;
++}
++
++/**
++ * 反序列化消息并检测中断状态
++ */
++export function deserializeMessagesWithInterruptDetection(
++  serializedMessages: Message[],
++): DeserializeResult {
++  if (serializedMessages.length === 0) {
++    return { messages: [], turnInterruptionState: { kind: "none" } };
++  }
++
++  // 1. 收集所有 tool_result 的 tool_use_id
++  const resolvedToolUseIds = new Set<string>();
++  for (const msg of serializedMessages) {
++    for (const block of msg.content) {
++      if (block.type === "tool_result") {
++        resolvedToolUseIds.add(block.tool_use_id);
++      }
++    }
++  }
++
++  // 2. 过滤消息
++  const messages: Message[] = [];
++  for (const msg of serializedMessages) {
++    if (msg.role === "assistant") {
++      // 过滤未解析的 tool_use
++      const filteredContent = msg.content.filter((block) => {
++        if (block.type === "tool_use") {
++          return resolvedToolUseIds.has(block.id);
++        }
++        return true;
++      });
++
++      // 过滤空白助手消息
++      if (filteredContent.length === 0) continue;
++
++      messages.push({ ...msg, content: filteredContent });
++    } else {
++      messages.push(msg);
++    }
++  }
++
++  // 3. 检测中断状态：末尾是纯用户输入（无 tool_result）→ 中断的提示词
++  const lastMessage = messages[messages.length - 1];
++  if (lastMessage?.role === "user") {
++    const hasToolResult = lastMessage.content.some(
++      (b) => b.type === "tool_result",
++    );
++    if (!hasToolResult) {
++      return {
++        messages: messages.slice(0, -1),
++        turnInterruptionState: {
++          kind: "interrupted_prompt",
++          message: lastMessage,
++        },
++      };
++    }
++  }
++
++  return { messages, turnInterruptionState: { kind: "none" } };
++}
+diff --git a/src/sdk/structured-io.ts b/src/sdk/structured-io.ts
+new file mode 100644
+index 0000000..33d9de1
+--- /dev/null
++++ b/src/sdk/structured-io.ts
+@@ -0,0 +1,208 @@
++/**
++ * StructuredIO — NDJSON 协议核心
++ *
++ * 双向 NDJSON 通信：数据消息和控制消息共用一个通道（单通道全序）。
++ * - read()：解析输入流，分发 user / control_response / keep_alive
++ * - write()：通过写队列保证消息序列化，防止并发写交错
++ * - sendRequest()：发送控制请求并等待响应（权限、MCP、上下文查询）
++ *
++ * 对齐 Claude Code 的 StructuredIO 设计（spec §4.3）。
++ */
++
++import type { Readable, Writable } from "node:stream";
++import type { z } from "zod";
++import type {
++  SDKControlRequest,
++  SDKControlRequestInner,
++  SDKControlResponse,
++  StdinMessage,
++  StdoutMessage,
++} from "./types.ts";
++import { ndjsonStringify, ndjsonLines, ndjsonParse } from "./ndjson.ts";
++import { SDKControlResponseSchema } from "./control-schemas.ts";
++
++interface PendingRequest {
++  resolve: (value: unknown) => void;
++  reject: (error: Error) => void;
++  schema: z.ZodType<unknown>;
++}
++
++export class StructuredIO {
++  /** 待处理的控制请求（request_id → Promise resolver） */
++  private pendingRequests = new Map<string, PendingRequest>();
++  /** 已解决的 tool_use ID（防重复，远程重连场景） */
++  private resolvedToolUseIds = new Set<string>();
++  /** 输出队列（保证写入序列化） */
++  private writeQueue: StdoutMessage[] = [];
++  private writing = false;
++
++  private input: Readable;
++  private output: Writable;
++
++  constructor(input: Readable, output: Writable) {
++    this.input = input;
++    this.output = output;
++  }
++
++  /**
++   * 读取输入流，解析 NDJSON，分发消息类型
++   * - user → yield 给主循环
++   * - control_response → 匹配并解析 pending 请求（不 yield）
++   * - keep_alive → 静默忽略
++   * - 其他 → 作为 StdinMessage yield
++   */
++  async *read(): AsyncGenerator<StdinMessage> {
++    for await (const line of ndjsonLines(this.input)) {
++      let msg: Record<string, unknown> | null = null;
++      try {
++        msg = ndjsonParse(line) as Record<string, unknown>;
++      } catch {
++        // 解析失败，跳过该行
++        continue;
++      }
++      if (!msg || typeof msg !== "object") continue;
++
++      switch (msg.type) {
++        case "user":
++          yield msg as unknown as StdinMessage;
++          break;
++
++        case "control_response": {
++          const parsed = SDKControlResponseSchema().safeParse(msg);
++          if (parsed.success) {
++            this.handleControlResponse(parsed.data);
++          }
++          break;
++        }
++
++        case "keep_alive":
++          // 静默忽略
++          break;
++
++        default:
++          // 未知消息类型，仍 yield 给主循环兜底
++          yield msg as unknown as StdinMessage;
++      }
++    }
++  }
++
++  /**
++   * 写入 SDK 消息到输出流
++   * 通过队列保证写入序列化，防止消息交错
++   */
++  async write(message: StdoutMessage): Promise<void> {
++    this.writeQueue.push(message);
++    if (this.writing) return;
++    this.writing = true;
++
++    try {
++      while (this.writeQueue.length > 0) {
++        const msg = this.writeQueue.shift()!;
++        const line = ndjsonStringify(msg) + "\n";
++        await new Promise<void>((resolve) => {
++          const ok = this.output.write(line, "utf-8");
++          if (ok) resolve();
++          else this.output.once("drain", () => resolve());
++        });
++      }
++    } finally {
++      this.writing = false;
++    }
++  }
++
++  /**
++   * 发送控制请求并等待响应
++   * 用于权限请求、MCP 通信等需要同步响应的场景
++   */
++  sendRequest<T>(
++    request: SDKControlRequestInner,
++    schema: z.ZodType<T>,
++    signal?: AbortSignal,
++  ): Promise<T> {
++    const requestId = crypto.randomUUID();
++    const controlRequest: SDKControlRequest = {
++      type: "control_request",
++      request_id: requestId,
++      request,
++    };
++
++    return new Promise<T>((resolve, reject) => {
++      if (signal?.aborted) {
++        reject(new Error("Request aborted"));
++        return;
++      }
++
++      this.pendingRequests.set(requestId, {
++        resolve: resolve as (v: unknown) => void,
++        reject,
++        schema: schema as z.ZodType<unknown>,
++      });
++
++      signal?.addEventListener(
++        "abort",
++        () => {
++          if (this.pendingRequests.delete(requestId)) {
++            reject(new Error("Request aborted"));
++          }
++        },
++        { once: true },
++      );
++
++      // 发送请求；写失败直接 reject
++      this.write(controlRequest).catch((err) => {
++        if (this.pendingRequests.delete(requestId)) {
++          reject(err instanceof Error ? err : new Error(String(err)));
++        }
++      });
++    });
++  }
++
++  /**
++   * 处理控制响应，匹配 pending 请求
++   */
++  private handleControlResponse(response: SDKControlResponse): void {
++    const inner = response.response;
++    const requestId = inner.request_id;
++    const pending = this.pendingRequests.get(requestId);
++    if (!pending) return; // 孤儿响应，忽略
++
++    this.pendingRequests.delete(requestId);
++
++    if (inner.subtype === "error") {
++      pending.reject(new Error(inner.error));
++      return;
++    }
++
++    // Zod 校验响应载荷
++    const parsed = pending.schema.safeParse(inner.response);
++    if (parsed.success) {
++      pending.resolve(parsed.data);
++    } else {
++      pending.reject(new Error(`响应校验失败: ${parsed.error.message}`));
++    }
++  }
++
++  /**
++   * 追踪已解决的 tool_use ID，防止重复处理
++   * （远程场景下 WebSocket 重连可能导致重复投递）
++   */
++  trackResolvedToolUseId(toolUseId: string): void {
++    this.resolvedToolUseIds.add(toolUseId);
++    if (this.resolvedToolUseIds.size > 1000) {
++      const first = this.resolvedToolUseIds.values().next().value;
++      if (first !== undefined) this.resolvedToolUseIds.delete(first);
++    }
++  }
++
++  isResolvedToolUseId(toolUseId: string): boolean {
++    return this.resolvedToolUseIds.has(toolUseId);
++  }
++
++  /** 拒绝所有未决请求（关闭/中断时清理） */
++  rejectAllPending(reason: string): void {
++    for (const [, pending] of this.pendingRequests) {
++      pending.reject(new Error(reason));
++    }
++    this.pendingRequests.clear();
++  }
++}
+diff --git a/src/sdk/structured-output.ts b/src/sdk/structured-output.ts
+new file mode 100644
+index 0000000..15e8bcd
+--- /dev/null
++++ b/src/sdk/structured-output.ts
+@@ -0,0 +1,103 @@
++/**
++ * 结构化输出（JSON Schema 约束）
++ *
++ * 让 SDK 调用者约束 Agent 的最终输出为结构化 JSON：
++ * - buildStructuredOutputPrompt：把 JSON Schema 注入 system prompt
++ * - extractStructuredOutput：从助手消息提取并解析 JSON（支持 ```json 包裹）
++ *
++ * 对齐 Claude Code structured_output 能力（spec §5.5）。
++ * JSON Schema 的深度校验留作后续（可接 ajv）；当前做解析 + 顶层类型检查。
++ */
++
++import type { Message } from "../llm/types.ts";
++
++export interface StructuredOutputConfig {
++  /** JSON Schema 约束 */
++  jsonSchema: Record<string, unknown>;
++  /** 最大重试次数 */
++  maxRetries?: number;
++}
++
++export type ExtractResult =
++  | { success: true; data: unknown }
++  | { success: false; error: string };
++
++/**
++ * 从助手消息中提取结构化输出
++ * 尝试把最后一个 text block 解析为 JSON（支持 ```json ... ``` 包裹）
++ */
++export function extractStructuredOutput(
++  message: Message,
++  schema: Record<string, unknown>,
++): ExtractResult {
++  if (message.role !== "assistant") {
++    return { success: false, error: "非助手消息" };
++  }
++
++  const textBlocks = message.content.filter(
++    (b): b is { type: "text"; text: string } => b.type === "text",
++  );
++  const lastText = textBlocks[textBlocks.length - 1];
++  if (!lastText) {
++    return { success: false, error: "无文本内容" };
++  }
++
++  // 提取 JSON（支持 ```json ... ``` 代码块）
++  let jsonStr = lastText.text.trim();
++  const codeBlockMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
++  if (codeBlockMatch) {
++    jsonStr = codeBlockMatch[1].trim();
++  }
++
++  let data: unknown;
++  try {
++    data = JSON.parse(jsonStr);
++  } catch (err) {
++    return {
++      success: false,
++      error: `JSON 解析失败: ${err instanceof Error ? err.message : String(err)}`,
++    };
++  }
++
++  // 顶层类型检查（schema.type 为 object/array 时校验）
++  const expectedType = schema["type"];
++  if (expectedType === "object") {
++    if (typeof data !== "object" || data === null || Array.isArray(data)) {
++      return { success: false, error: "期望 object 类型" };
++    }
++    // 必填字段检查
++    const required = schema["required"];
++    if (Array.isArray(required)) {
++      const obj = data as Record<string, unknown>;
++      const missing = required.filter((k) => typeof k === "string" && !(k in obj));
++      if (missing.length > 0) {
++        return { success: false, error: `缺失必填字段: ${missing.join(", ")}` };
++      }
++    }
++  } else if (expectedType === "array") {
++    if (!Array.isArray(data)) {
++      return { success: false, error: "期望 array 类型" };
++    }
++  }
++
++  return { success: true, data };
++}
++
++/**
++ * 构建结构化输出的系统提示词补充
++ */
++export function buildStructuredOutputPrompt(
++  schema: Record<string, unknown>,
++): string {
++  return [
++    "",
++    "<structured-output-requirement>",
++    "你必须以 JSON 格式输出最终结果，严格遵循以下 JSON Schema：",
++    "```json",
++    JSON.stringify(schema, null, 2),
++    "```",
++    "将 JSON 放在 ```json ... ``` 代码块中。",
++    "不要在 JSON 之外添加任何解释文本。",
++    "</structured-output-requirement>",
++  ].join("\n");
++}
+diff --git a/src/sdk/types.ts b/src/sdk/types.ts
+new file mode 100644
+index 0000000..602cc1c
+--- /dev/null
++++ b/src/sdk/types.ts
+@@ -0,0 +1,62 @@
++/**
++ * SDK 类型 — 从 Zod Schema 推导
++ *
++ * 不手写类型，全部用 z.infer 从 schemas.ts / control-schemas.ts 推导，
++ * 避免 TypeScript 类型与运行时 Schema 漂移（Schema-First，spec §7.4）。
++ */
++
++import type { z } from "zod";
++import type * as schemas from "./schemas.ts";
++import type * as controlSchemas from "./control-schemas.ts";
++
++// ─── 基础类型 ───
++export type SDKUsage = z.infer<ReturnType<typeof schemas.UsageSchema>>;
++export type SDKContentBlock = z.infer<ReturnType<typeof schemas.ContentBlockSchema>>;
++export type SDKMessageBody = z.infer<ReturnType<typeof schemas.MessageSchema>>;
++
++// ─── 数据消息类型 ───
++export type SDKUserMessage = z.infer<ReturnType<typeof schemas.SDKUserMessageSchema>>;
++export type SDKAssistantMessage = z.infer<ReturnType<typeof schemas.SDKAssistantMessageSchema>>;
++export type SDKStreamEvent = z.infer<ReturnType<typeof schemas.SDKStreamEventSchema>>;
++export type SDKResultSuccess = z.infer<ReturnType<typeof schemas.SDKResultSuccessSchema>>;
++export type SDKResultError = z.infer<ReturnType<typeof schemas.SDKResultErrorSchema>>;
++export type SDKResultMessage = SDKResultSuccess | SDKResultError;
++
++// ─── 系统消息类型 ───
++export type SDKSystemInit = z.infer<ReturnType<typeof schemas.SDKSystemInitSchema>>;
++export type SDKCompactBoundary = z.infer<ReturnType<typeof schemas.SDKCompactBoundarySchema>>;
++export type SDKAPIRetry = z.infer<ReturnType<typeof schemas.SDKAPIRetrySchema>>;
++export type SDKStatus = z.infer<ReturnType<typeof schemas.SDKStatusSchema>>;
++export type SDKToolProgress = z.infer<ReturnType<typeof schemas.SDKToolProgressSchema>>;
++export type SDKHookStarted = z.infer<ReturnType<typeof schemas.SDKHookStartedSchema>>;
++export type SDKHookResponse = z.infer<ReturnType<typeof schemas.SDKHookResponseSchema>>;
++
++/** 所有 SDK 消息类型的联合 */
++export type SDKMessage = z.infer<ReturnType<typeof schemas.SDKMessageSchema>>;
++
++// ─── 控制协议类型 ───
++export type SDKControlRequest = z.infer<ReturnType<typeof controlSchemas.SDKControlRequestSchema>>;
++export type SDKControlRequestInner = z.infer<
++  ReturnType<typeof controlSchemas.SDKControlRequestInnerSchema>
++>;
++export type SDKControlResponse = z.infer<ReturnType<typeof controlSchemas.SDKControlResponseSchema>>;
++export type SDKControlPermissionRequest = z.infer<
++  ReturnType<typeof controlSchemas.SDKControlPermissionRequestSchema>
++>;
++export type SDKControlPermissionResponse = z.infer<
++  ReturnType<typeof controlSchemas.SDKControlPermissionResponseSchema>
++>;
++export type SDKControlInitialize = z.infer<
++  ReturnType<typeof controlSchemas.SDKControlInitializeSchema>
++>;
++
++// ─── 传输层消息（stdin/stdout 上的所有消息） ───
++
++/** 来自 stdin 的消息：用户消息 / 控制响应 / 心跳 */
++export type StdinMessage =
++  | SDKUserMessage
++  | SDKControlResponse
++  | { type: "keep_alive" };
++
++/** 写往 stdout 的消息：SDK 数据/系统消息 / 控制请求 */
++export type StdoutMessage = SDKMessage | SDKControlRequest;

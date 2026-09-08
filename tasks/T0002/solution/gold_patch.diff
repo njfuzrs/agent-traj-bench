@@ -1,0 +1,84 @@
+diff --git a/src/config/config.ts b/src/config/config.ts
+index dbe1aa4..711babf 100644
+--- a/src/config/config.ts
++++ b/src/config/config.ts
+@@ -991,13 +991,23 @@ function normalizeConfigKeys(raw: any): Partial<Config> {
+     // 特殊处理 telemetry：转换字段名
+     } else if (configKey === "telemetry" && typeof value === "object" && value !== null) {
+       const v = value as any;
+-      result[configKey] = {
++      // ⚠️ 三个数值字段必须「只在有值时才写入」。
++      // 无条件写出会产出**显式存在的 undefined 键**，在 TelemetryBus 的
++      // `{ ...DEFAULT_CONFIG, ...config }` 里会覆盖掉 512/5000/2048 默认值，
++      // 进而让 splice(0, undefined) 恒返回空数组、setInterval(fn, undefined)
++      // 退化成 0ms —— 曾导致遥测落盘 190MB 纯换行字节、span/metric 一条未出。
++      // 见 docs/bugfixes/done/20260807-遥测落盘恒空-配置undefined覆盖默认值.md
++      const telemetry: Record<string, unknown> = {
+         enabled: v.enabled ?? false,
+         exporters: Array.isArray(v.exporters) ? v.exporters : [],
+-        batchSize: v.batch_size || v.batchSize,
+-        flushIntervalMs: v.flush_interval_ms || v.flushIntervalMs,
+-        maxQueueSize: v.max_queue_size || v.maxQueueSize,
+       };
++      const batchSize = v.batch_size ?? v.batchSize;
++      const flushIntervalMs = v.flush_interval_ms ?? v.flushIntervalMs;
++      const maxQueueSize = v.max_queue_size ?? v.maxQueueSize;
++      if (batchSize !== undefined) telemetry.batchSize = batchSize;
++      if (flushIntervalMs !== undefined) telemetry.flushIntervalMs = flushIntervalMs;
++      if (maxQueueSize !== undefined) telemetry.maxQueueSize = maxQueueSize;
++      result[configKey] = telemetry;
+     // 特殊处理 analytics：转换字段名（snake_case → camelCase），解析后端列表（spec 17）
+     } else if (configKey === "analytics" && typeof value === "object" && value !== null) {
+       const v = value as any;
+diff --git a/src/telemetry/bus.ts b/src/telemetry/bus.ts
+index c0db5b3..43feb09 100644
+--- a/src/telemetry/bus.ts
++++ b/src/telemetry/bus.ts
+@@ -125,7 +125,24 @@ export class TelemetryBus {
+   private metricHistory: MetricPoint[] = [];
+ 
+   constructor(config?: Partial<TelemetryConfig>) {
+-    this.config = { ...DEFAULT_CONFIG, ...config };
++    // ⚠️ 双保险：对象展开时**显式存在的 undefined 键**会覆盖掉 DEFAULT_CONFIG 的值，
++    // 所以三个数值字段必须再用 ?? 兜一次。只在 config.ts 侧剔除 undefined 治不了
++    // 别的调用方直接 `new TelemetryBus({ batchSize: undefined })`。
++    // 曾因此 splice(0, undefined) 恒空 + setInterval(fn, undefined) 退化 0ms，
++    // 落盘 190MB 纯换行字节。见
++    // docs/bugfixes/done/20260807-遥测落盘恒空-配置undefined覆盖默认值.md
++    const merged = { ...DEFAULT_CONFIG, ...config };
++    this.config = {
++      ...merged,
++      batchSize: merged.batchSize ?? DEFAULT_CONFIG.batchSize,
++      flushIntervalMs: merged.flushIntervalMs ?? DEFAULT_CONFIG.flushIntervalMs,
++      maxQueueSize: merged.maxQueueSize ?? DEFAULT_CONFIG.maxQueueSize,
++    };
++  }
++
++  /** 只读快照——供门禁测试断言合并后的数值字段（不暴露可变引用） */
++  getConfigSnapshot(): Readonly<TelemetryConfig> {
++    return { ...this.config };
+   }
+ 
+   /** 是否启用 */
+diff --git a/src/telemetry/exporters/jsonl.ts b/src/telemetry/exporters/jsonl.ts
+index b6edba7..54d2425 100644
+--- a/src/telemetry/exporters/jsonl.ts
++++ b/src/telemetry/exporters/jsonl.ts
+@@ -41,6 +41,9 @@ export class JsonlExporter implements TelemetryExporter {
+   }
+ 
+   async exportSpans(spans: SpanData[]): Promise<void> {
++    // 空批次直接返回（与 otlp.ts 对齐）：`[].join("\n") + "\n"` 会写下一个裸换行符，
++    // 上游一旦出空批次就会静默堆积垃圾字节（曾累积 190MB 纯 \n）。
++    if (spans.length === 0) return;
+     await this.ensureDir();
+     const lines = spans.map(s => JSON.stringify(s)).join("\n") + "\n";
+     await appendFile(this.spanFile, lines, "utf-8");
+@@ -48,6 +51,7 @@ export class JsonlExporter implements TelemetryExporter {
+   }
+ 
+   async exportMetrics(metrics: MetricPoint[]): Promise<void> {
++    if (metrics.length === 0) return;
+     await this.ensureDir();
+     const lines = metrics.map(m => JSON.stringify(m)).join("\n") + "\n";
+     await appendFile(this.metricFile, lines, "utf-8");

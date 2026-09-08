@@ -1,0 +1,205 @@
+diff --git a/src/hook/planner.ts b/src/hook/planner.ts
+index edf02da..f39aba6 100644
+--- a/src/hook/planner.ts
++++ b/src/hook/planner.ts
+@@ -64,21 +64,48 @@ export class HookPlanner {
+     return true;
+   }
+ 
+-  /** 匹配工具名（正则或精确） */
++  /**
++   * 匹配工具名（对齐 CC utils/hooks.ts matchesPattern 三档语义）
++   *
++   * 历史 bug：旧实现对任意 matcher 都走 `new RegExp(matcher).test(toolName)` 且不锚定，
++   * 导致 `matcher:"Edit"` 会误命中 `NotebookEdit`/`MultiEdit`（正则子串匹配）。用户写 "Edit"
++   * 意图只 hook Edit 工具，结果格式化/拦截/审计 hook 在意料外的工具上触发——静默行为错误。
++   *
++   * CC 三档（精确匹配优先，正则是兜底）：
++   *   1. `''` / `'*'` → 全部匹配（此分支已在 matchesContext 上游拦截，这里冗余兜底）。
++   *   2. 纯 `[a-zA-Z0-9_|]` → 精确匹配：含 `|` 按管道拆成精确列表逐个 `===`；否则单值 `===`。
++   *   3. 含其他字符（`.` `*` `(` `[` 等）→ 才当正则，**大小写敏感**（无 i flag），非法正则记日志返回 false。
++   */
+   private matchesToolName(matcher: string, toolName: string): boolean {
+-    // 兼容旧格式 /pattern/ 包裹
+-    let pattern = matcher;
+-    if (pattern.startsWith("/") && pattern.endsWith("/") && pattern.length > 2) {
+-      pattern = pattern.slice(1, -1);
++    // 兼容旧格式 /pattern/ 包裹 → 强制正则（保留我们既有的显式正则语法）
++    if (matcher.startsWith("/") && matcher.endsWith("/") && matcher.length > 2) {
++      const pattern = matcher.slice(1, -1);
++      try {
++        return new RegExp(pattern).test(toolName);
++      } catch (e) {
++        getLogger().warn("HOOK", `非法 matcher 正则 "${matcher}": ${e}`);
++        return false;
++      }
+     }
+ 
+-    try {
+-      const regex = new RegExp(pattern);
+-      return regex.test(toolName);
+-    } catch {
+-      // 非法正则，当作精确匹配
++    // 第 1 档：空 / 通配符 → 全部匹配（上游已处理，这里兜底）
++    if (matcher === "" || matcher === "*") return true;
++
++    // 第 2 档：纯 [a-zA-Z0-9_|] → 精确匹配（含 | 走管道分隔精确列表）
++    if (/^[a-zA-Z0-9_|]+$/.test(matcher)) {
++      if (matcher.includes("|")) {
++        return matcher.split("|").some((name) => name === toolName);
++      }
+       return matcher === toolName;
+     }
++
++    // 第 3 档：含正则元字符 → 当正则（大小写敏感），非法正则记日志返回 false
++    try {
++      return new RegExp(matcher).test(toolName);
++    } catch (e) {
++      getLogger().warn("HOOK", `非法 matcher 正则 "${matcher}": ${e}`);
++      return false;
++    }
+   }
+ 
+   /** 去重（相同 key 的 hook 只保留第一个） */
+diff --git a/src/hook/runner.ts b/src/hook/runner.ts
+index e83c040..58fb21f 100644
+--- a/src/hook/runner.ts
++++ b/src/hook/runner.ts
+@@ -517,17 +517,20 @@ export class HookRunner {
+         }
+         break;
+ 
+-      case HookEventName.PreToolUse:
+-        if ("tool_input" in hookOutput.hookSpecificOutput) {
+-          const newInput = hookOutput.hookSpecificOutput["tool_input"];
+-          if (newInput && typeof newInput === "object" && "tool_input" in modified) {
+-            (modified as any).tool_input = {
+-              ...(modified as any).tool_input,
+-              ...(newInput as Record<string, unknown>),
+-            };
+-          }
++      case HookEventName.PreToolUse: {
++        const so = hookOutput.hookSpecificOutput;
++        // G1：updatedInput 优先，整体替换（对齐 CC 语义）
++        if ("updatedInput" in so && so["updatedInput"] && typeof so["updatedInput"] === "object" && "tool_input" in modified) {
++          (modified as any).tool_input = so["updatedInput"];
++        } else if ("tool_input" in so && so["tool_input"] && typeof so["tool_input"] === "object" && "tool_input" in modified) {
++          // 旧格式兼容：浅合并保留其他字段
++          (modified as any).tool_input = {
++            ...(modified as any).tool_input,
++            ...(so["tool_input"] as Record<string, unknown>),
++          };
+         }
+         break;
++      }
+ 
+       case HookEventName.BeforeModel:
+         if ("llm_request" in hookOutput.hookSpecificOutput) {
+diff --git a/src/hook/types.ts b/src/hook/types.ts
+index ad93248..d4fbb87 100644
+--- a/src/hook/types.ts
++++ b/src/hook/types.ts
+@@ -87,8 +87,19 @@ export enum HookType {
+   Agent = "agent",
+ }
+ 
+-/** 决策类型 */
+-export type HookDecision = "allow" | "deny" | "block" | undefined;
++/**
++ * 顶层决策类型（老式 decision 字段）
++ * CC utils/hooks.ts:525-543：`approve` 等价 allow（放行），`block`/`deny` 阻塞。
++ */
++export type HookDecision = "allow" | "approve" | "deny" | "block" | undefined;
++
++/**
++ * PreToolUse 权限决策三值（对齐 CC hookSpecificOutput.permissionDecision）
++ * - allow：跳过交互提示，但仍跑规则检查（有 deny 规则仍拒、有 ask 规则仍弹框）
++ * - deny：阻止执行，reason 反馈给模型
++ * - ask：升级为用户确认，弹框展示 hook 的 message
++ */
++export type HookPermissionDecision = "allow" | "deny" | "ask";
+ 
+ // ============================================================
+ // Hook 配置
+@@ -525,11 +536,20 @@ export class DefaultHookOutput implements HookOutput {
+     this.hookSpecificOutput = data.hookSpecificOutput;
+   }
+ 
+-  /** 是否为阻塞决策 */
++  /** 是否为阻塞决策（block/deny，approve/allow 不阻塞） */
+   isBlockingDecision(): boolean {
+     return this.decision === "block" || this.decision === "deny";
+   }
+ 
++  /**
++   * 是否为顶层放行决策（G9：对齐 CC decision:"approve"）
++   * CC utils/hooks.ts:525-543 把顶层 `approve` 视为放行信号（等价 allow）。
++   * 我们既有 `allow` 也视为放行，兼容两种写法。
++   */
++  isApproveDecision(): boolean {
++    return this.decision === "approve" || this.decision === "allow";
++  }
++
+   /** 是否应停止执行 */
+   shouldStopExecution(): boolean {
+     return this.continue === false;
+@@ -577,16 +597,53 @@ export class DefaultHookOutput implements HookOutput {
+ 
+ /** PreToolUse 输出 */
+ export class PreToolUseHookOutput extends DefaultHookOutput {
+-  /** 获取修改后的工具输入 */
++  /**
++   * 获取修改后的工具输入（G1：对齐 CC hookSpecificOutput.updatedInput，整体替换）
++   *
++   * CC 规范（utils/hooks.ts:618-620）用 `updatedInput` 整体替换 input。我们同时认两个字段名：
++   * `updatedInput` 优先（对齐 CC），`tool_input` 兜底（向后兼容我们的旧行为）。
++   */
+   getModifiedToolInput(): Record<string, unknown> | undefined {
+-    if (this.hookSpecificOutput && "tool_input" in this.hookSpecificOutput) {
+-      const input = this.hookSpecificOutput["tool_input"];
+-      if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+-        return input as Record<string, unknown>;
+-      }
++    const so = this.hookSpecificOutput;
++    if (!so) return undefined;
++    const candidate =
++      ("updatedInput" in so ? so["updatedInput"] : undefined) ??
++      ("tool_input" in so ? so["tool_input"] : undefined);
++    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
++      return candidate as Record<string, unknown>;
+     }
+     return undefined;
+   }
++
++  /**
++   * 获取权限决策三值（G2：对齐 CC hookSpecificOutput.permissionDecision）
++   * allow / deny / ask，无有效值返回 undefined。
++   */
++  getPermissionDecision(): HookPermissionDecision | undefined {
++    const d = this.hookSpecificOutput?.["permissionDecision"];
++    if (d === "allow" || d === "deny" || d === "ask") return d;
++    return undefined;
++  }
++
++  /** 获取权限决策的说明文本（CC permissionDecisionReason） */
++  getPermissionDecisionReason(): string | undefined {
++    const r = this.hookSpecificOutput?.["permissionDecisionReason"];
++    return typeof r === "string" ? r : undefined;
++  }
++
++  /**
++   * 是否为阻塞决策（override）
++   * 除顶层 block/deny 外，permissionDecision:"deny" 也算阻塞（G2）。
++   */
++  override isBlockingDecision(): boolean {
++    if (super.isBlockingDecision()) return true;
++    return this.getPermissionDecision() === "deny";
++  }
++
++  /** override getEffectiveReason：permissionDecisionReason 优先于 stopReason/reason */
++  override getEffectiveReason(): string {
++    return this.getPermissionDecisionReason() || super.getEffectiveReason();
++  }
+ }
+ 
+ /** AfterAgent 输出 */

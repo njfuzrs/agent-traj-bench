@@ -1,0 +1,16 @@
+diff --git a/src/tool/lsp.ts b/src/tool/lsp.ts
+index 44495cb..9b325a8 100644
+--- a/src/tool/lsp.ts
++++ b/src/tool/lsp.ts
+@@ -98,8 +98,10 @@ const lspSchema = lazySchema(() =>
+ /**
+  * 过滤掉被 .gitignore 忽略的文件路径（G9）。
+  * 用 `git check-ignore --stdin` 批量检查；git 不可用或出错时不过滤（返回原列表）。
++ *
++ * export 供单测直接驱动（含 T5-B3 的 signal 快速退出/子进程 kill 分支）。
+  */
+-async function filterGitignored(
++export async function filterGitignored(
+   paths: string[],
+   cwd: string,
+   signal?: AbortSignal,

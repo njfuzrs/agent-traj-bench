@@ -1,0 +1,633 @@
+diff --git a/src/cli.ts b/src/cli.ts
+index f0422e5..4ad3fff 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -627,7 +627,8 @@ export async function main(): Promise<void> {
+ 
+     // 注册工具搜索工具（延迟加载机制的调出入口，alwaysLoad 强制首轮可见）
+     const { ToolSearchTool } = await import("./tool/tool-search.ts");
+-    toolRegistry.register(new ToolSearchTool(toolRegistry));
++    const toolSearchTool = new ToolSearchTool(toolRegistry);
++    toolRegistry.register(toolSearchTool);
+ 
+     // 注册后台任务工具（task 系统已就位，此处补齐工具入口）
+     const { TaskOutputTool } = await import("./tool/task-output.ts");
+@@ -789,6 +790,21 @@ export async function main(): Promise<void> {
+       const { MCPManager } = await import("./mcp/manager.ts");
+       mcpManager = new MCPManager();
+ 
++      // 回填 tool_search 的 MCP pending 检测：搜索无果时若有 server 仍在连接中，
++      // 提示模型稍后重试（避免启动初期 MCP 异步连接未完成时误判工具不存在）。
++      const { MCPConnectionStatus } = await import("./mcp/types.ts");
++      const mgr = mcpManager;
++      toolSearchTool.setPendingMcpServers(() =>
++        mgr
++          .getStatus()
++          .filter(
++            (s) =>
++              s.status === MCPConnectionStatus.CONNECTING ||
++              s.status === MCPConnectionStatus.RECONNECTING,
++          )
++          .map((s) => s.name),
++      );
++
+       mcpManager.onToolsRefresh = (serverName, tools) => {
+         const prefix = `mcp__${serverName}__`;
+         toolRegistry.removeByPrefix(prefix);
+diff --git a/src/config/config.ts b/src/config/config.ts
+index d1620ba..1dc3d2c 100644
+--- a/src/config/config.ts
++++ b/src/config/config.ts
+@@ -9,6 +9,7 @@ import { join } from "path";
+ import { existsSync, mkdirSync } from "fs";
+ import { getLogger } from "../debug/logger.ts";
+ import { getSidHome } from "./paths.ts";
++import { parseToolSearchEnv } from "../tool/tool-search-auto.ts";
+ 
+ /** MCP 服务器配置 */
+ export interface MCPServerConfig {
+@@ -178,12 +179,19 @@ export interface Config {
+ 
+   // 工具延迟加载（ToolSearch）
+   /**
+-   * 是否启用工具延迟加载（默认 false）。
+-   * 开启后：标记 shouldDefer 的工具不进首轮 LLM 上下文（用 activeDefinitions 替代
+-   * definitions），模型通过 tool_search 工具按需搜索并激活。工具数膨胀（50+）时
+-   * 显著降低首轮 token。关闭时全部工具照常进上下文，行为与历史一致。
++   * 工具延迟加载模式（默认 false 关闭）。对标 claude-code ENABLE_TOOL_SEARCH。
++   *
++   * 取值：
++   *   - false / 不设置：恒关，全部工具照常进首轮上下文（行为与历史一致）。
++   *   - true：恒开，标记 shouldDefer 的工具不进首轮（用 activeDefinitions 替代
++   *     definitions），模型经 tool_search 按需搜索并激活。
++   *   - "auto"：按延迟工具 token 占上下文窗口比例自动判定（默认阈值 10%）——
++   *     工具定义确实"撑爆"上下文时才开延迟，少量工具时全量更方便。
++   *   - number：自定义 auto 阈值百分比（0=恒开，100=恒关，1-99=按比例判定）。
++   *
++   * 环境变量 SID_CODE_TOOL_SEARCH 支持 true/false/auto/auto:N/纯数字 覆盖。
+    */
+-  toolSearch?: boolean;
++  toolSearch?: boolean | "auto" | number;
+ 
+   // 环境变量清理
+   /** 是否在 bash 工具执行时清理环境变量（默认 false） */
+@@ -713,6 +721,14 @@ function loadFromEnv(): Partial<Config> {
+     if (Number.isFinite(n) && n > 0) base.maxTokens = n;
+   }
+ 
++  // 工具延迟加载（ToolSearch）env 覆盖：SID_CODE_TOOL_SEARCH 支持
++  // true/false/auto/auto:N/纯数字（对标 claude-code ENABLE_TOOL_SEARCH）。
++  // 非法值返回 undefined，不覆盖配置文件/默认值。
++  const toolSearchEnv = parseToolSearchEnv(env.SID_CODE_TOOL_SEARCH);
++  if (toolSearchEnv !== undefined) {
++    base.toolSearch = toolSearchEnv;
++  }
++
+   // trace 环境变量
+   if (env.SID_CODE_TRACE === "1" || env.SID_CODE_TRACE === "true") {
+     const traceConfig: TraceConfig = {
+diff --git a/src/query/loop.ts b/src/query/loop.ts
+index c67fe88..342b444 100644
+--- a/src/query/loop.ts
++++ b/src/query/loop.ts
+@@ -20,6 +20,7 @@ import type { TokenMeter } from "../telemetry/metrics/token-meter.ts";
+ import type { BudgetTracker } from "../telemetry/metrics/budget-tracker.ts";
+ import { Manager as ContextManager } from "../context/manager.ts";
+ import { Registry as ToolRegistry } from "../tool/registry.ts";
++import { resolveToolSearchEnabled } from "../tool/tool-search-auto.ts";
+ import { TOKEN_THRESHOLDS } from "../context/auto-compact.ts";
+ import { ModelFallback } from "../llm/fallback.ts";
+ import { SessionState } from "../session/state.ts";
+@@ -129,6 +130,27 @@ export async function* queryLoop(
+   const state: LoopState = createInitialLoopState(config.maxTurns || Infinity);
+   const diminishingDetector = new DiminishingReturnsDetector();
+ 
++  // ─── 工具延迟加载（ToolSearch）：每会话判定一次 ───
++  // config.toolSearch 支持 boolean | "auto" | number(百分比)：
++  //   - true/false：恒开/恒关
++  //   - "auto"/number：按"延迟工具 token 总数 ≥ 上下文窗口 × 阈值%"自动判定
++  // 只判定一次（不每轮）——避免 MCP 连接完成后工具集增长导致中途从"全量"切到
++  // "延迟"，让模型上下文里工具突然消失（幻觉/重试 churn）。对标 claude-code 的
++  // isToolSearchEnabled（按会话/请求定档）。
++  // 延迟工具定义 = 全量 definitions 减去 activeDefinitions（此时尚无手动激活，差集即全部延迟工具）。
++  const toolSearchEnabled = (() => {
++    if (toolRegistry.size() === 0) return false;
++    const activeNames = new Set(toolRegistry.activeDefinitions().map((d) => d.name));
++    const deferredDefinitions = toolRegistry
++      .definitions()
++      .filter((d) => !activeNames.has(d.name));
++    return resolveToolSearchEnabled(config.toolSearch, {
++      model: config.model,
++      availableModels: config.availableModels,
++      deferredDefinitions,
++    });
++  })();
++
+   while (state.turnCount < state.maxTurns) {
+     state.turnCount++;
+     loopDetector.recordTurn();
+@@ -271,7 +293,7 @@ export async function* queryLoop(
+     // tool_search 按需激活后才进上下文；关闭时发全量（definitions），行为与历史一致。
+     const toolDefs =
+       toolCount > 0
+-        ? config.toolSearch
++        ? toolSearchEnabled
+           ? toolRegistry.activeDefinitions()
+           : toolRegistry.definitions()
+         : undefined;
+@@ -388,7 +410,7 @@ export async function* queryLoop(
+     // 尚未加载、可经 tool_search 调出。不注入则模型对延迟工具完全无感知，
+     // 整个延迟机制形同虚设（对标 claude-code claude.ts deferredToolList 注入）。
+     // 单独处理（不进 reminderParts）：它每轮都注、非节流，且内容独立成块。
+-    if (config.toolSearch) {
++    if (toolSearchEnabled) {
+       const deferredNames = toolRegistry.deferredToolNames();
+       if (deferredNames.length > 0) {
+         finalMessages = injectReminders(finalMessages, [
+diff --git a/src/tool/registry.ts b/src/tool/registry.ts
+index 366698c..faf3fa6 100644
+--- a/src/tool/registry.ts
++++ b/src/tool/registry.ts
+@@ -14,6 +14,7 @@ import type { LegacyTool } from "./types.ts";
+ import type { ToolDefinition } from "../llm/types.ts";
+ import { z } from "zod/v4";
+ import { getLogger } from "../debug/index.ts";
++import { searchToolsWithScoring } from "./tool-search-scoring.ts";
+ 
+ /**
+  * 生成单个工具的 LLM 定义。
+@@ -258,17 +259,31 @@ export class Registry {
+       .map(toolToDefinition);
+   }
+ 
+-  /** 搜索延迟工具（ToolSearchTool 调用） */
++  /**
++   * 搜索延迟工具（ToolSearchTool 调用）。
++   *
++   * 委托 tool-search-scoring 的加权评分（对标 claude-code searchToolsWithKeywords）：
++   * 工具名按 CamelCase/mcp__ 拆词，名命中 > searchHint > description，MCP 工具加权，
++   * 支持 "+term" 必需词与 mcp__ 前缀快路径。返回按相关度降序排列的工具实例。
++   *
++   * 内部不截断（取大上限 50），由调用方（ToolSearchTool）按 max_results 截断——
++   * 这样调用方能拿到完整排序、自行决定展示多少。
++   */
+   searchDeferredTools(query: string): LegacyTool[] {
+-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+-    return this.all()
+-      .filter((t) => this.isToolDeferred(t))
+-      .filter((t) => {
+-        // searchHint 提供高信号关键词，参与匹配（claude-code 同款）
+-        const hint = t.searchHint ? ` ${t.searchHint}` : "";
+-        const text = `${t.name()} ${t.description()}${hint}`.toLowerCase();
+-        return terms.some((term) => text.includes(term));
+-      });
++    const deferred = this.all().filter((t) => this.isToolDeferred(t));
++    const deferredInfo = deferred.map((t) => ({
++      name: t.name(),
++      description: t.description(),
++      searchHint: t.searchHint,
++    }));
++
++    // 严守"仅搜索延迟工具"契约：deferred 同时作为搜索池与精确名快路径的回退池，
++    // 不外溢到非延迟工具（跨全量池的精确名匹配由 ToolSearchTool 层的 registry.get
++    // 负责，那里语义是"选已加载工具是无害 no-op"）。
++    const scored = searchToolsWithScoring(query, deferredInfo, deferredInfo, 50);
++    return scored
++      .map((s) => this.get(s.name))
++      .filter((t): t is LegacyTool => t !== undefined);
+   }
+ 
+   /** 延迟工具数量（字段 + 名单双来源，去重） */
+diff --git a/src/tool/tool-search-auto.ts b/src/tool/tool-search-auto.ts
+new file mode 100644
+index 0000000..4e83c19
+--- /dev/null
++++ b/src/tool/tool-search-auto.ts
+@@ -0,0 +1,126 @@
++/**
++ * ToolSearch auto 模式 —— 阈值判定纯函数
++ *
++ * 对标 claude-code `utils/toolSearch.ts` 的 getToolSearchMode / checkAutoThreshold。
++ *
++ * config.toolSearch 支持三种形态：
++ *   - boolean：true = 恒开（tst），false/undefined = 恒关（standard）
++ *   - "auto"：按延迟工具 token 占上下文窗口比例自动判定（默认阈值 10%）
++ *   - number：自定义百分比阈值（0 = 恒开，100 = 恒关，1-99 = 按比例判定）
++ *
++ * 判定时机：每会话首轮前计算一次，结果缓存为局部变量供整个 queryLoop 使用。
++ * 避免会话中途从"全量"切到"延迟"导致模型上下文中工具突然消失（幻觉/重试 churn）。
++ */
++
++import { TokenEstimator } from "../llm/token-estimator.ts";
++import type { ToolDefinition } from "../llm/types.ts";
++
++/** 默认 auto 阈值百分比（对标 claude-code DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE = 10） */
++const DEFAULT_AUTO_PERCENTAGE = 10;
++
++/** toolSearch 配置联合类型 */
++export type ToolSearchConfigValue = boolean | "auto" | number | undefined;
++
++/** 解析后的模式 */
++export interface ToolSearchParsedMode {
++  mode: "on" | "off" | "auto";
++  /** auto 模式的百分比阈值（仅 mode=auto 时有意义） */
++  percentage: number;
++}
++
++/**
++ * 解析 toolSearch 配置值为结构化模式。
++ *
++ * 映射规则（对标 claude-code getToolSearchMode）：
++ *   undefined / false        → off（standard）
++ *   true                     → on（tst，恒开）
++ *   "auto"                   → auto，percentage=10
++ *   number ≤ 0              → on（阈值 0% = 总是启用）
++ *   number ≥ 100            → off（阈值 100% = 永远达不到）
++ *   number 1-99             → auto，percentage=该数字
++ */
++export function parseToolSearchConfig(value: ToolSearchConfigValue): ToolSearchParsedMode {
++  if (value === undefined || value === false) return { mode: "off", percentage: 0 };
++  if (value === true) return { mode: "on", percentage: 0 };
++  if (value === "auto") return { mode: "auto", percentage: DEFAULT_AUTO_PERCENTAGE };
++  if (typeof value === "number") {
++    if (value <= 0) return { mode: "on", percentage: 0 };
++    if (value >= 100) return { mode: "off", percentage: 0 };
++    return { mode: "auto", percentage: Math.max(0, Math.min(100, value)) };
++  }
++  return { mode: "off", percentage: 0 };
++}
++
++/** auto 阈值判定的输入 */
++export interface AutoThresholdInput {
++  /** 当前主模型名（用于查上下文窗口大小） */
++  model: string;
++  /** 用户配置的模型列表（可能声明 contextWindow，权威来源） */
++  availableModels?: Array<{ name?: string; contextWindow?: number }>;
++  /** 延迟工具的定义列表（用于估算 token 总数） */
++  deferredDefinitions: ToolDefinition[];
++}
++
++/**
++ * auto 模式阈值判定：延迟工具 token 总数 >= 上下文窗口 × 阈值% 即启用延迟。
++ *
++ * 使用已有的 TokenEstimator（estimateTools + getContextLimit），不引入新依赖。
++ * 只在工具定义确实"撑爆"上下文时才开延迟——少量 MCP 工具时全量更方便。
++ */
++export function checkAutoThreshold(
++  input: AutoThresholdInput,
++  percentage: number,
++): boolean {
++  const estimator = new TokenEstimator();
++  const deferredTokens = estimator.estimateTools(input.deferredDefinitions);
++  const contextWindow = estimator.getContextLimit(input.model, input.availableModels);
++  const threshold = Math.floor((contextWindow * percentage) / 100);
++  return deferredTokens >= threshold;
++}
++
++/**
++ * 一站式判定：config.toolSearch 配置 + 当前工具集 → 本会话是否启用延迟加载。
++ *
++ * queryLoop 首轮前调用一次，结果缓存到局部变量。
++ *
++ * @returns true = 启用延迟加载（用 activeDefinitions + <available-deferred-tools> 注入）
++ */
++export function resolveToolSearchEnabled(
++  configValue: ToolSearchConfigValue,
++  input: AutoThresholdInput,
++): boolean {
++  const parsed = parseToolSearchConfig(configValue);
++  switch (parsed.mode) {
++    case "on":
++      return true;
++    case "off":
++      return false;
++    case "auto":
++      return checkAutoThreshold(input, parsed.percentage);
++  }
++}
++
++/**
++ * 解析环境变量 SID_CODE_TOOL_SEARCH 为 ToolSearchConfigValue。
++ *
++ * 支持格式（对标 claude-code ENABLE_TOOL_SEARCH）：
++ *   "true"            → true（恒开）
++ *   "false"           → false（恒关）
++ *   "auto"            → "auto"
++ *   "auto:N"          → N（百分比）
++ *   纯数字字符串     → 对应数字
++ *   其它             → undefined（不覆盖）
++ */
++export function parseToolSearchEnv(raw: string | undefined): ToolSearchConfigValue {
++  if (!raw || raw === "") return undefined;
++  if (raw === "true") return true;
++  if (raw === "false") return false;
++  if (raw === "auto") return "auto";
++  if (raw.startsWith("auto:")) {
++    const pct = parseInt(raw.slice(5), 10);
++    return isNaN(pct) ? "auto" : pct;
++  }
++  const n = parseInt(raw, 10);
++  if (!isNaN(n)) return n;
++  return undefined;
++}
+diff --git a/src/tool/tool-search-scoring.ts b/src/tool/tool-search-scoring.ts
+new file mode 100644
+index 0000000..a9f5006
+--- /dev/null
++++ b/src/tool/tool-search-scoring.ts
+@@ -0,0 +1,218 @@
++/**
++ * ToolSearch 加权关键词搜索 —— 纯函数评分内核
++ *
++ * 对标 claude-code `tools/ToolSearchTool/ToolSearchTool.ts` 的
++ * parseToolName / compileTermPatterns / searchToolsWithKeywords。
++ *
++ * 与 registry 解耦：只吃 `{ name, description, searchHint }` 三元组，
++ * 不依赖 LegacyTool 实例，便于单测与复用。registry.searchDeferredTools 把工具
++ * 实例摊平成这个轻量结构后调用本模块，再按返回的 name 顺序还原工具实例。
++ *
++ * 设计要点（与 claude 一致）：
++ * - 工具名按 CamelCase / mcp__ 三段拆词，使 "create issue" 能命中 mcp__github__create_issue。
++ * - MCP 工具命中给更高权重（server 名是模型最强的检索信号）。
++ * - searchHint（人工策划的能力短语）权重高于 description。
++ * - 用词边界正则匹配 description/searchHint，避免 "read" 误命中 "already"。
++ * - 支持 "+term" 必需词：带 + 前缀的词必须全部命中才进候选。
++ */
++
++/** 工具名解析结果 */
++export interface ParsedToolName {
++  /** 分词数组（小写，已去空） */
++  parts: string[];
++  /** 空格连接的全名（小写），用于子串兜底 */
++  full: string;
++  /** 是否 MCP 工具（mcp__ 前缀） */
++  isMcp: boolean;
++}
++
++/** 参与评分的工具轻量视图 */
++export interface SearchableTool {
++  name: string;
++  description: string;
++  searchHint?: string;
++}
++
++/** 搜索结果条目 */
++export interface ScoredTool {
++  name: string;
++  score: number;
++}
++
++/**
++ * 解析工具名为可检索的分词。
++ *
++ * - MCP 工具 `mcp__server__action`：剥掉 mcp__ 前缀，按 `__` 与 `_` 双层拆词，
++ *   full 名把分隔符替换为空格（"github create issue"）。
++ * - 普通工具：CamelCase 插空格 + 下划线转空格 + 小写拆词
++ *   （"ToolSearch" → ["tool","search"]，"tool_search" → ["tool","search"]）。
++ */
++export function parseToolName(name: string): ParsedToolName {
++  if (name.startsWith("mcp__")) {
++    const withoutPrefix = name.replace(/^mcp__/, "").toLowerCase();
++    const parts = withoutPrefix.split("__").flatMap((p) => p.split("_"));
++    return {
++      parts: parts.filter(Boolean),
++      full: withoutPrefix.replace(/__/g, " ").replace(/_/g, " "),
++      isMcp: true,
++    };
++  }
++
++  const parts = name
++    .replace(/([a-z])([A-Z])/g, "$1 $2") // CamelCase → 空格
++    .replace(/_/g, " ")
++    .toLowerCase()
++    .split(/\s+/)
++    .filter(Boolean);
++
++  return {
++    parts,
++    full: parts.join(" "),
++    isMcp: false,
++  };
++}
++
++/** 转义正则元字符（用户搜索词可能含特殊字符） */
++function escapeRegExp(s: string): string {
++  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++}
++
++/**
++ * 预编译词边界正则（去重）。
++ *
++ * 每次搜索只编译一次，避免在 工具数×词数×2 次匹配中重复 new RegExp。
++ * 词边界 `\b...\b` 确保 "read" 不会命中 "already" / "thread"。
++ */
++export function compileTermPatterns(terms: string[]): Map<string, RegExp> {
++  const patterns = new Map<string, RegExp>();
++  for (const term of terms) {
++    if (!patterns.has(term)) {
++      patterns.set(term, new RegExp(`\\b${escapeRegExp(term)}\\b`));
++    }
++  }
++  return patterns;
++}
++
++/**
++ * 加权关键词搜索（对标 claude-code searchToolsWithKeywords）。
++ *
++ * @param query        用户搜索词（已去 select: 前缀的纯关键词或裸工具名）
++ * @param deferredTools 延迟工具池（仅在这些里搜索/评分）
++ * @param allTools      全量工具池（精确名快路径回退用——选已加载工具是无害 no-op）
++ * @param maxResults    最大返回数
++ * @returns 按分数降序的 { name, score }，已截断到 maxResults
++ *
++ * 快路径：
++ *   A. query 恰好等于某工具名（delegate/compact 后模型常裸写工具名）→ 直接返回该工具。
++ *   B. query 以 `mcp__xxx` 开头 → startsWith 前缀匹配延迟池，命中即返回。
++ * 评分权重：
++ *   名分词整词命中 +10(MCP +12) / 名分词子串命中 +5(MCP +6) /
++ *   full 子串兜底（仅当本轮 score 仍为 0）+3 / searchHint 整词 +4 / description 整词 +2。
++ */
++export function searchToolsWithScoring(
++  query: string,
++  deferredTools: SearchableTool[],
++  allTools: SearchableTool[],
++  maxResults: number,
++): ScoredTool[] {
++  const queryLower = query.toLowerCase().trim();
++  if (!queryLower) return [];
++
++  // 快路径 A：精确名匹配（先查延迟池，再回退全量池）。
++  // 命中全量池里已加载的工具时也返回——"选中已加载工具"是无害 no-op，
++  // 让模型继续推进而非陷入重试 churn（对标 claude exactMatch 快路径）。
++  const exact =
++    deferredTools.find((t) => t.name.toLowerCase() === queryLower) ??
++    allTools.find((t) => t.name.toLowerCase() === queryLower);
++  if (exact) {
++    return [{ name: exact.name, score: 100 }];
++  }
++
++  // 快路径 B：mcp__server 前缀搜索（模型按 server 名带 mcp__ 前缀检索时）。
++  if (queryLower.startsWith("mcp__") && queryLower.length > 5) {
++    const prefixMatches = deferredTools
++      .filter((t) => t.name.toLowerCase().startsWith(queryLower))
++      .slice(0, maxResults)
++      .map((t) => ({ name: t.name, score: 50 }));
++    if (prefixMatches.length > 0) {
++      return prefixMatches;
++    }
++  }
++
++  const queryTerms = queryLower.split(/\s+/).filter((term) => term.length > 0);
++
++  // 拆分必需词（+前缀）与可选词
++  const requiredTerms: string[] = [];
++  const optionalTerms: string[] = [];
++  for (const term of queryTerms) {
++    if (term.startsWith("+") && term.length > 1) {
++      requiredTerms.push(term.slice(1));
++    } else {
++      optionalTerms.push(term);
++    }
++  }
++
++  const allScoringTerms =
++    requiredTerms.length > 0 ? [...requiredTerms, ...optionalTerms] : queryTerms;
++  if (allScoringTerms.length === 0) return [];
++  const termPatterns = compileTermPatterns(allScoringTerms);
++
++  // 预过滤：含必需词时，只保留"在 名/描述/hint 命中所有必需词"的候选
++  let candidateTools = deferredTools;
++  if (requiredTerms.length > 0) {
++    candidateTools = deferredTools.filter((tool) => {
++      const parsed = parseToolName(tool.name);
++      const descNormalized = tool.description.toLowerCase();
++      const hintNormalized = tool.searchHint?.toLowerCase() ?? "";
++      return requiredTerms.every((term) => {
++        const pattern = termPatterns.get(term)!;
++        return (
++          parsed.parts.includes(term) ||
++          parsed.parts.some((part) => part.includes(term)) ||
++          pattern.test(descNormalized) ||
++          (hintNormalized !== "" && pattern.test(hintNormalized))
++        );
++      });
++    });
++  }
++
++  const scored: ScoredTool[] = candidateTools.map((tool) => {
++    const parsed = parseToolName(tool.name);
++    const descNormalized = tool.description.toLowerCase();
++    const hintNormalized = tool.searchHint?.toLowerCase() ?? "";
++
++    let score = 0;
++    for (const term of allScoringTerms) {
++      const pattern = termPatterns.get(term)!;
++
++      // 工具名分词命中（高权重；MCP server/动作名是最强信号）
++      if (parsed.parts.includes(term)) {
++        score += parsed.isMcp ? 12 : 10;
++      } else if (parsed.parts.some((part) => part.includes(term))) {
++        score += parsed.isMcp ? 6 : 5;
++      }
++
++      // full 名子串兜底（仅当本轮其它命中都为 0，处理边角 case）
++      if (parsed.full.includes(term) && score === 0) {
++        score += 3;
++      }
++
++      // searchHint 命中（人工策划能力短语，信号强于 description）
++      if (hintNormalized !== "" && pattern.test(hintNormalized)) {
++        score += 4;
++      }
++
++      // description 命中（词边界，避免子串误命中）
++      if (pattern.test(descNormalized)) {
++        score += 2;
++      }
++    }
++
++    return { name: tool.name, score };
++  });
++
++  return scored
++    .filter((item) => item.score > 0)
++    .sort((a, b) => b.score - a.score)
++    .slice(0, maxResults);
++}
+diff --git a/src/tool/tool-search.ts b/src/tool/tool-search.ts
+index f6f55ae..e01397a 100644
+--- a/src/tool/tool-search.ts
++++ b/src/tool/tool-search.ts
+@@ -44,6 +44,16 @@ const toolSearchSchema = lazySchema(() =>
+ export class ToolSearchTool implements Tool {
+   private registry: ToolRegistry;
+ 
++  /**
++   * 可选：返回"仍在连接中"的 MCP server 名列表。
++   *
++   * 注入而非直连 MCP manager——保持工具与 MCP 子系统解耦、便于单测。
++   * CLI 启动初期 MCP 异步连接尚未完成时，搜索无果若不提示 pending，模型会误判
++   * "工具不存在"而放弃；有此回调则追加"稍后重试"提示（对标 claude-code
++   * pending_mcp_servers）。未注入时行为不变。
++   */
++  private pendingMcpServers?: () => string[];
++
+   /** zod schema：执行器据此做运行时校验，registry 据此生成 LLM 定义 */
+   readonly zodSchema = toolSearchSchema();
+ 
+@@ -59,6 +69,16 @@ export class ToolSearchTool implements Tool {
+     this.registry = registry;
+   }
+ 
++  /**
++   * 注入 MCP pending server 检测回调。
++   *
++   * 由 cli.ts 在 MCPManager 创建后回填——ToolSearchTool 注册时 MCP 可能尚未初始化，
++   * 延迟注入避免循环依赖（与 setHookSystem / setUsageSink 同一模式）。
++   */
++  setPendingMcpServers(fn: () => string[]): void {
++    this.pendingMcpServers = fn;
++  }
++
+   name(): string {
+     return "tool_search";
+   }
+@@ -178,12 +198,13 @@ export class ToolSearchTool implements Tool {
+ 
+     if (matches.length === 0) {
+       const total = this.registry.deferredSize();
++      const base =
++        total === 0
++          ? `没有找到匹配 "${query}" 的工具，且当前没有任何延迟工具（所有工具已在上下文中）。`
++          : `没有找到匹配 "${query}" 的延迟工具（共 ${total} 个延迟工具）。请换用其它关键词，` +
++            `或用 "select:<工具名>" 直接激活已知工具。`;
+       return {
+-        output:
+-          total === 0
+-            ? `没有找到匹配 "${query}" 的工具，且当前没有任何延迟工具（所有工具已在上下文中）。`
+-            : `没有找到匹配 "${query}" 的延迟工具（共 ${total} 个延迟工具）。请换用其它关键词，` +
+-              `或用 "select:<工具名>" 直接激活已知工具。`,
++        output: base + this.pendingMcpHint(),
+         isError: false,
+       };
+     }
+@@ -199,4 +220,19 @@ export class ToolSearchTool implements Tool {
+ 
+     return { output: lines.join("\n"), isError: false };
+   }
++
++  /**
++   * 生成 MCP pending server 提示（无 pending 或未注入回调时返回空串）。
++   *
++   * 搜索/select 无果时追加，告诉模型"某些 MCP server 仍在连接中，稍后重试可能发现更多工具"——
++   * 避免 CLI 启动初期（MCP 异步连接未完成）模型误判工具不存在而放弃。
++   */
++  private pendingMcpHint(): string {
++    if (!this.pendingMcpServers) return "";
++    const pending = this.pendingMcpServers();
++    if (!pending || pending.length === 0) return "";
++    return (
++      `\n\n注意：以下 MCP 服务器仍在连接中，稍后重试可能发现更多工具：${pending.join(", ")}`
++    );
++  }
+ }

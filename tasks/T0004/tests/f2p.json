@@ -1,0 +1,1 @@
+["tests/agent/subagent-hook-pair-invariant.test.ts", "tests/llm/strict-model-gate-sentinel.test.ts", "tests/query/tool-hook-pair-invariant.test.ts", "tests/telemetry/hook-probe.test.ts"]

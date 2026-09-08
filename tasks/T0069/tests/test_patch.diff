@@ -1,0 +1,290 @@
+diff --git a/tests/task/kill-all-running-tasks.test.ts b/tests/task/kill-all-running-tasks.test.ts
+new file mode 100644
+index 0000000..f3b53fd
+--- /dev/null
++++ b/tests/task/kill-all-running-tasks.test.ts
+@@ -0,0 +1,80 @@
++/**
++ * P1-4 killAllRunningTasks / hasRunningTasks 单测（Ctrl+F 终止全部后台任务）。
++ *
++ * 只校验聚合与分派逻辑：
++ * - hasRunningTasks 正确反映是否有 running 任务；
++ * - killAllRunningTasks 把所有 running 任务置为 killed 终态，返回终止数；
++ * - 已终态任务不被重复处理（getRunningTasks 已过滤），返回数只计 running。
++ *
++ * 用 shell 任务：无活跃子进程时 killShellTask 走幂等分支——仅改状态 + 发 killed 通知，
++ * 不 spawn 真实进程，适合纯逻辑单测。
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import {
++  registerTask,
++  getAllTasks,
++  clearAllTasks,
++  killAllRunningTasks,
++  hasRunningTasks,
++} from "../../src/task/index.ts";
++import type { LocalShellTaskState } from "../../src/task/types.ts";
++
++function makeShellTask(id: string, overrides: Partial<LocalShellTaskState> = {}): LocalShellTaskState {
++  return {
++    id,
++    type: "local_shell",
++    status: "running",
++    description: `task ${id}`,
++    startTime: 0,
++    outputFile: `/tmp/${id}.out`,
++    outputOffset: 0,
++    notified: false,
++    command: `echo ${id}`,
++    interrupted: false,
++    isBackgrounded: true,
++    ...overrides,
++  };
++}
++
++beforeEach(() => { clearAllTasks(); });
++afterEach(() => { clearAllTasks(); });
++
++describe("hasRunningTasks", () => {
++  test("无任务时为 false", () => {
++    expect(hasRunningTasks()).toBe(false);
++  });
++
++  test("有 running 任务时为 true", () => {
++    registerTask(makeShellTask("r1"));
++    expect(hasRunningTasks()).toBe(true);
++  });
++
++  test("仅终止态任务时为 false", () => {
++    registerTask(makeShellTask("done", { status: "completed", endTime: 1 }));
++    expect(hasRunningTasks()).toBe(false);
++  });
++});
++
++describe("killAllRunningTasks", () => {
++  test("终止所有 running 任务并返回数量", () => {
++    registerTask(makeShellTask("r1"));
++    registerTask(makeShellTask("r2"));
++    registerTask(makeShellTask("done", { status: "completed", endTime: 1 }));
++
++    const n = killAllRunningTasks();
++    expect(n).toBe(2); // 只计 running
++
++    // 原 running 的两个应转 killed 终态；原 completed 不变。
++    const byId = Object.fromEntries(getAllTasks().map((t) => [t.id, t.status]));
++    expect(byId["r1"]).toBe("killed");
++    expect(byId["r2"]).toBe("killed");
++    expect(byId["done"]).toBe("completed");
++  });
++
++  test("无 running 任务时返回 0、no-op", () => {
++    registerTask(makeShellTask("done", { status: "failed", endTime: 1 }));
++    expect(killAllRunningTasks()).toBe(0);
++    expect(getAllTasks().find((t) => t.id === "done")?.status).toBe("failed");
++  });
++});
+diff --git a/tests/ui/external-editor.test.ts b/tests/ui/external-editor.test.ts
+new file mode 100644
+index 0000000..af2a618
+--- /dev/null
++++ b/tests/ui/external-editor.test.ts
+@@ -0,0 +1,33 @@
++/**
++ * P1-3 外部编辑器命令解析单测。
++ * editInExternalEditor 本身要 spawn 全屏编辑器 + 操作 ink 实例，不适合单测；
++ * 这里只覆盖纯函数 resolveEditorCommand 的优先级/回退逻辑。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { resolveEditorCommand } from "../../src/ui/utils/external-editor.ts";
++
++describe("resolveEditorCommand", () => {
++  test("优先 $VISUAL", () => {
++    expect(resolveEditorCommand({ VISUAL: "vim", EDITOR: "nano" })).toEqual(["vim"]);
++  });
++
++  test("无 VISUAL 时用 $EDITOR", () => {
++    expect(resolveEditorCommand({ EDITOR: "nano" })).toEqual(["nano"]);
++  });
++
++  test("支持带参数的编辑器命令", () => {
++    expect(resolveEditorCommand({ VISUAL: "code --wait" })).toEqual(["code", "--wait"]);
++  });
++
++  test("都为空时回退平台默认", () => {
++    const cmd = resolveEditorCommand({});
++    expect(cmd.length).toBe(1);
++    expect(["vi", "notepad"]).toContain(cmd[0]);
++  });
++
++  test("空白值视为未设置", () => {
++    const cmd = resolveEditorCommand({ VISUAL: "   ", EDITOR: "" });
++    expect(["vi", "notepad"]).toContain(cmd[0]);
++  });
++});
+diff --git a/tests/ui/status-line-data.test.ts b/tests/ui/status-line-data.test.ts
+index 04ec803..02f22f6 100644
+--- a/tests/ui/status-line-data.test.ts
++++ b/tests/ui/status-line-data.test.ts
+@@ -57,10 +57,16 @@ describe("LY1 — derivePermission", () => {
+ });
+ 
+ describe("LY1 — deriveContextColor", () => {
+-  test("≥90 红 / ≥70 黄 / 其余默认", () => {
++  test("对齐 cc：≤60 默认 / 61-80 黄 / 81%+ 红", () => {
+     const def = "x";
++    // 81%+ 红
++    expect(deriveContextColor(81, def)).toBe(theme.status.error);
+     expect(deriveContextColor(95, def)).toBe(theme.status.error);
+-    expect(deriveContextColor(75, def)).toBe(theme.status.warning);
++    // 61-80 黄
++    expect(deriveContextColor(61, def)).toBe(theme.status.warning);
++    expect(deriveContextColor(80, def)).toBe(theme.status.warning);
++    // ≤60 默认
++    expect(deriveContextColor(60, def)).toBe(def);
+     expect(deriveContextColor(50, def)).toBe(def);
+   });
+ });
+diff --git a/tests/ui/text-buffer-kill-ring.test.ts b/tests/ui/text-buffer-kill-ring.test.ts
+new file mode 100644
+index 0000000..eeff9f3
+--- /dev/null
++++ b/tests/ui/text-buffer-kill-ring.test.ts
+@@ -0,0 +1,136 @@
++/**
++ * P0-1 Emacs kill ring + P0-2 删词 的 reducer 单测。
++ *
++ * 直接驱动导出的 textBufferReducer（纯函数），不拉起 React。
++ * 覆盖：kill-line/kill-to-start 入环、kill-word-before 入环、yank 还原、
++ * yank-pop 循环取更早条目、非 yank 动作打断序列后 yank-pop 失效。
++ */
++
++import { describe, test, expect } from "bun:test";
++import {
++  textBufferReducer as reduce,
++  createInitialState,
++  type TextBufferState,
++} from "../../src/ui/text-buffer.ts";
++
++/** 从文本 + 光标列构造 state（单行场景）。 */
++function stateAt(text: string, col: number): TextBufferState {
++  const s = createInitialState(text);
++  return { ...s, cursorRow: 0, cursorCol: col };
++}
++
++describe("kill ring — kill-line", () => {
++  test("Ctrl+K 删到行尾并入环，Ctrl+Y 还原", () => {
++    // "hello world"，光标在 6（world 前）
++    let s = stateAt("hello world", 6);
++    s = reduce(s, { type: "kill-line" });
++    expect(s.lines[0]).toBe("hello ");
++    expect(s.killRing).toEqual(["world"]);
++
++    s = reduce(s, { type: "yank" });
++    expect(s.lines[0]).toBe("hello world");
++    expect(s.cursorCol).toBe(11);
++  });
++
++  test("空切片不入环", () => {
++    // 光标已在行尾，kill-line 切走空串
++    let s = stateAt("abc", 3);
++    s = reduce(s, { type: "kill-line" });
++    expect(s.killRing).toEqual([]);
++  });
++});
++
++describe("kill ring — kill-to-start", () => {
++  test("Ctrl+U 删到行首并入环", () => {
++    let s = stateAt("hello world", 6);
++    s = reduce(s, { type: "kill-to-start" });
++    expect(s.lines[0]).toBe("world");
++    expect(s.cursorCol).toBe(0);
++    expect(s.killRing).toEqual(["hello "]);
++  });
++});
++
++describe("kill ring — kill-word-before (Ctrl+W)", () => {
++  test("删前一个词并入环", () => {
++    let s = stateAt("foo bar baz", 11);
++    s = reduce(s, { type: "kill-word-before" });
++    expect(s.lines[0]).toBe("foo bar ");
++    expect(s.killRing).toEqual(["baz"]);
++  });
++
++  test("行首 Ctrl+W 合并到上一行（不入环）", () => {
++    let s = createInitialState("aa\nbb");
++    s = { ...s, cursorRow: 1, cursorCol: 0 };
++    s = reduce(s, { type: "kill-word-before" });
++    expect(s.lines).toEqual(["aabb"]);
++    expect(s.cursorRow).toBe(0);
++    expect(s.cursorCol).toBe(2);
++    expect(s.killRing).toEqual([]);
++  });
++});
++
++describe("kill ring — yank / yank-pop", () => {
++  test("连续两次 kill 后 Ctrl+Y 取最新", () => {
++    // kill "world"（尾），再 kill "hello "（更早）
++    let s = stateAt("hello world", 6);
++    s = reduce(s, { type: "kill-line" });      // ring: ["world"]
++    s = reduce(s, { type: "kill-to-start" });   // ring: ["world","hello "]
++    expect(s.killRing).toEqual(["world", "hello "]);
++
++    // 此时 lines[0]="" 光标 0；yank 取最新 "hello "
++    s = reduce(s, { type: "yank" });
++    expect(s.lines[0]).toBe("hello ");
++    expect(s.lastActionWasYank).toBe(true);
++  });
++
++  test("Alt+Y yank-pop 循环取更早条目", () => {
++    let s = stateAt("", 0);
++    s = { ...s, killRing: ["AAA", "BBB", "CCC"], killRingIndex: -1 };
++    // yank 取最新 CCC
++    s = reduce(s, { type: "yank" });
++    expect(s.lines[0]).toBe("CCC");
++    // yank-pop：撤销 CCC，改插 BBB
++    s = reduce(s, { type: "yank-pop" });
++    expect(s.lines[0]).toBe("BBB");
++    // 再 pop：改插 AAA
++    s = reduce(s, { type: "yank-pop" });
++    expect(s.lines[0]).toBe("AAA");
++    // 再 pop：回绕到 CCC
++    s = reduce(s, { type: "yank-pop" });
++    expect(s.lines[0]).toBe("CCC");
++  });
++
++  test("非 yank 动作打断序列后 Alt+Y 不生效", () => {
++    let s = stateAt("", 0);
++    s = { ...s, killRing: ["AAA", "BBB"], killRingIndex: -1 };
++    s = reduce(s, { type: "yank" });           // 插 BBB
++    expect(s.lastActionWasYank).toBe(true);
++    // 插入一个字符打断 yank 序列
++    s = reduce(s, { type: "insert", text: "x" });
++    expect(s.lastActionWasYank).toBe(false);
++    const before = s.lines[0];
++    // yank-pop 应 no-op（序列已断）
++    s = reduce(s, { type: "yank-pop" });
++    expect(s.lines[0]).toBe(before);
++  });
++
++  test("空 kill ring 时 yank / yank-pop 均 no-op", () => {
++    let s = stateAt("abc", 3);
++    s = reduce(s, { type: "yank" });
++    expect(s.lines[0]).toBe("abc");
++    s = reduce(s, { type: "yank-pop" });
++    expect(s.lines[0]).toBe("abc");
++  });
++});
++
++describe("kill ring — 跨提交保留", () => {
++  test("reset 后 killRing 仍保留，可继续 yank", () => {
++    let s = stateAt("hello world", 6);
++    s = reduce(s, { type: "kill-line" });      // ring: ["world"]
++    s = reduce(s, { type: "reset" });           // 提交清空输入
++    expect(s.lines[0]).toBe("");
++    expect(s.killRing).toEqual(["world"]);
++    s = reduce(s, { type: "yank" });
++    expect(s.lines[0]).toBe("world");
++  });
++});

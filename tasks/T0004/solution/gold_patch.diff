@@ -1,0 +1,315 @@
+diff --git a/src/agent/tool-executor.ts b/src/agent/tool-executor.ts
+index bbb726d..16f64b5 100644
+--- a/src/agent/tool-executor.ts
++++ b/src/agent/tool-executor.ts
+@@ -132,6 +132,41 @@ export async function executeTools(
+   return results;
+ }
+ 
++/**
++ * 「工具未执行成功」的收尾统一出口：补 fire PostToolUseFailure（子代理侧）。
++ *
++ * 与主循环 `query/tool-executor.ts` 的同名 helper 同源同语义：PreToolUse 已 fire 之后
++ * 的所有早退分支（hook 阻止 / 权限拒绝 / 参数校验失败）都必须补一次 Failure 收尾，
++ * 否则 Pre/Post 不成对——依赖配对的用户 hook 永久悬空，且 `execute_tool` span 是在
++ * PostToolUse* 事件里创建的，这些失败在可观测性里完全不存在。
++ *
++ * 子代理侧尤其不能漏：子代理的失败本来就更难排查（无 UI、结论经父代理转述），
++ * 若 trace 里连"这次工具调用失败了"都查不到，只能靠读子代理原始 transcript 考古。
++ *
++ * fire-and-forget + 全程 catch：这一层是可观测性补齐，绝不能成为新的失败源。
++ */
++function firePostToolUseFailure(
++  hookSystem: HookSystem | undefined,
++  block: ContentBlock & { type: "tool_use" },
++  reason: string,
++  toolInput?: Record<string, unknown>,
++): void {
++  if (!hookSystem) return;
++  const log = getLogger();
++  try {
++    void hookSystem.firePostToolUseFailureEvent?.(
++      block.name,
++      (toolInput ?? block.input) as Record<string, unknown>,
++      reason,
++      block.id,
++    )?.catch?.((e: any) =>
++      log.error("SUBAGENT:HOOK", `post_tool_use_failure hook 失败: ${e?.message ?? e}`),
++    );
++  } catch (e: any) {
++    log.error("SUBAGENT:HOOK", `post_tool_use_failure 触发异常（忽略）: ${e?.message ?? e}`);
++  }
++}
++
+ /** 执行单个工具 */
+ async function executeSingleTool(
+   block: ContentBlock & { type: "tool_use" },
+@@ -171,6 +206,13 @@ async function executeSingleTool(
+       const interp = interpretPreToolUse(preToolResult, block.input);
+       if (interp.blocked) {
+         log.info("SUBAGENT:HOOK", `工具 ${block.name} 被 hook 阻止: ${interp.blockReason}`);
++        // Pre/Post 配对：本分支上方刚 fire 过 PreToolUse，必须补 Failure 收尾。
++        firePostToolUseFailure(
++          hookSystem,
++          block,
++          `Hook 阻止执行: ${interp.blockReason ?? "无原因"}`,
++          effectiveInput,
++        );
+         return {
+           type: "tool_result",
+           tool_use_id: block.id,
+@@ -205,6 +247,8 @@ async function executeSingleTool(
+       // 子代理无 UI 通道，needsConfirmation 也直接 deny（dontAsk 语义）
+       const reason = decision.reason || "子代理不允许此操作";
+       log.info("SUBAGENT:PERM", `权限拒绝 ${block.name}: ${reason}`);
++      // Pre/Post 配对：权限拒绝也要补 Failure 收尾。
++      firePostToolUseFailure(hookSystem, block, `权限拒绝: ${reason}`, effectiveInput);
+       return {
+         type: "tool_result",
+         tool_use_id: block.id,
+@@ -228,6 +272,13 @@ async function executeSingleTool(
+       : (tool.readOnly?.() ?? false);
+     if (!isSafe) {
+       log.info("SUBAGENT:PERM", `权限拒绝 ${block.name}: 未配置权限检查器，写类操作默认拒绝（fail-closed）`);
++      // Pre/Post 配对：fail-closed 拒绝同样要补 Failure 收尾。
++      firePostToolUseFailure(
++        hookSystem,
++        block,
++        "权限拒绝: 未配置权限检查器，写类操作默认拒绝（fail-closed）",
++        effectiveInput,
++      );
+       return {
+         type: "tool_result",
+         tool_use_id: block.id,
+@@ -243,6 +294,9 @@ async function executeSingleTool(
+   const validation = validateToolInput(tool, effectiveInput);
+   if (!validation.ok) {
+     log.info("SUBAGENT:TOOL", `工具 ${block.name} 参数校验失败: ${validation.message}`);
++    // Pre/Post 配对：与主循环同源——模型漏 required 字段是最高频的真实失败，
++    // 不补这一次 fire，它在 trace 与失败率统计里就完全不存在。
++    firePostToolUseFailure(hookSystem, block, validation.message, effectiveInput);
+     return {
+       type: "tool_result",
+       tool_use_id: block.id,
+diff --git a/src/llm/anthropic.ts b/src/llm/anthropic.ts
+index e6f264a..751e3c6 100644
+--- a/src/llm/anthropic.ts
++++ b/src/llm/anthropic.ts
+@@ -855,10 +855,50 @@ function buildToolChoiceParam(params: SendParams): Record<string, unknown> {
+   return { tool_choice: { type: "tool" as const, name: tc.name } };
+ }
+ 
+-/** 判断模型是否支持 strict tool use（Constrained Decoding） */
+-function modelSupportsStrict(model: string): boolean {
+-  // 仅 Claude 4.x 系列支持（opus-4, sonnet-4, haiku-4）
+-  return /claude-(sonnet|opus|haiku)-4/.test(model);
++/**
++ * 判断模型是否支持 strict tool use（Constrained Decoding）。
++ *
++ * ## 判定方向：排除法，不是枚举法
++ *
++ * 原实现是 `/claude-(sonnet|opus|haiku)-4/`——**枚举已知支持的版本号**。它在写下的
++ * 那一刻是对的，但 Claude 5 系列发布后立刻失效：`claude-sonnet-5` / `claude-opus-5` /
++ * `claude-fable-5` 全部不匹配，于是 `registry.ts:79` 给内置工具打的 `strict: true`
++ * 被 `anthropic.ts` 的门控在发线前静默剥掉，**整个 Claude 5 系列失去 Constrained
++ * Decoding**，且无任何日志。
++ *
++ * 后果不是"少个优化"。strict 是从协议层杜绝「required 字段漏发」的机制；关掉它，
++ * 模型漏字段就只能靠工具层 zod 事后报错 + 模型自己重试一轮。实测事故
++ * （会话 20260803-135816-8c8619e7，`ask_user_question` 漏 `question` 字段、
++ * `header`/`options` 完好、`stop_reason: tool_use` 非截断）正是这个缺口的产物：
++ * 开着 strict 时该错误在物理上不可能发生。
++ *
++ * 所以判定方向必须反转：**默认认为支持，只排除已知不支持的**。新模型发布时
++ * 默认享受 strict（发错了会 400，是响亮失败、当场可见），而不是默认静默失去
++ * 保护（无声退化，要靠一次线上事故 + 一次轨迹考古才能发现）。
++ *
++ * 这也是本仓库的既有约定：开关类默认值禁止写死模型名单判断，否则必随模型迭代漂移。
++ *
++ * ## 为什么只排除 claude-3 及更早
++ *
++ * strict / Constrained Decoding 自 Claude 4 起提供，Claude 3.x 及 instant/2.x 不支持。
++ * 这些是**已冻结的历史版本号**，不会再新增，因此枚举它们不会漂移——与枚举"未来还会
++ * 不断新增的支持版本"有本质区别。
++ *
++ * 非 Claude 模型（走 Anthropic 兼容端点的第三方模型）一律不发 strict：它们的兼容层
++ * 通常只实现 Messages API 的公共子集，发未知字段风险不对称（收益是省一次重试，
++ * 代价可能是整条链路 400）。
++ *
++ * 兜底逃生阀仍是 `SID_DISABLE_STRICT_TOOLS=1`（在两处调用点判定）。
++ */
++export function modelSupportsStrict(model: string): boolean {
++  // 非 Claude 模型（第三方兼容端点）：不发 strict，避免未知字段打挂兼容层
++  if (!/claude/i.test(model)) return false;
++  // Claude 3.x / 2.x / instant / v1：strict 于 Claude 4 才引入。
++  // 这些是**已冻结**的历史版本号（不会再新增），枚举它们不产生漂移。
++  // 版本号后可紧跟 `-` / `.` / 串尾，故三种边界都要认（claude-3-opus / claude-3.5 / claude-3）。
++  if (/claude-(?:3|2|instant|v?1)(?:[.\-]|$)/i.test(model)) return false;
++  // 其余 Claude（4.x / 5.x / 以及未来版本）默认支持——新模型不再静默失去保护
++  return true;
+ }
+ 
+ /** 判断是否为 Anthropic 直连（非代理/非 Bedrock/非 Vertex） */
+diff --git a/src/query/tool-executor.ts b/src/query/tool-executor.ts
+index 70d933f..7b9be4c 100644
+--- a/src/query/tool-executor.ts
++++ b/src/query/tool-executor.ts
+@@ -746,6 +746,61 @@ export async function executeTools(
+   return { results, followup, durations };
+ }
+ 
++/**
++ * 「工具未执行成功」的收尾统一出口：补 fire PostToolUseFailure。
++ *
++ * ## 为什么需要它
++ *
++ * `executeSingleTool` 在 PreToolUse 之后有多条**早退**分支（hook 阻止 / 权限拒绝 /
++ * 参数校验失败），它们直接 `return` error tool_result，从不 fire 任何 Post* 事件。
++ * 后果是 Pre/Post **不成对**：
++ *
++ *   - 实测证据（会话 20260803-135816-8c8619e7）：`toolu_01QcH2merrmxvKAWoLzMruwJ`
++ *     在 events.jsonl 里只有 `PreToolUse`（05:59:43.051），**没有** PostToolUse。
++ *   - 依赖配对的用户 hook（计时、审计、配额记账）会永久悬空——它拿到"开始"却
++ *     永远等不到"结束"，只能靠超时自行清理，或干脆漏记。
++ *   - `execute_tool` span 在 `hook-probe.handlePostToolUse` 里创建，因此这些失败
++ *     **在可观测性里完全不存在**：trace 树上看不到、失败率统计不计入。
++ *     排查时表现为"模型报错了但轨迹里查不到这次工具调用"。
++ *
++ * ## 为什么用 PostToolUseFailure 而不是 PostToolUse
++ *
++ * 语义上这些工具**确实没执行**（没产生副作用），把它们当 PostToolUse 上报会污染
++ * "工具执行成功率"口径，也会让 `edit_meta` 之类"执行后才有"的字段无处安放。
++ * PostToolUseFailure 的既有语义就是「这次工具调用以失败告终」（原本只覆盖
++ * tool.execute 抛异常一种），把 hook 阻止 / 权限拒绝 / 校验失败纳入同一出口，
++ * 三者与"执行抛异常"在 hook 消费者眼里是同一件事：这次调用没有成功结果。
++ *
++ * ## 失败绝不影响主流程
++ *
++ * 与既有的 PostToolUseFailure 调用点一致：`.catch()` 吞掉 hook 自身异常并只打日志。
++ * 这一层是可观测性补齐，不能成为新的失败源——工具本来就已经失败了，不该再叠一个。
++ */
++function firePostToolUseFailure(
++  deps: ToolExecutorDeps,
++  block: ToolUseBlock,
++  reason: string,
++  toolInput?: unknown,
++): void {
++  const log = getLogger();
++  try {
++    // hookSystem 在类型上必填，但子代理/旧测试可能传入残缺 deps——防御到底，
++    // 这条补丁绝不能因为自己 undefined 报错而掩盖真正的工具失败原因。
++    const fired = deps.hookSystem?.firePostToolUseFailureEvent?.(
++      block.name,
++      (toolInput ?? block.input) as Record<string, unknown>,
++      reason,
++      block.id,
++    );
++    // 不 await：与既有调用点同策略，hook 耗时不进工具关键路径。
++    void fired?.catch?.((e: any) =>
++      log.error("HOOK", `post_tool_use_failure hook 失败: ${e?.message ?? e}`),
++    );
++  } catch (e: any) {
++    log.error("HOOK", `post_tool_use_failure 触发异常（忽略）: ${e?.message ?? e}`);
++  }
++}
++
+ /**
+  * GAP-01：单工具权限门（从 executeTools 的权限预检循环提取，批量/流式路径共享）。
+  *
+@@ -789,6 +844,14 @@ export async function resolveToolPermission(
+       // 阻塞 → 直接返回 error（不再走权限检查）
+       if (interp.blocked) {
+         log.info("HOOK", `工具 ${block.name} 被 PreToolUse hook 阻止: ${interp.blockReason}`);
++        // Pre/Post 配对：本分支已 fire 过 PreToolUse，必须补 Failure 收尾（见
++        // firePostToolUseFailure 注释），否则用户 hook 与 execute_tool span 双双悬空。
++        firePostToolUseFailure(
++          deps,
++          block,
++          `Hook 阻止执行: ${interp.blockReason ?? "无原因"}`,
++          observableInput,
++        );
+         return {
+           type: "tool_result",
+           tool_use_id: block.id,
+@@ -907,10 +970,13 @@ export async function resolveToolPermission(
+       } catch (e) {
+         log.warn("PERMISSION", `记录用户拒绝失败（忽略）: ${(e as Error)?.message}`);
+       }
++      const denyContent = `${result.source === "user" ? "用户" : result.source === "timeout" ? "超时" : result.source}拒绝执行工具 "${block.name}"`;
++      // Pre/Post 配对：PreToolUse 已在本函数开头 fire，权限拒绝也必须补 Failure 收尾。
++      firePostToolUseFailure(deps, block, denyContent, observableInput);
+       return {
+         type: "tool_result",
+         tool_use_id: block.id,
+-        content: `${result.source === "user" ? "用户" : result.source === "timeout" ? "超时" : result.source}拒绝执行工具 "${block.name}"`,
++        content: denyContent,
+         is_error: true,
+       };
+     }
+@@ -922,6 +988,8 @@ export async function resolveToolPermission(
+   const { explainDecision } = await import("../permission/explainer.ts");
+   const explanation = explainDecision(decision);
+   log.warn("PERMISSION", `权限拒绝: ${block.name} - ${explanation}`);
++  // Pre/Post 配对：同上，直接拒绝（无需确认）也要补 Failure 收尾。
++  firePostToolUseFailure(deps, block, `权限拒绝: ${explanation}`, observableInput);
+   return {
+     type: "tool_result",
+     tool_use_id: block.id,
+@@ -976,6 +1044,9 @@ export async function executeSingleTool(
+   if (interp.blocked) {
+     const reason = interp.blockReason ?? "无原因";
+     log.info("HOOK", `工具 ${block.name} 被 hook 阻止: ${reason}`);
++    // Pre/Post 配对：PreToolUse 已 fire（本函数自行 fire 或复用 resolveToolPermission
++    // 的缓存），被阻止同样要补 Failure 收尾。
++    firePostToolUseFailure(deps, block, `Hook 阻止执行: ${reason}`);
+     return {
+       block: {
+         type: "tool_result",
+@@ -1019,6 +1090,11 @@ export async function executeSingleTool(
+     });
+     const content = schemaHint ? validation.message + schemaHint : validation.message;
+     log.info("TOOL", `工具 ${block.name} 参数校验失败: ${validation.message}${schemaHint ? "（附 schema 未发送引导）" : ""}`);
++    // Pre/Post 配对：这条正是事故现场——ask_user_question 校验失败那次
++    // （toolu_01QcH2merrmxvKAWoLzMruwJ）在 events.jsonl 里只有 Pre 没有 Post，
++    // 使得"模型漏字段"这类高频真实失败在 trace 与失败率统计里彻底隐身。
++    // 用 effectiveInput（hook 改参后的实际入参）上报，与鉴权口径一致。
++    firePostToolUseFailure(deps, block, validation.message, effectiveInput);
+     return {
+       block: {
+         type: "tool_result",
+diff --git a/src/telemetry/hook-probe.ts b/src/telemetry/hook-probe.ts
+index 4e46034..96875cc 100644
+--- a/src/telemetry/hook-probe.ts
++++ b/src/telemetry/hook-probe.ts
+@@ -77,13 +77,19 @@ export class TelemetryHookProbe {
+     return attrs;
+   }
+ 
+-  /** 注册为 runtime hook，监听 5 种事件 */
++  /** 注册为 runtime hook，监听下列事件（数量以 events 数组为准，勿在注释里写死） */
+   registerHooks(hookSystem: HookSystem): void {
+     const events = [
+       HookEventName.SessionStart,
+       HookEventName.BeforeModel,
+       HookEventName.AfterModel,
+       HookEventName.PostToolUse,
++      // 失败工具同样要产 execute_tool span：此前只订阅 PostToolUse，导致
++      // ① tool.execute 抛异常、② hook 阻止、③ 权限拒绝、④ 参数校验失败
++      // 这四类失败在 trace 树上**完全不存在**（span 是在 handlePostToolUse 里创建的），
++      // 失败率统计也不计入。排查时表现为"模型报错了但轨迹里查不到这次工具调用"
++      // （会话 20260803-135816-8c8619e7 的 ask_user_question 校验失败即如此）。
++      HookEventName.PostToolUseFailure,
+       HookEventName.SessionEnd,
+       // spec 17 §6.1.3 增强追踪树：权限等待 + Hook 执行 span
+       HookEventName.BeforePermissionCheck,
+@@ -122,6 +128,10 @@ export class TelemetryHookProbe {
+         this.handleAfterModel(input as AfterModelInput);
+         break;
+       case HookEventName.PostToolUse:
++      // PostToolUseFailure 复用同一 handler：它的 input 也是 PostToolUseInput
++      // （event-handler 构造时带 is_error:true + tool_response:{error}），
++      // handlePostToolUse 已按 is_error 分流（success 属性 + recordError），无需另写分支。
++      case HookEventName.PostToolUseFailure:
+         this.handlePostToolUse(input as PostToolUseInput);
+         break;
+       case HookEventName.SessionEnd:

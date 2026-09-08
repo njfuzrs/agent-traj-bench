@@ -1,0 +1,285 @@
+diff --git a/tests/ide/context-delta.test.ts b/tests/ide/context-delta.test.ts
+new file mode 100644
+index 0000000..18d9a8f
+--- /dev/null
++++ b/tests/ide/context-delta.test.ts
+@@ -0,0 +1,189 @@
++/**
++ * IDE 上下文增量注入测试（审计第 22 条）
++ *
++ * 原缺陷：IDE 选区 / @提及 只在 buildInitialSystemPrompt 采集一次，而 IDE 连接是
++ * 后台异步的（findAvailableIDE 轮询至 30s 超时）→ 启动瞬间 status 必然还不是
++ * connected，collectIDEContext() 恒返回 {}；两处 rebuildSystemPrompt 也不采集。
++ * 净效果：IDE 上下文基本永远进不了模型。
++ *
++ * 修复后走 drainIDEContextDelta（每轮 query loop 调一次，经 reminderParts 注入
++ * user 消息）。这组测试覆盖：连接后能拿到、选区去重、选区变更重注、@提及消费语义、
++ * 断连复位、以及「未连接返回 null」这个原缺陷的复现点。
++ *
++ * 隔离：用 fake MCPManager + fake MCPClient 驱动通知，不依赖真实 IDE。
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import {
++  IDEIntegration,
++  getIDEIntegration,
++  resetIDEIntegration,
++  collectIDEContext,
++  drainIDEContextDelta,
++  _resetIDEContextDeltaForTesting,
++} from "../../src/ide/integration.ts";
++import type { MCPManager } from "../../src/mcp/manager.ts";
++import type { MCPClient } from "../../src/mcp/client.ts";
++
++/** 通知回调表：method → handlers */
++type Handlers = Map<string, ((params: unknown) => void)[]>;
++
++function makeFakeClient(handlers: Handlers): MCPClient {
++  return {
++    onNotification(method: string, handler: (params: unknown) => void) {
++      const list = handlers.get(method) ?? [];
++      list.push(handler);
++      handlers.set(method, list);
++      return () => {
++        const cur = handlers.get(method) ?? [];
++        handlers.set(method, cur.filter((h) => h !== handler));
++      };
++    },
++  } as unknown as MCPClient;
++}
++
++function makeFakeManager(client: MCPClient): MCPManager {
++  return {
++    addServer: async () => [],
++    isConnected: () => true,
++    getClient: () => client,
++    removeServer: async () => {},
++  } as unknown as MCPManager;
++}
++
++let handlers: Handlers;
++let integration: IDEIntegration;
++
++/** 触发一条 IDE 通知 */
++function notify(method: string, params: unknown): void {
++  for (const h of handlers.get(method) ?? []) h(params);
++}
++
++function emitSelection(filePath: string, text: string, startLine = 0): void {
++  notify("notifications/selection_changed", {
++    filePath,
++    text,
++    selection: {
++      start: { line: startLine, character: 0 },
++      end: { line: startLine + 2, character: 5 },
++    },
++  });
++}
++
++beforeEach(async () => {
++  resetIDEIntegration();
++  _resetIDEContextDeltaForTesting();
++  handlers = new Map();
++  const client = makeFakeClient(handlers);
++  // 经单例工厂创建，drainIDEContextDelta 读的是同一个实例
++  integration = getIDEIntegration(makeFakeManager(client), "/tmp/ide-test")!;
++});
++
++afterEach(() => {
++  resetIDEIntegration();
++  _resetIDEContextDeltaForTesting();
++});
++
++/** 连上 IDE（走 connectToIDE 真实路径，注册通知处理器） */
++async function connect(): Promise<void> {
++  const ok = await integration.connectToIDE({
++    name: "vscode",
++    url: "ws://127.0.0.1:1234",
++    authToken: "t",
++  } as any);
++  expect(ok).toBe(true);
++  expect(integration.getStatus().status).toBe("connected");
++}
++
++describe("drainIDEContextDelta — 未连接时（原缺陷的复现点）", () => {
++  test("未连接返回 null", () => {
++    expect(drainIDEContextDelta()).toBeNull();
++  });
++
++  test("未连接时 collectIDEContext 也是空对象——这正是启动时采集恒失效的原因", () => {
++    // buildInitialSystemPrompt 在启动瞬间调用它，那一刻必然还没连上
++    expect(collectIDEContext()).toEqual({});
++  });
++});
++
++describe("drainIDEContextDelta — 选区", () => {
++  test("连接后有选区 → 注入 <ide-selection>", async () => {
++    await connect();
++    emitSelection("/tmp/x.ts", "const a = 1;");
++
++    const delta = drainIDEContextDelta();
++    expect(delta).not.toBeNull();
++    expect(delta!).toContain("<ide-selection>");
++    expect(delta!).toContain("const a = 1;");
++    expect(delta!).toContain("/tmp/x.ts");
++  });
++
++  test("选区未变 → 第二轮不重复注入（cache 友好 + 不刷屏）", async () => {
++    await connect();
++    emitSelection("/tmp/x.ts", "const a = 1;");
++    expect(drainIDEContextDelta()).not.toBeNull();
++    expect(drainIDEContextDelta()).toBeNull();
++    expect(drainIDEContextDelta()).toBeNull();
++  });
++
++  test("选区变更 → 重新注入新内容", async () => {
++    await connect();
++    emitSelection("/tmp/x.ts", "const a = 1;");
++    drainIDEContextDelta();
++
++    emitSelection("/tmp/x.ts", "const b = 2;");
++    const delta = drainIDEContextDelta();
++    expect(delta).not.toBeNull();
++    expect(delta!).toContain("const b = 2;");
++    expect(delta!).not.toContain("const a = 1;");
++  });
++
++  test("连接晚于首轮也能拿到——这是本条修复的核心", async () => {
++    // 第 1、2 轮：尚未连上（模拟后台 startAutoConnect 还在轮询）
++    expect(drainIDEContextDelta()).toBeNull();
++    expect(drainIDEContextDelta()).toBeNull();
++    // 第 3 轮之前连上并选中代码
++    await connect();
++    emitSelection("/tmp/late.ts", "late selection");
++    expect(drainIDEContextDelta()!).toContain("late selection");
++  });
++});
++
++describe("drainIDEContextDelta — @提及（消费语义）", () => {
++  test("有提及 → 注入 <ide-mentions> 并清空", async () => {
++    await connect();
++    notify("notifications/at_mentioned", { filePath: "/tmp/y.ts", lineStart: 2, lineEnd: 8 });
++
++    const delta = drainIDEContextDelta();
++    expect(delta!).toContain("<ide-mentions>");
++    expect(delta!).toContain("/tmp/y.ts:3-9"); // 0-based → 1-based
++    // 消费语义：取过即清空
++    expect(drainIDEContextDelta()).toBeNull();
++  });
++
++  test("选区与提及同轮 → 两块都注入", async () => {
++    await connect();
++    emitSelection("/tmp/x.ts", "sel-text");
++    notify("notifications/at_mentioned", { filePath: "/tmp/y.ts" });
++
++    const delta = drainIDEContextDelta()!;
++    expect(delta).toContain("<ide-selection>");
++    expect(delta).toContain("<ide-mentions>");
++  });
++});
++
++describe("drainIDEContextDelta — 断开连接", () => {
++  test("断开后返回 null，重连后重新注入当前选区", async () => {
++    await connect();
++    emitSelection("/tmp/x.ts", "keep-me");
++    expect(drainIDEContextDelta()).not.toBeNull();
++
++    await integration.disconnect();
++    expect(drainIDEContextDelta()).toBeNull();
++
++    // 重连并重新选中同样内容：指纹已复位 → 应再次注入（模型的上下文已随断连失效）
++    await connect();
++    emitSelection("/tmp/x.ts", "keep-me");
++    expect(drainIDEContextDelta()!).toContain("keep-me");
++  });
++});
+diff --git a/tests/memory/team/sync.test.ts b/tests/memory/team/sync.test.ts
+index d022648..4d3ed0c 100644
+--- a/tests/memory/team/sync.test.ts
++++ b/tests/memory/team/sync.test.ts
+@@ -178,6 +178,85 @@ describe("syncTeamMemory — secret 守卫", () => {
+   });
+ });
+ 
++describe("syncTeamMemory — pull 后重建本地 MEMORY.md 索引（审计第 17 条）", () => {
++  // 这组补的是原测试盲区：旧测试只断言「MEMORY.md 不被 push 到共享目录」（契约前半句），
++  // 从未断言「pull 后本地索引被重建」（后半句）。缺后半句时同步下来的条目躺在磁盘上，
++  // 而注入侧 getTeamIndexContent 只读索引文件、无扫目录 fallback → 团队记忆对模型不可见。
++
++  function entry(name: string, desc: string, body: string): string {
++    return `---\nname: ${name}\ndescription: ${desc}\ntype: project\n---\n\n${body}\n`;
++  }
++
++  test("全新端 pull → 索引被建出且含同事条目", async () => {
++    writeShared("project_deploy-flow.md", entry("deploy-flow", "发布走 release.sh", "正文"));
++    const r = await syncTeamMemory(opts(), cwd);
++    expect(r.pulled).toBe(1);
++
++    const index = readFileSync(join(localDir(), "MEMORY.md"), "utf8");
++    expect(index).toContain("deploy-flow");
++    expect(index).toContain("发布走 release.sh");
++    expect(index).toContain("project_deploy-flow.md");
++  });
++
++  test("老端已有自己的索引 → pull 后索引含两端条目（不再只见自己那条）", async () => {
++    writeLocal("project_mine.md", entry("mine", "我自己的约定", "正文"));
++    writeLocal("MEMORY.md", "# 团队共享记忆\n\n- [mine](project_mine.md) — 我自己的约定\n");
++    writeShared("project_theirs.md", entry("theirs", "同事的约定", "正文"));
++
++    const r = await syncTeamMemory(opts(), cwd);
++    expect(r.pulled).toBe(1);
++
++    const index = readFileSync(join(localDir(), "MEMORY.md"), "utf8");
++    expect(index).toContain("theirs");
++    expect(index).toContain("mine"); // 自己那条不能被抹掉
++  });
++
++  test("删除传播后索引不留悬空指针", async () => {
++    writeShared("project_rule-one.md", entry("rule-one", "规则一", "正文"));
++    await syncTeamMemory(opts(), cwd);
++    expect(readFileSync(join(localDir(), "MEMORY.md"), "utf8")).toContain("project_rule-one.md");
++
++    rmSync(join(sharedDir, "project_rule-one.md"));
++    const r = await syncTeamMemory(opts(), cwd);
++    expect(r.deleted).toBe(1);
++    expect(existsSync(join(localDir(), "project_rule-one.md"))).toBe(false);
++    // 索引不能再指向已删除的文件（否则模型照索引 Read 必然失败）
++    expect(readFileSync(join(localDir(), "MEMORY.md"), "utf8")).not.toContain("project_rule-one.md");
++  });
++
++  test("索引重建后的内容可被注入侧 getTeamIndexContent 读到", async () => {
++    writeShared("project_x.md", entry("x-rule", "x 的说明", "正文"));
++    await syncTeamMemory(opts(), cwd);
++
++    const { getTeamIndexContent } = await import("../../../src/memory/team/store.ts");
++    const content = await getTeamIndexContent(cwd);
++    expect(content).not.toBeNull();
++    expect(content!).toContain("x-rule");
++  });
++
++  test("纯 push 轮次不重建索引（本地未变，避免无谓写盘触发 watcher）", async () => {
++    writeLocal("project_only-local.md", entry("only-local", "只在本地", "正文"));
++    const r = await syncTeamMemory(opts(), cwd);
++    expect(r.pushed).toBe(1);
++    expect(r.pulled).toBe(0);
++    // 本地目录内容没被 sync 改动 → 索引维护是 saveTeamMemory 的职责，sync 不越权
++    expect(existsSync(join(localDir(), "MEMORY.md"))).toBe(false);
++  });
++
++  test("索引不会把冲突副本列进去", async () => {
++    writeLocal("h.md", "base");
++    await syncTeamMemory(opts(), cwd);
++    writeLocal("h.md", "local-change");
++    await new Promise((res) => setTimeout(res, 20));
++    writeShared("h.md", "shared-change"); // 共享较新 → 共享胜，本地旧版另存 conflict
++
++    const r = await syncTeamMemory(opts(), cwd);
++    expect(r.conflicts).toBe(1);
++    const index = readFileSync(join(localDir(), "MEMORY.md"), "utf8");
++    expect(index).not.toContain(".conflict-");
++  });
++});
++
+ describe("hashContent", () => {
+   test("稳定且带 sha256: 前缀", () => {
+     const h = hashContent("hello");

@@ -1,0 +1,228 @@
+diff --git a/tests/ui/components/LoadingIndicator.test.tsx b/tests/ui/components/LoadingIndicator.test.tsx
+index bdf2abe..fffa158 100644
+--- a/tests/ui/components/LoadingIndicator.test.tsx
++++ b/tests/ui/components/LoadingIndicator.test.tsx
+@@ -52,10 +52,10 @@ describe("LoadingIndicator — 慢提示渲染", () => {
+         streamingState={StreamingState.Connecting}
+         elapsedTime={15}
+         currentLoadingPhrase="连接中…"
+-        slowHint="响应较慢，仍在等待…"
++        slowHint="仍在等待响应…"
+       />,
+     );
+-    expect(lastFrame() ?? "").toContain("响应较慢");
++    expect(lastFrame() ?? "").toContain("仍在等待响应");
+   });
+ 
+   test("无 slowHint 时不渲染慢提示", () => {
+@@ -67,7 +67,7 @@ describe("LoadingIndicator — 慢提示渲染", () => {
+         currentLoadingPhrase="连接中…"
+       />,
+     );
+-    expect(lastFrame() ?? "").not.toContain("响应较慢");
++    expect(lastFrame() ?? "").not.toContain("仍在等待");
+   });
+ 
+   test("等待态不显示慢提示（即使传入）", () => {
+@@ -76,10 +76,10 @@ describe("LoadingIndicator — 慢提示渲染", () => {
+         inline
+         streamingState={StreamingState.WaitingForConfirmation}
+         elapsedTime={60}
+-        slowHint="已等待较久，建议 esc 取消后检查网络 / 模型配置"
++        slowHint="等待较久，可按 esc 取消"
+       />,
+     );
+-    expect(lastFrame() ?? "").not.toContain("已等待较久");
++    expect(lastFrame() ?? "").not.toContain("等待较久");
+   });
+ });
+ 
+diff --git a/tests/ui/constants/loading-phrases.test.ts b/tests/ui/constants/loading-phrases.test.ts
+index 6d8cc4d..f58b6b2 100644
+--- a/tests/ui/constants/loading-phrases.test.ts
++++ b/tests/ui/constants/loading-phrases.test.ts
+@@ -1,7 +1,8 @@
+ /**
+- * loading-phrases 慢提示阈值测试（§6.3）
++ * loading-phrases 慢提示阈值测试
+  *
+- * pickSlowHint 是纯函数：按已等待秒数取命中的最大阈值文案，未达首阈值返回 null。
++ * pickSlowHint 是纯函数：按【静默秒数】（距上次收到模型输出的秒数，非整轮累计耗时）
++ * 取命中的最大阈值文案，未达首阈值返回 null。
+  */
+ 
+ import { test, expect, describe } from "bun:test";
+@@ -9,40 +10,52 @@ import {
+   pickSlowHint,
+   SLOW_RESPONSE_HINTS,
+   CONNECTING_PHRASE,
++  CONTINUATION_PHRASE,
+   formatToolElapsed,
+   TOOL_TIMER_THRESHOLD_SEC,
+ } from "../../../src/ui/constants/loading-phrases.ts";
+ 
+ describe("pickSlowHint", () => {
+-  test("未达首阈值（<10s）返回 null", () => {
++  // 阈值不写死在断言里——从 SLOW_RESPONSE_HINTS 取，调阈值时测试自动跟随。
++  const [first, second] = SLOW_RESPONSE_HINTS;
++
++  test("未达首阈值返回 null（静默时间短 = 模型在产出，不报慢）", () => {
+     expect(pickSlowHint(0)).toBeNull();
+     expect(pickSlowHint(5)).toBeNull();
+-    expect(pickSlowHint(9)).toBeNull();
++    expect(pickSlowHint(first.thresholdSec - 1)).toBeNull();
+   });
+ 
+-  test("命中 10s 阈值 → 第一档文案", () => {
+-    expect(pickSlowHint(10)).toBe(SLOW_RESPONSE_HINTS[0].hint);
+-    expect(pickSlowHint(29)).toBe(SLOW_RESPONSE_HINTS[0].hint);
++  test("命中首阈值 → 第一档文案（仅陈述还在等，不报警）", () => {
++    expect(pickSlowHint(first.thresholdSec)).toBe(first.hint);
++    expect(pickSlowHint(second.thresholdSec - 1)).toBe(first.hint);
+   });
+ 
+-  test("命中 30s 阈值 → 第二档文案（给出路）", () => {
+-    expect(pickSlowHint(30)).toBe(SLOW_RESPONSE_HINTS[1].hint);
+-    expect(pickSlowHint(59)).toBe(SLOW_RESPONSE_HINTS[1].hint);
++  test("命中次阈值 → 第二档文案（给出路 esc）", () => {
++    expect(pickSlowHint(second.thresholdSec)).toBe(second.hint);
++    expect(pickSlowHint(second.thresholdSec + 100)).toBe(second.hint);
+   });
+ 
+-  test("命中 60s 阈值 → 第三档文案（建议排查）", () => {
+-    expect(pickSlowHint(60)).toBe(SLOW_RESPONSE_HINTS[2].hint);
+-    expect(pickSlowHint(120)).toBe(SLOW_RESPONSE_HINTS[2].hint);
++  test("阈值递增——取命中的最大阈值，不会越档错配", () => {
++    // 介于两档之间应命中较低档；超过次档命中次档。
++    expect(pickSlowHint(second.thresholdSec - 1)).toBe(first.hint);
++    expect(pickSlowHint(second.thresholdSec + 1)).toBe(second.hint);
+   });
+ 
+-  test("阈值递增——取命中的最大阈值，不会越档错配", () => {
+-    // 35s 应命中 30s 档而非 10s 档
+-    expect(pickSlowHint(35)).toBe(SLOW_RESPONSE_HINTS[1].hint);
++  test("慢提示文案不武断断言网络/卡死（只陈述事实 + 给出口）", () => {
++    // 回归保护：避免重新引入「网络较忙 / 模型卡住」这类推测性、会误导用户的措辞。
++    for (const { hint } of SLOW_RESPONSE_HINTS) {
++      expect(hint).not.toContain("网络");
++      expect(hint).not.toContain("卡");
++    }
+   });
+ 
+   test("CONNECTING_PHRASE 是固定的连接文案", () => {
+     expect(CONNECTING_PHRASE).toBe("连接中…");
+   });
++
++  test("CONTINUATION_PHRASE 是步间空档文案（已产出 token 时用，非连接）", () => {
++    expect(CONTINUATION_PHRASE).toBe("处理中…");
++  });
+ });
+ 
+ describe("formatToolElapsed", () => {
+diff --git a/tests/ui/hooks/useLoadingIndicator.test.tsx b/tests/ui/hooks/useLoadingIndicator.test.tsx
+index 413da22..f8d253a 100644
+--- a/tests/ui/hooks/useLoadingIndicator.test.tsx
++++ b/tests/ui/hooks/useLoadingIndicator.test.tsx
+@@ -1,5 +1,5 @@
+ /**
+- * useLoadingIndicator Hook 测试（§6.1）
++ * useLoadingIndicator Hook 测试
+  *
+  * 用 vendored ink 的 render harness + bun fake timer 驱动 hook 的 setInterval，
+  * 通过一个极简 Harness 组件把 hook 返回值渲染成可断言的字节，确定性验证：
+@@ -8,7 +8,7 @@
+  * 3. Idle→Connecting 上升沿归零。
+  * 4. Connecting 文案为「连接中…」。
+  * 5. 回到 Idle 计时停止。
+- * 6. 慢提示按 elapsedTime 阈值出现。
++ * 6. 慢提示按【静默时长】出现——零产出累积才报；token 在流则永不报（核心回归）。
+  */
+ 
+ import { test, expect, describe, afterEach, jest } from "bun:test";
+@@ -16,13 +16,21 @@ import React from "react";
+ import { render } from "../../../src/ink/_vendor/testing.tsx";
+ import { useLoadingIndicator } from "../../../src/ui/hooks/useLoadingIndicator.ts";
+ import { StreamingState } from "../../../src/ui/types.ts";
++import { SLOW_RESPONSE_HINTS } from "../../../src/ui/constants/loading-phrases.ts";
+ import Text from "../../../src/ink/components/Text.js";
+ 
+ /** 极简宿主：把 hook 返回值渲染成 `E<秒>|<文案>|<慢提示>` 便于字节断言。 */
+-function Harness({ s }: { s: StreamingState }): React.ReactElement {
++function Harness({
++  s,
++  outputTokens = 0,
++}: {
++  s: StreamingState;
++  outputTokens?: number;
++}): React.ReactElement {
+   const { elapsedTime, currentLoadingPhrase, slowHint } = useLoadingIndicator({
+     streamingState: s,
+     toolName: null,
++    outputTokens,
+   });
+   return React.createElement(
+     Text,
+@@ -122,17 +130,57 @@ describe("useLoadingIndicator", () => {
+     expect(after).toBe(3);
+   });
+ 
+-  test("慢提示按 elapsedTime 阈值出现（Connecting 期 15s → 第一档）", () => {
++  test("慢提示按【静默时长】出现：零产出累积到首阈值才报", () => {
+     jest.useFakeTimers();
++    const first = SLOW_RESPONSE_HINTS[0];
++    // outputTokens 恒为 0（从不产出）→ 静默时长 == 经过时长。
+     const { lastFrame, rerender } = render(<Harness s={StreamingState.Connecting} />);
+-    // 9s 时还没到首阈值。
+-    jest.advanceTimersByTime(9000);
++    // 未达首阈值前：无慢提示。
++    jest.advanceTimersByTime((first.thresholdSec - 1) * 1000);
+     rerender(<Harness s={StreamingState.Connecting} />);
+     expect(lastFrame() ?? "").toContain("|null"); // slowHint 段为 null
+-    // 15s 时命中 10s 档。
+-    jest.advanceTimersByTime(6000);
++    // 跨过首阈值：出现第一档文案。
++    jest.advanceTimersByTime(2000);
+     rerender(<Harness s={StreamingState.Connecting} />);
+-    expect(lastFrame() ?? "").toContain("响应较慢");
++    expect(lastFrame() ?? "").toContain(first.hint);
++  });
++
++  test("核心回归：token 持续产出时，整轮再久也不报慢", () => {
++    jest.useFakeTimers();
++    const first = SLOW_RESPONSE_HINTS[0];
++    let tokens = 0;
++    // 模拟模型在正常流式输出：每秒产出 token，整轮跑很久（远超慢提示阈值）。
++    // 这正是 bug 现场——旧逻辑用整轮 elapsedTime 判定，此时会误报「响应较慢/卡住」；
++    // 新逻辑用静默时长，token 一直在涨 → 静默归零 → 绝不报慢。
++    const { lastFrame, rerender } = render(
++      <Harness s={StreamingState.Responding} outputTokens={tokens} />,
++    );
++    const farPastThreshold = (first.thresholdSec + 30) * 1000;
++    const stepMs = 1000;
++    for (let elapsed = 0; elapsed < farPastThreshold; elapsed += stepMs) {
++      jest.advanceTimersByTime(stepMs);
++      tokens += 50; // 每秒都有新产出
++      rerender(<Harness s={StreamingState.Responding} outputTokens={tokens} />);
++    }
++    // 整轮已远超阈值，但因 token 持续在流，慢提示始终为 null。
++    expect(lastFrame() ?? "").toContain("|null");
++    expect(lastFrame() ?? "").not.toContain(first.hint);
++  });
++
++  test("token 停止产出后，静默累积到阈值才报慢", () => {
++    jest.useFakeTimers();
++    const first = SLOW_RESPONSE_HINTS[0];
++    // 先正常产出几秒（不报慢），然后 token 冻结，开始累积静默。
++    const { lastFrame, rerender } = render(
++      <Harness s={StreamingState.Responding} outputTokens={100} />,
++    );
++    jest.advanceTimersByTime(5000);
++    rerender(<Harness s={StreamingState.Responding} outputTokens={300} />); // 还在产出
++    expect(lastFrame() ?? "").toContain("|null");
++    // token 冻结在 300，静默开始累积；跨过首阈值后报慢。
++    jest.advanceTimersByTime((first.thresholdSec + 1) * 1000);
++    rerender(<Harness s={StreamingState.Responding} outputTokens={300} />);
++    expect(lastFrame() ?? "").toContain(first.hint);
+   });
+ });
+ 

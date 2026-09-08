@@ -1,0 +1,185 @@
+diff --git a/src/config/system-prompt.ts b/src/config/system-prompt.ts
+index e8f7017..03e8138 100644
+--- a/src/config/system-prompt.ts
++++ b/src/config/system-prompt.ts
+@@ -722,5 +722,12 @@ ${langConstraint}
+ 声称某函数/字段/导出是"孤儿、死代码、从未被调用/赋值/读取""漏重置""状态残留"之前，**必须先 grep 出它的全部定义点、赋值点、调用点、读取点，把计数贴进证据**，不能凭印象断言。
+ - 一个常见陷阱——**范畴错误**：某字段看似"漏重置"，但它根本不属于那个数据结构（住在另一层 hook/prop/局部变量里），这种情况不是 bug。grep 清楚它到底住在哪、被谁读写，再下结论。
+ - 没有调用方计数证据支撑的"零调用/死代码"断言，一律降级为"疑似，待核验"。
++
++### 7. 现状描述 ≠ bug 报告：不得凭空脑补用户没提的故障
++用户在**发起任务**时描述的"现状"，是他要你做这件事的**理由**，不是对你交付物的 bug 报告。二者必须严格区分：
++- 例："现在点击按钮就直接调接口了，缺少确认弹窗，请按设计稿实现弹窗"——这里"直接调接口"描述的是**改动前的现状**，是任务动机；不是"你做的弹窗坏了"。
++- **铁律**：在**没有新的用户消息**明确报告问题之前，禁止假设你交付的产物存在运行时故障（"弹窗没弹出""没生效""没保存""热更新失败"等）。这类结论只能来自用户的新反馈或你亲自跑起来观察到的现象，**不能来自你对旧 prompt 的二次解读**。
++- 任务已按要求完成（尤其是"先写静态页面"这类明确限定范围的任务）且构建/测试通过时，就**如实收尾**。不要把"要不要再排查一下会不会有问题"当成待办，滑向对不存在故障的自问自答式排查。
++- 若你确实怀疑有隐患，正确做法是**一句话向用户说明并请其验证**，而不是自己编造一个用户没提的故障再去"修"它。
+ </answer-discipline>`;
+ }
+diff --git a/src/query/todo-reminder.ts b/src/query/todo-reminder.ts
+index e75bfb3..7b37b81 100644
+--- a/src/query/todo-reminder.ts
++++ b/src/query/todo-reminder.ts
+@@ -87,6 +87,7 @@ export function buildTodoReminder(todos: TodoItem[]): string {
+ 这是你当前的任务清单（请勿向用户提及本提醒）：
+ ${renderTodoLines(todos)}
+ 仍有 ${unfinished} 项未完成。请继续推进，不要遗漏；完成每一项后立即用 todo_write 更新状态。
++注意：如果某项其实**已经做完**（代码已改、验证已过），只是忘了标记，请直接用 todo_write 把它标为 completed，然后如实收尾——不要为了凑"未完成"去臆造用户没要求的新工作，也不要假设已交付的产物存在故障再去排查。
+ </system-reminder>`;
+ }
+ 
+@@ -99,7 +100,9 @@ export function buildTodoGateMessage(todos: TodoItem[]): string {
+   return `<system-reminder>
+ 检测到你试图结束本轮对话，但任务清单中仍有 ${pending.length} 项未完成：
+ ${renderTodoLines(pending)}
+-请继续完成这些任务，不要提前收尾。完成每一项后用 todo_write 标记 completed。
++请对照实际进展判断，二选一：
++1. 若这些项**尚未真正做完**：继续完成，不要提前收尾；完成每一项后用 todo_write 标记 completed。
++2. 若这些项**其实已经做完**（代码已改、构建/测试已过），只是忘了标记：直接用 todo_write 标为 completed 并如实收尾。**切勿**为了让清单"看起来还有活"而去臆造用户没要求的新工作，或假设已交付的产物有故障再去排查——现状描述不等于 bug 报告，没有用户新反馈就不要脑补故障。
+ 如果某项确实无法完成，请明确说明原因（而不是默默跳过或谎报完成）。
+ </system-reminder>`;
+ }
+diff --git a/src/query/work-log.ts b/src/query/work-log.ts
+index 83fe1c1..b742647 100644
+--- a/src/query/work-log.ts
++++ b/src/query/work-log.ts
+@@ -139,6 +139,7 @@ export function buildProgressReminder(snap: ProgressSnapshot): string | null {
+   lines.push(`- 仍待办 ${snap.pending.length} 项：${snap.pending.join("；")}`);
+   if (snap.inProgress) lines.push(`- 当前进行中：${snap.inProgress}`);
+   lines.push("请继续推进待办项，不要重复已完成的工作，也不要遗漏任何待办。");
++  lines.push("若某待办其实已完成只是忘了标记，请用 todo_write 标为 completed 后如实收尾；不要为凑\"未完成\"去臆造用户没要求的新工作或排查不存在的故障。");
+   lines.push("</system-reminder>");
+   return lines.join("\n");
+ }
+diff --git a/src/tool/path-utils.ts b/src/tool/path-utils.ts
+index 9e0ed96..04506ab 100644
+--- a/src/tool/path-utils.ts
++++ b/src/tool/path-utils.ts
+@@ -10,7 +10,7 @@
+  */
+ 
+ import { homedir } from "os";
+-import { resolve, normalize, dirname, basename } from "path";
++import { resolve, normalize, dirname, basename, sep } from "path";
+ import { readdirSync, statSync } from "fs";
+ import { getCwd } from "../bootstrap/state.ts";
+ 
+@@ -75,6 +75,45 @@ export function levenshteinDistance(a: string, b: string): number {
+   return prev[n];
+ }
+ 
++/**
++ * 在 ancestorDir 下按"去掉分隔符/大小写归一"精确匹配 + Levenshtein 模糊匹配 name。
++ * 用于路径某一段拼错时（如 `本体&管道&数据` 被吞成 `本体管道数据`）给出候选。
++ * @returns 命中的真实条目名数组（最多 maxHits 个），无命中返回空数组
++ */
++function findSimilarEntries(
++  ancestorDir: string,
++  name: string,
++  maxHits: number,
++): string[] {
++  let entries: string[];
++  try {
++    entries = readdirSync(ancestorDir);
++  } catch {
++    return [];
++  }
++  if (entries.length === 0 || entries.length > 5000) return [];
++
++  // 归一：去掉常见 shell 元字符与空格、转小写。
++  // 这能直接命中"& 被吞"的场景——`本体&管道&数据` 与 `本体管道数据` 归一后相等。
++  const canon = (s: string) => s.replace(/[&|;<>()\\'"\s]/g, "").toLowerCase();
++  const targetCanon = canon(name);
++
++  const exactish: string[] = [];
++  const fuzzy: { name: string; dist: number }[] = [];
++  for (const e of entries) {
++    if (e === name) continue; // 完全相等不会走到"不存在"分支，防御性跳过
++    if (canon(e) === targetCanon) {
++      exactish.push(e); // 归一后相等 → 最强候选（元字符差异）
++    } else {
++      const dist = levenshteinDistance(canon(e), targetCanon);
++      if (dist <= 3) fuzzy.push({ name: e, dist }); // 编辑距离近 → 次级候选（拼写差异）
++    }
++  }
++  // 归一相等的排最前；其次按编辑距离升序（最接近的优先），避免距离远的抢先
++  fuzzy.sort((a, b) => a.dist - b.dist);
++  return [...exactish, ...fuzzy.map((f) => f.name)].slice(0, maxHits);
++}
++
+ /**
+  * 格式化"路径/文件不存在"错误消息，提供纠错上下文
+  * @param filePath 已规范化的文件绝对路径
+@@ -93,25 +132,60 @@ export function formatPathNotFoundError(
+     const parentStat = statSync(parentDir);
+     if (parentStat.isDirectory()) {
+       // 父目录存在 → 文件本身不存在，尝试找相似文件
+-      const siblings = readdirSync(parentDir);
+-      if (siblings.length > 0 && siblings.length <= 5000) {
+-        const targetBase = basename(filePath).replace(/\.[^.]+$/, "");
+-        const similar = siblings
+-          .filter(s => {
+-            const sBase = s.replace(/\.[^.]+$/, "");
+-            return sBase === targetBase || levenshteinDistance(sBase, targetBase) <= 3;
+-          })
+-          .slice(0, maxSiblings);
+-        if (similar.length > 0) {
+-          parentInfo = `\n目录中存在相似文件: ${similar.join(", ")}`;
+-        }
++      const similar = findSimilarEntries(parentDir, basename(filePath), maxSiblings);
++      if (similar.length > 0) {
++        parentInfo = `\n目录中存在相似文件: ${similar.join(", ")}`;
+       }
+     } else {
+       parentInfo = `\n注意: 父路径 "${parentDir}" 不是目录`;
+     }
+   } catch {
+-    parentInfo = `\n注意: 父目录 "${parentDir}" 也不存在，路径可能整体有误`;
++    // 父目录也不存在：说明是路径中某一段（目录名）拼错了——这正是
++    // "路径里的 & 等字符被终端/剪贴板吞掉"的典型症状。向上回溯到最近一个
++    // 真实存在的祖先目录，对第一个缺失的路径段做归一 + 模糊匹配，
++    // 直接把正确目录名报给模型，避免它陷入"文件被删/改名了"的猜测循环。
++    const suggestion = suggestNearestExistingSegment(filePath);
++    parentInfo = suggestion
++      ? `\n注意: 父目录 "${parentDir}" 也不存在。${suggestion}`
++      : `\n注意: 父目录 "${parentDir}" 也不存在，路径可能整体有误`;
+   }
+ 
+   return `错误: 文件不存在: ${filePath}\n当前工作目录: ${cwd}${parentInfo}`;
+ }
++
++/**
++ * 从 filePath 向上回溯，找到最近一个真实存在的祖先目录，
++ * 再对"该祖先下第一个缺失的路径段"做归一 + 模糊匹配。
++ * 命中则返回形如 `路径段 "X" 疑似应为: Y（完整路径: /.../Y）` 的提示，否则返回空串。
++ */
++function suggestNearestExistingSegment(filePath: string): string {
++  const segments = filePath.split(sep).filter((s) => s.length > 0);
++  const isAbsolute = filePath.startsWith(sep);
++
++  // 从完整路径逐级向上，找到"存在的祖先 + 它下面第一个不存在的段"
++  for (let i = segments.length - 1; i >= 1; i--) {
++    const ancestorParts = segments.slice(0, i);
++    const ancestorDir = (isAbsolute ? sep : "") + ancestorParts.join(sep);
++    let ok = false;
++    try {
++      ok = statSync(ancestorDir).isDirectory();
++    } catch {
++      ok = false;
++    }
++    if (!ok) continue;
++
++    // ancestorDir 存在，segments[i] 是它下面第一个缺失的段
++    const missingSeg = segments[i];
++    const hits = findSimilarEntries(ancestorDir, missingSeg, 3);
++    if (hits.length > 0) {
++      const best = hits[0];
++      const fullPath = ancestorDir + sep + best
++        + (i < segments.length - 1 ? sep + segments.slice(i + 1).join(sep) : "");
++      const more = hits.length > 1 ? `（其它候选: ${hits.slice(1).join(", ")}）` : "";
++      return `路径段 "${missingSeg}" 疑似应为 "${best}"${more}。可尝试完整路径: ${fullPath}`;
++    }
++    // 找到最近存在的祖先但无相似段，无需再往上找
++    return "";
++  }
++  return "";
++}

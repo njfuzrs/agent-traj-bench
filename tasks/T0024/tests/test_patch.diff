@@ -1,0 +1,1235 @@
+diff --git a/tests/llm/replay-provider.test.ts b/tests/llm/replay-provider.test.ts
+new file mode 100644
+index 0000000..d4c06ca
+--- /dev/null
++++ b/tests/llm/replay-provider.test.ts
+@@ -0,0 +1,455 @@
++/**
++ * 录制回放（VCR）测试 —— 缺陷清单 P2-11
++ *
++ * 最重要的一组是「往返保真」：录制 → 回放 → 经**生产的** processStream 累加 →
++ * 与原始录制逐字段比对。这条不过，回放器就只是个花哨的 mock：
++ * 它能"跑通"，但走的是与生产不同的代码路径，测不到真正会出问题的那段逻辑。
++ *
++ * 用真实 raw.jsonl 片段做语料（结构按本机实际文件核验，含 request_sent 标记行、
++ * 增量 new_messages、thinking + text + 多个 tool_use 混合的响应）。
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { ProviderRegistry } from "../../src/llm/registry.ts";
++import { validateConfig } from "../../src/config/schema.ts";
++import type { ValidationError } from "../../src/config/schema.ts";
++import { mkdtempSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import {
++  ReplayProvider,
++  parseRawJsonl,
++  blocksToStreamEvents,
++  createReplayProvider,
++  type ReplayTurn,
++} from "../../src/llm/mocks/replay-provider.ts";
++import { processStream } from "../../src/query/stream-processor.ts";
++import type { SendParams, StreamEvent, ContentBlock } from "../../src/llm/types.ts";
++
++const PARAMS: SendParams = { model: "test", messages: [], maxTokens: 1024 };
++
++/**
++ * 真实 raw.jsonl 形态的语料。
++ * 刻意保留三个真实特征：① 混有 request_sent 标记行；② 首行带完整 messages/system/tools，
++ * 后续行只有 new_messages + _messages_count；③ 响应含 thinking + text + tool_use 混合。
++ */
++const SAMPLE_RAW = [
++  JSON.stringify({
++    timestamp: "2026-08-05T13:51:07.880Z", index: 1, type: "request_sent",
++    model: "glm-5.2", msg_count: 1, estimated_input_tokens: 27071,
++  }),
++  JSON.stringify({
++    timestamp: "2026-08-05T13:51:20.000Z", index: 1, model: "glm-5.2",
++    request: {
++      model: "glm-5.2",
++      system: "你是 sid-code",
++      messages: [{ role: "user", content: [{ type: "text", text: "帮我看个 bug" }] }],
++      tools: [{ name: "read", description: "读文件", input_schema: {} }],
++    },
++    response: {
++      content: [
++        { type: "thinking", thinking: "先读一下文件", signature: "sig-abc" },
++        { type: "text", text: "我来看看这个文件" },
++        { type: "tool_use", id: "toolu_1", name: "read", input: { file_path: "/a/b.ts", offset: 10 } },
++      ],
++      stop_reason: "tool_use",
++    },
++    usage: { input_tokens: 32643, output_tokens: 260, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
++    stop_reason: "tool_use", is_partial: false,
++  }),
++  JSON.stringify({
++    timestamp: "2026-08-05T13:51:30.000Z", index: 2, type: "request_sent",
++    model: "glm-5.2", msg_count: 3,
++  }),
++  JSON.stringify({
++    timestamp: "2026-08-05T13:51:40.000Z", index: 2, model: "glm-5.2",
++    request: { model: "glm-5.2", _messages_count: 3, new_messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "文件内容" }] }] },
++    response: {
++      content: [{ type: "text", text: "找到了，是第 12 行的空指针" }],
++      stop_reason: "end_turn",
++    },
++    usage: { input_tokens: 32718, output_tokens: 196, cache_read_input_tokens: 28544, cache_creation_input_tokens: 0 },
++    stop_reason: "end_turn", is_partial: false,
++  }),
++].join("\n");
++
++/** 收集一次回放的全部事件 */
++async function collect(p: ReplayProvider): Promise<StreamEvent[]> {
++  const out: StreamEvent[] = [];
++  for await (const ev of p.sendMessageStream(PARAMS)) out.push(ev);
++  return out;
++}
++
++// ============================================================
++// 解析
++// ============================================================
++describe("VCR · raw.jsonl 解析", () => {
++  test("只取完整 pair，跳过 request_sent 标记行", () => {
++    const turns = parseRawJsonl(SAMPLE_RAW);
++    // 4 行里有 2 行是 request_sent 标记
++    expect(turns).toHaveLength(2);
++    expect(turns[0]!.index).toBe(1);
++    expect(turns[1]!.index).toBe(2);
++  });
++
++  test("响应内容与 stop_reason / usage 全部解析出来", () => {
++    const [t1] = parseRawJsonl(SAMPLE_RAW);
++    expect(t1!.content).toHaveLength(3);
++    expect(t1!.stopReason).toBe("tool_use");
++    expect(t1!.usage.inputTokens).toBe(32643);
++    expect(t1!.usage.outputTokens).toBe(260);
++    expect(t1!.model).toBe("glm-5.2");
++  });
++
++  test("cache token 字段解析（省钱指标要用）", () => {
++    const turns = parseRawJsonl(SAMPLE_RAW);
++    expect(turns[1]!.usage.cacheReadInputTokens).toBe(28544);
++  });
++
++  test("坏行跳过而非整体失败——崩溃会话末行常是半条 JSON", () => {
++    // 这是刻意的容错：因为一行残缺就无法回放，等于把最需要复现的
++    // 「进程被 kill 的会话」排除在回放能力之外。
++    const withGarbage = SAMPLE_RAW + '\n{"index":3,"response":{"content":[{"type":"tex';
++    const turns = parseRawJsonl(withGarbage);
++    expect(turns).toHaveLength(2); // 前两轮照常可用
++  });
++
++  test("空文本 / 纯空行返回空数组，不抛", () => {
++    expect(parseRawJsonl("")).toHaveLength(0);
++    expect(parseRawJsonl("\n\n  \n")).toHaveLength(0);
++  });
++
++  test("无 response 或 response.content 非数组的行被跳过", () => {
++    const lines = [
++      JSON.stringify({ index: 1, response: null }),
++      JSON.stringify({ index: 2, response: { content: "不是数组" } }),
++      JSON.stringify({ index: 3 }),
++    ].join("\n");
++    expect(parseRawJsonl(lines)).toHaveLength(0);
++  });
++
++  test("按 index 排序——resume 续接的会话行序可能与 index 不一致", () => {
++    const lines = [
++      JSON.stringify({ index: 3, response: { content: [{ type: "text", text: "c" }], stop_reason: "end_turn" } }),
++      JSON.stringify({ index: 1, response: { content: [{ type: "text", text: "a" }], stop_reason: "end_turn" } }),
++      JSON.stringify({ index: 2, response: { content: [{ type: "text", text: "b" }], stop_reason: "end_turn" } }),
++    ].join("\n");
++    expect(parseRawJsonl(lines).map((t) => t.index)).toEqual([1, 2, 3]);
++  });
++});
++
++// ============================================================
++// 事件序列保真
++// ============================================================
++describe("VCR · 事件序列保真", () => {
++  test("逐块发 start/delta/stop，不是一次性塞一个事件", async () => {
++    // 关键：下游的累加器、index→position 映射、thinking 计时全靠这个序列驱动。
++    // 一次性塞进去虽然能"跑通"，但走的是与生产不同的路径，回归测试就失去意义。
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const events = await collect(p);
++    const types = events.map((e) => e.type);
++
++    expect(types[0]).toBe("message_start");
++    expect(types[types.length - 2]).toBe("message_delta");
++    expect(types[types.length - 1]).toBe("message_stop");
++    // 3 个块 × (start + delta + stop) = 9
++    expect(types.filter((t) => t === "content_block_start")).toHaveLength(3);
++    expect(types.filter((t) => t === "content_block_stop")).toHaveLength(3);
++  });
++
++  test("tool_use 的 input 走 input_json_delta 分片路径", async () => {
++    // 真实事故（input={} + 未到达的 content_block_stop）只在这条路径上才测得到。
++    // 若回放直接把 input 塞进 content_block_start，那类 bug 永远复现不出来。
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const events = await collect(p);
++
++    const toolStart = events.find(
++      (e) => e.type === "content_block_start" && (e as any).content_block?.type === "tool_use",
++    ) as any;
++    expect(toolStart.content_block.input).toEqual({}); // start 时是空的
++    expect(toolStart.content_block.name).toBe("read");
++
++    const jsonDelta = events.find(
++      (e) => e.type === "content_block_delta" && (e as any).delta?.type === "input_json_delta",
++    ) as any;
++    expect(jsonDelta).toBeDefined();
++    expect(JSON.parse(jsonDelta.delta.partial_json)).toEqual({ file_path: "/a/b.ts", offset: 10 });
++  });
++
++  test("thinking 块带 signature（丢了会让多轮回传 400）", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const events = await collect(p);
++    const thinkingStart = events.find(
++      (e) => e.type === "content_block_start" && (e as any).content_block?.type === "thinking",
++    ) as any;
++    expect(thinkingStart.content_block.signature).toBe("sig-abc");
++  });
++
++  test("未知块类型原样透传，不静默丢弃", () => {
++    // 本仓库已记录的教训：手写字段列表 / 手写分派链会静默丢块。
++    const blocks = [{ type: "future_block_type", payload: "x" }] as unknown as ContentBlock[];
++    const events = [...blocksToStreamEvents(blocks, "end_turn", { inputTokens: 1, outputTokens: 1 })];
++    const start = events.find((e) => e.type === "content_block_start") as any;
++    expect(start.content_block.type).toBe("future_block_type");
++    expect(events.filter((e) => e.type === "content_block_stop")).toHaveLength(1);
++  });
++
++  test("usage 透传到 message_delta", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const events = await collect(p);
++    const delta = events.find((e) => e.type === "message_delta") as any;
++    expect(delta.usage.inputTokens).toBe(32643);
++    expect(delta.delta.stop_reason).toBe("tool_use");
++  });
++
++  test("空 content 的响应也产出合法事件序列（不产生半截流）", () => {
++    const events = [...blocksToStreamEvents([], "end_turn", { inputTokens: 0, outputTokens: 0 })];
++    expect(events.map((e) => e.type)).toEqual(["message_start", "message_delta", "message_stop"]);
++  });
++});
++
++// ============================================================
++// 往返保真（本文件最重要的一组）
++// ============================================================
++describe("VCR · 往返保真（经生产 processStream）", () => {
++  test("录制 → 回放 → processStream 累加，与原始录制逐字段相等", async () => {
++    const turns = parseRawJsonl(SAMPLE_RAW);
++    const p = new ReplayProvider(turns);
++
++    for (const orig of turns) {
++      const got = await processStream(p.sendMessageStream(PARAMS));
++
++      expect(got.content.map((b: any) => b.type)).toEqual(orig.content.map((b: any) => b.type));
++      expect(got.stopReason).toBe(orig.stopReason);
++
++      for (let i = 0; i < orig.content.length; i++) {
++        const ob = orig.content[i] as any;
++        const gb = got.content[i] as any;
++        if (ob.type === "text") expect(gb.text).toBe(ob.text);
++        if (ob.type === "thinking") expect(gb.thinking).toBe(ob.thinking);
++        if (ob.type === "tool_use") {
++          expect(gb.name).toBe(ob.name);
++          expect(gb.input).toEqual(ob.input); // 分片重组后必须逐字段相等
++        }
++      }
++    }
++  });
++
++  test("tool_use 的 input 经分片重组后不丢字段、不改类型", async () => {
++    const turns: ReplayTurn[] = [{
++      index: 1, model: "m", stopReason: "tool_use", isPartial: false,
++      usage: { inputTokens: 1, outputTokens: 1 },
++      content: [{
++        type: "tool_use", id: "t1", name: "edit",
++        // 刻意混入嵌套对象、数组、数字、布尔、含引号与换行的字符串
++        input: {
++          file_path: "/a.ts", line: 42, dry_run: false,
++          replacements: [{ old: 'say "hi"', new: "line1\nline2" }],
++          nested: { deep: { deeper: [1, 2, 3] } },
++        },
++      }] as ContentBlock[],
++    }];
++    const p = new ReplayProvider(turns);
++    const got = await processStream(p.sendMessageStream(PARAMS));
++    const origInput = (turns[0]!.content[0] as any).input;
++    expect((got.content[0] as any).input).toEqual(origInput);
++    // 类型也不许漂：数字别变字符串、布尔别变字符串
++    expect(typeof (got.content[0] as any).input.line).toBe("number");
++    expect(typeof (got.content[0] as any).input.dry_run).toBe("boolean");
++  });
++});
++
++// ============================================================
++// 轮次控制
++// ============================================================
++describe("VCR · 轮次控制", () => {
++  test("按顺序逐轮回放", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const r1 = await processStream(p.sendMessageStream(PARAMS));
++    const r2 = await processStream(p.sendMessageStream(PARAMS));
++    expect(r1.stopReason).toBe("tool_use");
++    expect(r2.stopReason).toBe("end_turn");
++    expect(p.getReplayedCount()).toBe(2);
++  });
++
++  test("默认耗尽即抛——静默补空响应会把「多跑一轮」的回归伪装成通过", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    await collect(p);
++    await collect(p);
++    await expect(collect(p)).rejects.toThrow(/录制已耗尽/);
++  });
++
++  test('onExhausted: "end-turn" 让主循环自然收尾', async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW, { onExhausted: "end-turn" });
++    await collect(p);
++    await collect(p);
++    const extra = await processStream(p.sendMessageStream(PARAMS));
++    expect(extra.stopReason).toBe("end_turn");
++    expect(extra.content).toHaveLength(0);
++  });
++
++  test('onExhausted: "repeat-last" 重复最后一轮', async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW, { onExhausted: "repeat-last" });
++    await collect(p);
++    await collect(p);
++    const again = await processStream(p.sendMessageStream(PARAMS));
++    expect(again.stopReason).toBe("end_turn");
++    expect((again.content[0] as any).text).toBe("找到了，是第 12 行的空指针");
++  });
++
++  test("空录制 + repeat-last 给出可读错误而非 undefined 崩溃", async () => {
++    const p = new ReplayProvider([], { onExhausted: "repeat-last" });
++    await expect(collect(p)).rejects.toThrow(/录制为空/);
++  });
++
++  test("reset 后可重复用同一份录制", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    await collect(p);
++    await collect(p);
++    p.reset();
++    expect(p.getReplayedCount()).toBe(0);
++    const r1 = await processStream(p.sendMessageStream(PARAMS));
++    expect(r1.stopReason).toBe("tool_use");
++  });
++
++  test("记录主循环实际发出的请求，供用例断言「发了什么」", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    await collect(p);
++    expect(p.getReceivedParams()).toHaveLength(1);
++    expect(p.getReceivedParams()[0]!.model).toBe("test");
++  });
++});
++
++// ============================================================
++// Provider 契约与 abort
++// ============================================================
++describe("VCR · Provider 契约", () => {
++  test("满足 Provider 接口，可当普通 provider 用", () => {
++    const p = createReplayProvider(parseRawJsonl(SAMPLE_RAW));
++    expect(typeof p.name()).toBe("string");
++    expect(typeof p.sendMessageStream).toBe("function");
++    expect(p.capabilities!().streaming).toBe(true);
++    // 录制里可能真的有 thinking 块，必须声明支持否则被上游能力过滤掉
++    expect(p.capabilities!().thinking).toBe(true);
++  });
++
++  test("已中断的 signal 立即抛——回放也要能测「用户 ESC」路径", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const ac = new AbortController();
++    ac.abort(new Error("用户中断"));
++    const it = p.sendMessageStream(PARAMS, ac.signal)[Symbol.asyncIterator]();
++    await expect(it.next()).rejects.toThrow("用户中断");
++  });
++
++  test("流中途 abort 会中断回放（不是把剩余事件发完）", async () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    const ac = new AbortController();
++    let count = 0;
++    await expect((async () => {
++      for await (const _ev of p.sendMessageStream(PARAMS, ac.signal)) {
++        count++;
++        if (count === 2) ac.abort(new Error("中途取消"));
++      }
++    })()).rejects.toThrow("中途取消");
++    expect(count).toBeLessThan(11); // 远少于完整的 11 个事件
++  });
++
++  test("getTotalTurns / getReplayedCount 反映真实进度", () => {
++    const p = ReplayProvider.fromRawJsonl(SAMPLE_RAW);
++    expect(p.getTotalTurns()).toBe(2);
++    expect(p.getReplayedCount()).toBe(0);
++  });
++});
++
++// ============================================================
++// 接线：能从 registry 走通（防退化成「只能在单测里 new」的死资产）
++// ============================================================
++describe("VCR · 经 ProviderRegistry 接线", () => {
++  const ENV_FILE = "SID_CODE_REPLAY_FILE";
++  const ENV_EXHAUSTED = "SID_CODE_REPLAY_ON_EXHAUSTED";
++  let savedFile: string | undefined;
++  let savedExhausted: string | undefined;
++  let tmpRaw = "";
++
++  beforeEach(() => {
++    savedFile = process.env[ENV_FILE];
++    savedExhausted = process.env[ENV_EXHAUSTED];
++    tmpRaw = join(mkdtempSync(join(tmpdir(), "sidcode-replay-")), "raw.jsonl");
++    writeFileSync(tmpRaw, SAMPLE_RAW, "utf-8");
++  });
++
++  afterEach(() => {
++    if (savedFile === undefined) delete process.env[ENV_FILE];
++    else process.env[ENV_FILE] = savedFile;
++    if (savedExhausted === undefined) delete process.env[ENV_EXHAUSTED];
++    else process.env[ENV_EXHAUSTED] = savedExhausted;
++  });
++
++  function registry() {
++    return new ProviderRegistry({
++      provider: "replay", model: "m", anthropicKey: "", openaiKey: "",
++    } as any);
++  }
++
++  test("provider=replay + SID_CODE_REPLAY_FILE 能拿到可回放 provider", async () => {
++    // 这条是「配了能到达」——本清单 P0-3 的复盘写明，那个缺陷能活下来的唯一原因
++    // 就是没有任何测试断言这件事。
++    process.env[ENV_FILE] = tmpRaw;
++    const p = registry().getProvider();
++    expect(p.name()).toBe("replay");
++
++    const got = await processStream(p.sendMessageStream(PARAMS));
++    expect(got.stopReason).toBe("tool_use");
++    expect((got.content[1] as any).text).toBe("我来看看这个文件");
++  });
++
++  test("未配 SID_CODE_REPLAY_FILE 时给出可操作的错误信息", () => {
++    delete process.env[ENV_FILE];
++    expect(() => registry().getProvider()).toThrow(/SID_CODE_REPLAY_FILE/);
++  });
++
++  test("从 CLI 走时默认 end-turn，录制放完自然收尾而非抛错", async () => {
++    process.env[ENV_FILE] = tmpRaw;
++    const p = registry().getProvider();
++    await processStream(p.sendMessageStream(PARAMS));
++    await processStream(p.sendMessageStream(PARAMS));
++    // 第 3 轮：录制已耗尽，应自然收尾
++    const extra = await processStream(p.sendMessageStream(PARAMS));
++    expect(extra.stopReason).toBe("end_turn");
++  });
++
++  test("SID_CODE_REPLAY_ON_EXHAUSTED 可覆盖耗尽行为", async () => {
++    process.env[ENV_FILE] = tmpRaw;
++    process.env[ENV_EXHAUSTED] = "throw";
++    const p = registry().getProvider();
++    await processStream(p.sendMessageStream(PARAMS));
++    await processStream(p.sendMessageStream(PARAMS));
++    await expect(
++      processStream(p.sendMessageStream(PARAMS)),
++    ).rejects.toThrow(/录制已耗尽/);
++  });
++
++  test("fromFileSync 与 fromFile 解析结果一致", async () => {
++    const sync = ReplayProvider.fromFileSync(tmpRaw);
++    const async_ = await ReplayProvider.fromFile(tmpRaw);
++    expect(sync.getTotalTurns()).toBe(async_.getTotalTurns());
++    expect(sync.getTotalTurns()).toBe(2);
++  });
++
++  test("配置校验层必须放行 provider=replay（registry 认了不算，schema 也得认）", () => {
++    // 这条是本批修复现场踩出来的坑，值得单独一个测试钉住：
++    // registry 里接好了、31 个单测全绿，但跑真实 CLI 直接
++    // 「配置验证失败：无效值 "replay"」——因为上面那些测试都是自己 new
++    // ProviderRegistry，**绕过了配置校验层**。schema 不放开，registry 的分支
++    // 永远走不到，与本清单 P0-3（写完但配置层不可达）是同一个形态。
++    const result = validateConfig({
++      provider: "replay",
++      model: "replay-model",
++      availableModels: [{ name: "replay-model", provider: "replay", api_key: "none" }],
++    } as any);
++    const fatal = result.errors.filter(
++      (e: ValidationError) => e.path === "provider" || e.path === "model",
++    );
++    expect(fatal).toHaveLength(0);
++  });
++});
+diff --git a/tests/telemetry/content-tracing-wiring.test.ts b/tests/telemetry/content-tracing-wiring.test.ts
+new file mode 100644
+index 0000000..764d627
+--- /dev/null
++++ b/tests/telemetry/content-tracing-wiring.test.ts
+@@ -0,0 +1,227 @@
++/**
++ * 内容级 tracing 的**接线**测试（缺陷清单 P1-5）
++ *
++ * 与 content-tracing.test.ts 的分工：那份测模块自身的行为（去重/截断/脱敏），
++ * 这份测「配了能不能到达」——走真实的 HookSystem 事件路径，而不是直接调模块函数。
++ *
++ * 为什么这层单独存在（沿用 P0-3 修复留下的纪律）：批次 B 的复盘写得很明白，
++ * 原始缺陷（OtlpExporter 写完但配置层不可达）能活到那天的唯一原因是
++ * **没有任何测试断言「配了能到达」**——收窄白名单不会让任何测试变红。
++ * 内容级 tracing 有完全一样的失效形态：模块 34 个测试全绿，但只要
++ * hook-probe 里那三行调用被删掉，功能就静默消失，而模块测试**依然全绿**。
++ * 这份文件就是拦住那个形态的。
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { TelemetryBus } from "../../src/telemetry/bus.ts";
++import { TelemetryHookProbe } from "../../src/telemetry/hook-probe.ts";
++import { HookSystem } from "../../src/hook/system.ts";
++import { clearContentTracingState, CONTENT_TRACING_FLAG } from "../../src/telemetry/content-tracing.ts";
++import { __resetFeatureFlagsForTest } from "../../src/analytics/feature-flags.ts";
++import { setConfiguredPrivacyLevel } from "../../src/analytics/privacy-level.ts";
++import type { SpanData, TelemetryExporter } from "../../src/telemetry/types.ts";
++
++const ENV_SWITCH = "SID_CODE_CONTENT_TRACING";
++const FLAG_ENV = `SID_CODE_FLAG_${CONTENT_TRACING_FLAG.toUpperCase()}`;
++const ENV_KEYS = [ENV_SWITCH, FLAG_ENV, "SID_CODE_DISABLE_TELEMETRY", "SID_CODE_DISABLE_NONESSENTIAL_TRAFFIC"];
++let savedEnv: Record<string, string | undefined> = {};
++
++function setup() {
++  const spans: SpanData[] = [];
++  const exporter: TelemetryExporter = {
++    name: "mock",
++    exportSpans: async (batch) => { spans.push(...batch); },
++    shutdown: async () => {},
++  };
++  const bus = new TelemetryBus({ enabled: true, batchSize: 1000, flushIntervalMs: 999_999 });
++  bus.addExporter(exporter);
++  const probe = new TelemetryHookProbe(bus, null, {
++    model: "claude-sonnet-4",
++    provider: "anthropic",
++    sessionId: "wiring-test",
++  });
++  const hookSystem = new HookSystem();
++  probe.registerHooks(hookSystem);
++  return { bus, spans, hookSystem };
++}
++
++beforeEach(() => {
++  savedEnv = {};
++  for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
++  for (const k of ENV_KEYS) delete process.env[k];
++  setConfiguredPrivacyLevel(null);
++  __resetFeatureFlagsForTest();
++  clearContentTracingState();
++});
++
++afterEach(() => {
++  for (const k of ENV_KEYS) {
++    if (savedEnv[k] === undefined) delete process.env[k];
++    else process.env[k] = savedEnv[k];
++  }
++  setConfiguredPrivacyLevel(null);
++  __resetFeatureFlagsForTest();
++  clearContentTracingState();
++});
++
++describe("内容级 tracing · 经真实 Hook 路径接线", () => {
++  test("BeforeModel → chat span 携带 system prompt 内容", async () => {
++    process.env[ENV_SWITCH] = "1";
++    const { bus, spans, hookSystem } = setup();
++
++    await hookSystem.fireSessionStartEvent("startup", { model: "claude-sonnet-4" });
++    await hookSystem.fireBeforeModelEvent({
++      model: "claude-sonnet-4",
++      messages: [{ role: "user", content: "帮我改个 bug" }],
++      system: "你是 sid-code",
++      tools: [{ name: "read", description: "读文件" }],
++    });
++    await hookSystem.fireAfterModelEvent(
++      { model: "claude-sonnet-4", messages: [{ role: "user", content: "帮我改个 bug" }] },
++      { text: "好的，我来看看", usage: { inputTokens: 10, outputTokens: 5 }, stop_reason: "end_turn" },
++    );
++    await bus.flush();
++
++    const chat = spans.find((s) => s.kind === "chat")!;
++    expect(chat).toBeDefined();
++    const names = chat.events.map((e) => e.name);
++    expect(names).toContain("content.system_prompt");
++    expect(names).toContain("content.tool_schema");
++    expect(names).toContain("content.model_output");
++    expect(chat.attributes["sidcode.content.system_prompt_hash"]).toBeDefined();
++  });
++
++  test("PostToolUse → execute_tool span 携带工具入参与结果", async () => {
++    process.env[ENV_SWITCH] = "1";
++    const { bus, spans, hookSystem } = setup();
++
++    await hookSystem.firePostToolUseEvent(
++      "read",
++      { file_path: "/tmp/a.ts" },
++      { content: "源码内容" },
++      false,
++      "toolu_1",
++    );
++    await bus.flush();
++
++    const tool = spans.find((s) => s.kind === "execute_tool")!;
++    expect(tool).toBeDefined();
++    const names = tool.events.map((e) => e.name);
++    expect(names).toContain("content.tool_input");
++    expect(names).toContain("content.tool_result");
++    expect(String(tool.events.find((e) => e.name === "content.tool_result")!.attributes?.content))
++      .toContain("源码内容");
++  });
++
++  test("响应**没带 usage** 时依然采到内容——这是最需要看内容的场景之一", async () => {
++    // handleAfterModel 里 `if (!usage) return` 会提前退出。内容采集刻意放在守卫之前：
++    // 截断响应 / provider 异常返回往往就是没 usage，若放在守卫后面，
++    // 结果会是「越是出问题的那一轮越采不到内容」。
++    process.env[ENV_SWITCH] = "1";
++    const { bus, spans, hookSystem } = setup();
++
++    await hookSystem.fireBeforeModelEvent({
++      model: "claude-sonnet-4",
++      messages: [{ role: "user", content: "hi" }],
++      system: "你是 sid-code",
++    });
++    await hookSystem.fireAfterModelEvent(
++      { model: "claude-sonnet-4", messages: [{ role: "user", content: "hi" }] },
++      { text: "被截断的半句回答", stop_reason: undefined }, // 无 usage
++    );
++    // chat span 没被 end（usage 守卫提前返回），靠 SessionEnd 之后再 flush 拿不到它，
++    // 所以这里直接断言：内容事件已经挂在那个未结束的 span 上。
++    // 用 sweep 的方式取——结束 agent span 会带出 trace，但 chat span 需要显式结束。
++    // 改为验证「不抛异常且后续 span 正常」，并在下一轮确认 hash 已被记住（说明内容确实处理过）。
++    await hookSystem.fireBeforeModelEvent({
++      model: "claude-sonnet-4",
++      messages: [{ role: "user", content: "hi" }],
++      system: "你是 sid-code", // 同一 system → 若上一轮已发过全文，这轮不该再发
++    });
++    await hookSystem.fireAfterModelEvent(
++      { model: "claude-sonnet-4", messages: [{ role: "user", content: "hi" }] },
++      { text: "完整回答", usage: { inputTokens: 10, outputTokens: 5 }, stop_reason: "end_turn" },
++    );
++    await bus.flush();
++
++    // 第二轮的 chat span 里不该再有 system_prompt 全文（第一轮已发过 → 证明第一轮真的采了）
++    const chat = spans.find((s) => s.kind === "chat")!;
++    expect(chat.events.map((e) => e.name)).not.toContain("content.system_prompt");
++    // 但第二轮的响应内容照常采到
++    expect(chat.events.map((e) => e.name)).toContain("content.model_output");
++  });
++
++  test("默认（不配环境变量）走真实 Hook 路径也不产生任何内容事件", async () => {
++    const { bus, spans, hookSystem } = setup();
++
++    await hookSystem.fireBeforeModelEvent({
++      model: "claude-sonnet-4",
++      messages: [{ role: "user", content: "机密内容" }],
++      system: "你是 sid-code",
++      tools: [{ name: "read", description: "读文件" }],
++    });
++    await hookSystem.fireAfterModelEvent(
++      { model: "claude-sonnet-4", messages: [{ role: "user", content: "机密内容" }] },
++      { text: "回答", usage: { inputTokens: 10, outputTokens: 5 }, stop_reason: "end_turn" },
++    );
++    await hookSystem.firePostToolUseEvent("read", { file_path: "/secret.ts" }, { content: "机密源码" }, false);
++    await bus.flush();
++
++    const allEvents = spans.flatMap((s) => s.events);
++    expect(allEvents.filter((e) => e.name.startsWith("content."))).toHaveLength(0);
++    // 更强的断言：整个 span 序列化后不含任何被采集的内容原文
++    const dump = JSON.stringify(spans);
++    expect(dump).not.toContain("机密源码");
++    expect(dump).not.toContain("机密内容");
++  });
++
++  test("flag 关掉时经真实 Hook 路径同样不发内容（远端紧急刹车真的能刹住）", async () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env[FLAG_ENV] = "false";
++    const { bus, spans, hookSystem } = setup();
++
++    await hookSystem.fireBeforeModelEvent({
++      model: "claude-sonnet-4",
++      messages: [{ role: "user", content: "hi" }],
++      system: "你是 sid-code",
++    });
++    await hookSystem.fireAfterModelEvent(
++      { model: "claude-sonnet-4", messages: [{ role: "user", content: "hi" }] },
++      { text: "回答", usage: { inputTokens: 10, outputTokens: 5 }, stop_reason: "end_turn" },
++    );
++    await bus.flush();
++
++    expect(spans.flatMap((s) => s.events).filter((e) => e.name.startsWith("content."))).toHaveLength(0);
++  });
++});
++
++describe("内容级 tracing · 接线哨兵（防退化成死代码）", () => {
++  // 这三条是静态断言。它们看起来"没测行为"，但拦的正是本清单 7/11 条缺陷的共同形态：
++  // 代码完整、测试通过、调用点为零。删掉 hook-probe 里的调用，行为测试可能仍绿
++  // （模块函数照样能被直接调用），这里会红。
++
++  test("hook-probe 必须实际调用三个内容采集函数", async () => {
++    const src = await Bun.file("src/telemetry/hook-probe.ts").text();
++    expect(src).toContain("addRequestContent(");
++    expect(src).toContain("addResponseContent(");
++    expect(src).toContain("addToolContent(");
++  });
++
++  test("Feature Flag 必须有 analytics 之外的真实消费者（P1-9）", async () => {
++    // P1-9 的原始缺陷：205 行 flag 系统「除了被初始化一次，没有任何业务代码读取任何 flag」。
++    // 采样与 killswitch 虽然读 flag，但它们同属 analytics 内部、且远端无人配置，
++    // 等于两个永远返回默认值的死开关。这里要求 analytics 目录**之外**至少有一个消费者。
++    const proc = Bun.spawnSync([
++      "rg", "-a", "-l", "getFeatureValue_CACHED_MAY_BE_STALE", "--type", "ts", "src/",
++    ]);
++    const files = new TextDecoder().decode(proc.stdout).trim().split("\n").filter(Boolean);
++    const outsideAnalytics = files.filter((f) => !f.includes("src/analytics/"));
++    expect(outsideAnalytics.length).toBeGreaterThan(0);
++    expect(outsideAnalytics).toContain("src/telemetry/content-tracing.ts");
++  });
++
++  test("内容采集必须过脱敏——不许直接把原文塞进 span", async () => {
++    const src = await Bun.file("src/telemetry/content-tracing.ts").text();
++    expect(src).toContain("maskSensitiveData");
++  });
++});
+diff --git a/tests/telemetry/content-tracing.test.ts b/tests/telemetry/content-tracing.test.ts
+new file mode 100644
+index 0000000..c158fee
+--- /dev/null
++++ b/tests/telemetry/content-tracing.test.ts
+@@ -0,0 +1,535 @@
++/**
++ * 内容级 tracing（缺陷清单 P1-5）+ Feature Flag 真实消费者（P1-9）测试
++ *
++ * 测试锁的是**不变量**，不是实现细节。四组不变量对应清单原文的四个设计点：
++ *
++ *   1. 默认必须关闭（内容级数据的隐私敏感度与常规遥测完全不同）
++ *   2. 同一内容全文只发一次（漏掉去重，功能会因成本过高被迫再关掉）
++ *   3. 截断上限按**字节**封顶（中文 prompt 是本仓库常态，按字符算会超 3 倍）
++ *   4. compact 后 hash 状态清空（否则 span 上留一个指向已失效事件的 hash）
++ *
++ * 另外两组是这批修复自己的关键约束：
++ *   5. 脱敏必须发生在截断**之前**（反了会把横跨截断点的凭证半截裸传出去）
++ *   6. flag 关掉能真的关掉功能（P1-9 要的就是「真实消费者」，不是又一个死开关）
++ */
++
++import { describe, test, expect, beforeEach, afterEach } from "bun:test";
++import { TelemetryBus } from "../../src/telemetry/bus.ts";
++import {
++  isContentTracingEnabled,
++  clearContentTracingState,
++  truncateToBytes,
++  addRequestContent,
++  addResponseContent,
++  addToolContent,
++  getSeenHashCount,
++  MAX_CONTENT_BYTES,
++  CONTENT_TRACING_FLAG,
++} from "../../src/telemetry/content-tracing.ts";
++import {
++  __resetFeatureFlagsForTest,
++  initFeatureFlags,
++} from "../../src/analytics/feature-flags.ts";
++import { setConfiguredPrivacyLevel } from "../../src/analytics/privacy-level.ts";
++import type { SpanData, TelemetryExporter, SpanEvent } from "../../src/telemetry/types.ts";
++import { mkdtempSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++
++const ENV_SWITCH = "SID_CODE_CONTENT_TRACING";
++const FLAG_ENV = `SID_CODE_FLAG_${CONTENT_TRACING_FLAG.toUpperCase()}`;
++
++/** 备份需要改动的环境变量——绝不无条件 delete（同批测试跑在同一进程里，会互相污染） */
++const ENV_KEYS = [
++  ENV_SWITCH,
++  FLAG_ENV,
++  "SID_CODE_DISABLE_TELEMETRY",
++  "SID_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
++];
++let savedEnv: Record<string, string | undefined> = {};
++
++function createBus(): { bus: TelemetryBus; spans: SpanData[] } {
++  const spans: SpanData[] = [];
++  const exporter: TelemetryExporter = {
++    name: "mock",
++    exportSpans: async (batch) => { spans.push(...batch); },
++    shutdown: async () => {},
++  };
++  const bus = new TelemetryBus({ enabled: true, batchSize: 1000, flushIntervalMs: 999_999 });
++  bus.addExporter(exporter);
++  bus.startTrace();
++  return { bus, spans };
++}
++
++/** 结束 span 并取回它的事件列表 */
++async function collectEvents(bus: TelemetryBus, spans: SpanData[]): Promise<SpanEvent[]> {
++  await bus.flush();
++  return spans.flatMap((s) => s.events);
++}
++
++beforeEach(() => {
++  savedEnv = {};
++  for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
++  for (const k of ENV_KEYS) delete process.env[k];
++  setConfiguredPrivacyLevel(null);
++  __resetFeatureFlagsForTest();
++  clearContentTracingState();
++});
++
++afterEach(() => {
++  for (const k of ENV_KEYS) {
++    if (savedEnv[k] === undefined) delete process.env[k];
++    else process.env[k] = savedEnv[k];
++  }
++  setConfiguredPrivacyLevel(null);
++  __resetFeatureFlagsForTest();
++  clearContentTracingState();
++});
++
++// ============================================================
++// 不变量 1：默认关闭
++// ============================================================
++describe("内容级 tracing · 默认关闭（设计点 3）", () => {
++  test("不配任何环境变量时关闭", () => {
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++
++  test("环境变量非 '1' 的各种真值写法都不算开启", () => {
++    for (const v of ["true", "yes", "0", "", "on", "TRUE"]) {
++      process.env[ENV_SWITCH] = v;
++      expect(isContentTracingEnabled()).toBe(false);
++    }
++  });
++
++  test("显式配 1 才开启", () => {
++    process.env[ENV_SWITCH] = "1";
++    expect(isContentTracingEnabled()).toBe(true);
++  });
++
++  test("关闭时不产生任何内容事件——不是「产生了但内容为空」", async () => {
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat test");
++    addRequestContent(span, { system: "你是一个助手", tools: [{ name: "read" }], messages: [{ role: "user", content: "hi" }] });
++    addResponseContent(span, { text: "回答" });
++    addToolContent(span, { toolInput: { path: "/a" }, toolResponse: { ok: true } });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    expect(events.filter((e) => e.name.startsWith("content."))).toHaveLength(0);
++    // 属性侧也不许有残留
++    const attrKeys = Object.keys(spans[0]!.attributes);
++    expect(attrKeys.filter((k) => k.startsWith("sidcode.content."))).toHaveLength(0);
++  });
++});
++
++// ============================================================
++// 不变量 2：隐私级别优先于一切
++// ============================================================
++describe("内容级 tracing · 隐私级别硬约束", () => {
++  test("no-telemetry 下即使显式开启也不发内容", () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env.SID_CODE_DISABLE_TELEMETRY = "1";
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++
++  test("essential-traffic 下即使显式开启也不发内容", () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env.SID_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++
++  test("配置文件设的隐私级别同样生效（不只认环境变量）", () => {
++    process.env[ENV_SWITCH] = "1";
++    setConfiguredPrivacyLevel("no-telemetry");
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++
++  test("隐私级别优先于 flag——flag 显式开也压不过隐私", () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env[FLAG_ENV] = "true";
++    process.env.SID_CODE_DISABLE_TELEMETRY = "1";
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++});
++
++// ============================================================
++// 不变量 6：Feature Flag 是真实消费者（P1-9）
++// ============================================================
++describe("Feature Flag 真实消费者（P1-9）", () => {
++  test("flag 置 false 能真的关掉功能——这就是 P1-9 要的「真实门控」", () => {
++    process.env[ENV_SWITCH] = "1";
++    expect(isContentTracingEnabled()).toBe(true); // 基线：本地开关已开
++
++    process.env[FLAG_ENV] = "false";
++    expect(isContentTracingEnabled()).toBe(false); // flag 否决生效
++  });
++
++  test("flag 关掉后连一条内容事件都不产生（行为断言，不只是布尔断言）", async () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env[FLAG_ENV] = "false";
++
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat test");
++    addRequestContent(span, { system: "你是一个助手" });
++    addResponseContent(span, { text: "回答" });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    expect(events.filter((e) => e.name.startsWith("content."))).toHaveLength(0);
++  });
++
++  test("flag 默认放行（本地开关已是默认关闭，flag 的职责是远端紧急刹车）", () => {
++    process.env[ENV_SWITCH] = "1";
++    // 不配 flag env、无远端配置 → 默认值 true
++    expect(isContentTracingEnabled()).toBe(true);
++  });
++
++  test("反向断言：flag 置 true 时确实放行，证明门控是 flag 驱动而非常关", () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env[FLAG_ENV] = "true";
++    expect(isContentTracingEnabled()).toBe(true);
++  });
++
++  // ── 以下三条锁的是「真实用户配得上」这件事 ──
++  // 只认环境变量的 flag 仍是半死的：企业运维不会给每台机器改 env，他们改 settings.json
++  // 或下发远端配置。所以配置路径与磁盘缓存路径都必须实测能门控，不能只测 env。
++
++  test("settings.json 的 analytics.flags 能门控（localFlags 路径）", () => {
++    process.env[ENV_SWITCH] = "1";
++    const dir = mkdtempSync(join(tmpdir(), "sidcode-flag-"));
++    initFeatureFlags({ configDir: dir, localFlags: { [CONTENT_TRACING_FLAG]: false } });
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++
++  test("磁盘缓存能门控——远端下发 false 后离线冷启动也刹得住", () => {
++    // 这条覆盖的是真实的运维场景：远端把开关关了，用户重启进程时可能拿不到远端配置
++    // （网络不通 / 端点挂了）。若冷启动回落到默认放行，紧急刹车就在最需要的时候失效。
++    process.env[ENV_SWITCH] = "1";
++    const dir = mkdtempSync(join(tmpdir(), "sidcode-flag-"));
++    writeFileSync(
++      join(dir, "feature-flags-cache.json"),
++      JSON.stringify({ [CONTENT_TRACING_FLAG]: false }),
++      "utf-8",
++    );
++    initFeatureFlags({ configDir: dir });
++    expect(isContentTracingEnabled()).toBe(false);
++  });
++
++  test("环境变量优先级高于 localFlags（便于临时排查绕过远端配置）", () => {
++    process.env[ENV_SWITCH] = "1";
++    process.env[FLAG_ENV] = "true";
++    const dir = mkdtempSync(join(tmpdir(), "sidcode-flag-"));
++    initFeatureFlags({ configDir: dir, localFlags: { [CONTENT_TRACING_FLAG]: false } });
++    expect(isContentTracingEnabled()).toBe(true);
++  });
++});
++
++// ============================================================
++// 不变量 3：字节截断
++// ============================================================
++describe("内容级 tracing · 截断按字节封顶（设计点 2）", () => {
++  test("短内容不截断且逐字节保持原文", () => {
++    const r = truncateToBytes("hello 世界");
++    expect(r.truncated).toBe(false);
++    expect(r.content).toBe("hello 世界");
++  });
++
++  test("纯 ASCII 超限后产物字节数不超过上限", () => {
++    const r = truncateToBytes("a".repeat(MAX_CONTENT_BYTES + 5000));
++    expect(r.truncated).toBe(true);
++    expect(new TextEncoder().encode(r.content).length).toBeLessThanOrEqual(MAX_CONTENT_BYTES);
++  });
++
++  test("中文超限后产物字节数不超过上限——这是与 CC 按字符算的关键分歧点", () => {
++    // 30000 个汉字 = 90000 字节。按 UTF-16 长度算只有 30000「字符」，
++    // 若按字符数封顶 60K 就完全不会截断，实际发出去 90KB → 后端静默拒收。
++    const cn = "中".repeat(30_000);
++    const r = truncateToBytes(cn);
++    expect(r.originalBytes).toBe(90_000);
++    expect(r.truncated).toBe(true);
++    expect(new TextEncoder().encode(r.content).length).toBeLessThanOrEqual(MAX_CONTENT_BYTES);
++  });
++
++  test("多字节字符不被切坏——产物里不留 U+FFFD 替换符", () => {
++    // emoji 是 4 字节，截断点极可能落在字符中间
++    const r = truncateToBytes("😀".repeat(20_000));
++    expect(r.truncated).toBe(true);
++    expect(r.content).not.toContain("\uFFFD");
++    expect(new TextEncoder().encode(r.content).length).toBeLessThanOrEqual(MAX_CONTENT_BYTES);
++  });
++
++  test("截断产物带明确标记，消费者能区分「内容就这么短」与「被截了」", () => {
++    const r = truncateToBytes("x".repeat(MAX_CONTENT_BYTES * 2));
++    expect(r.content).toContain("已截断");
++  });
++
++  test("超限内容进 span 时带 content_truncated 标志与原始字节数", async () => {
++    process.env[ENV_SWITCH] = "1";
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat test");
++    addResponseContent(span, { text: "长".repeat(30_000) });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    const ev = events.find((e) => e.name === "content.model_output");
++    expect(ev).toBeDefined();
++    expect(ev!.attributes?.content_truncated).toBe(true);
++    expect(ev!.attributes?.content_bytes).toBe(90_000);
++  });
++});
++
++// ============================================================
++// 不变量 4：hash 去重
++// ============================================================
++describe("内容级 tracing · hash 去重（设计点 1，漏掉它功能会被迫关掉）", () => {
++  beforeEach(() => { process.env[ENV_SWITCH] = "1"; });
++
++  test("同一 system prompt 跨多轮只发一次全文", async () => {
++    const { bus, spans } = createBus();
++    const system = "你是 sid-code 的助手".repeat(100);
++
++    for (let turn = 0; turn < 5; turn++) {
++      const span = bus.startSpan("chat", `chat turn${turn}`);
++      addRequestContent(span, { system });
++      span.end();
++    }
++
++    const events = await collectEvents(bus, spans);
++    const fullText = events.filter((e) => e.name === "content.system_prompt");
++    expect(fullText).toHaveLength(1); // 5 轮，只有 1 次全文
++  });
++
++  test("但每轮 span 上都带 hash + preview + length，靠 hash 关联全文", async () => {
++    const { bus, spans } = createBus();
++    const system = "你是 sid-code 的助手";
++
++    for (let turn = 0; turn < 3; turn++) {
++      const span = bus.startSpan("chat", `chat turn${turn}`);
++      addRequestContent(span, { system });
++      span.end();
++    }
++
++    await bus.flush();
++    expect(spans).toHaveLength(3);
++    const hashes = spans.map((s) => s.attributes["sidcode.content.system_prompt_hash"]);
++    expect(hashes.every((h) => typeof h === "string" && (h as string).length === 12)).toBe(true);
++    expect(new Set(hashes).size).toBe(1); // 同内容 → 同 hash
++    // preview 与长度每轮都有——不必回查全文事件就能看出个大概
++    expect(spans[2]!.attributes["sidcode.content.system_prompt_preview"]).toBe(system);
++    expect(spans[2]!.attributes["sidcode.content.system_prompt_bytes"]).toBeGreaterThan(0);
++  });
++
++  test("system prompt 变了要重新发一次全文", async () => {
++    const { bus, spans } = createBus();
++    const s1 = bus.startSpan("chat", "chat 1");
++    addRequestContent(s1, { system: "版本 A" });
++    s1.end();
++    const s2 = bus.startSpan("chat", "chat 2");
++    addRequestContent(s2, { system: "版本 B" });
++    s2.end();
++
++    const events = await collectEvents(bus, spans);
++    expect(events.filter((e) => e.name === "content.system_prompt")).toHaveLength(2);
++  });
++
++  test("工具 schema 按**单个工具**去重：新增一个工具不会把其余全部重发", async () => {
++    const { bus, spans } = createBus();
++    const read = { name: "read", description: "读文件" };
++    const write = { name: "write", description: "写文件" };
++
++    const s1 = bus.startSpan("chat", "chat 1");
++    addRequestContent(s1, { tools: [read, write] });
++    s1.end();
++
++    // 第二轮多了一个工具——若按列表整体 hash，read/write 会被重发
++    const s2 = bus.startSpan("chat", "chat 2");
++    addRequestContent(s2, { tools: [read, write, { name: "bash", description: "跑命令" }] });
++    s2.end();
++
++    const events = await collectEvents(bus, spans);
++    const schemas = events.filter((e) => e.name === "content.tool_schema");
++    expect(schemas).toHaveLength(3); // read + write + bash，而不是 2 + 3 = 5
++  });
++
++  test("MCP 工具名在事件属性里已脱敏，不裸传用户私有服务名", async () => {
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat 1");
++    addRequestContent(span, { tools: [{ name: "mcp__acme_internal__deploy", description: "d" }] });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    const schema = events.find((e) => e.name === "content.tool_schema");
++    expect(schema!.attributes?.tool_name).toBe("mcp_tool");
++    expect(String(schema!.attributes?.tool_name)).not.toContain("acme_internal");
++  });
++
++  test("消息只发增量：重复的历史消息不再重发", async () => {
++    const { bus, spans } = createBus();
++    const m1 = { role: "user", content: "第一条" };
++    const m2 = { role: "assistant", content: "第二条" };
++    const m3 = { role: "user", content: "第三条" };
++
++    const s1 = bus.startSpan("chat", "chat 1");
++    addRequestContent(s1, { messages: [m1, m2] });
++    s1.end();
++    const s2 = bus.startSpan("chat", "chat 2");
++    addRequestContent(s2, { messages: [m1, m2, m3] }); // 全量历史 + 1 条新的
++    s2.end();
++
++    await bus.flush();
++    // 第二轮总量 3、新增 1
++    expect(spans[1]!.attributes["sidcode.content.messages_total"]).toBe(3);
++    expect(spans[1]!.attributes["sidcode.content.messages_new"]).toBe(1);
++
++    const events = spans.flatMap((s) => s.events).filter((e) => e.name === "content.new_messages");
++    expect(events).toHaveLength(2);
++    expect(events[1]!.attributes?.message_count).toBe(1);
++    expect(String(events[1]!.attributes?.content)).toContain("第三条");
++    expect(String(events[1]!.attributes?.content)).not.toContain("第一条");
++  });
++
++  test("工具入参/结果**不**去重——重复调用本身就是要观察的现象", async () => {
++    const { bus, spans } = createBus();
++    for (let i = 0; i < 3; i++) {
++      const span = bus.startSpan("execute_tool", "execute_tool read");
++      addToolContent(span, { toolInput: { path: "/same.ts" }, toolResponse: { content: "同样的内容" } });
++      span.end();
++    }
++
++    const events = await collectEvents(bus, spans);
++    // 模型连读同一个文件 3 次是「原地打转」的信号，去重会把这个信号抹掉
++    expect(events.filter((e) => e.name === "content.tool_input")).toHaveLength(3);
++    expect(events.filter((e) => e.name === "content.tool_result")).toHaveLength(3);
++  });
++});
++
++// ============================================================
++// 不变量 5：compact 后清状态
++// ============================================================
++describe("内容级 tracing · compact 后清 hash 状态（设计点 4）", () => {
++  beforeEach(() => { process.env[ENV_SWITCH] = "1"; });
++
++  test("clearContentTracingState 之后同一 system prompt 会重发全文", async () => {
++    const { bus, spans } = createBus();
++    const system = "压缩前后都一样的 system prompt";
++
++    const s1 = bus.startSpan("chat", "chat 1");
++    addRequestContent(s1, { system });
++    s1.end();
++
++    // 模拟 compact
++    clearContentTracingState();
++
++    const s2 = bus.startSpan("chat", "chat 2");
++    addRequestContent(s2, { system });
++    s2.end();
++
++    const events = await collectEvents(bus, spans);
++    // 不清状态的话这里只有 1 条，span 上却带着 hash → 拿着 hash 找不到内容
++    expect(events.filter((e) => e.name === "content.system_prompt")).toHaveLength(2);
++  });
++
++  test("清空后 hash 计数归零", () => {
++    const { bus } = createBus();
++    const span = bus.startSpan("chat", "chat 1");
++    addRequestContent(span, { system: "x", tools: [{ name: "read" }] });
++    span.end();
++    expect(getSeenHashCount()).toBeGreaterThan(0);
++
++    clearContentTracingState();
++    expect(getSeenHashCount()).toBe(0);
++  });
++
++  test("runPostCompact 是 auto 与手动压缩共同的收尾点——清理挂在那里才不漏手动路径", async () => {
++    // 这条是结构断言：防止后续维护把清理搬回 auto-compact 的三个出口，
++    // 那样手动 /compact 就不清了，而「只有手动压缩后 hash 不失效」极难被想到去查。
++    const src = await Bun.file("src/query/compact/post-compact.ts").text();
++    expect(src).toContain("clearContentTracingState");
++  });
++});
++
++// ============================================================
++// 不变量 7：脱敏在截断之前
++// ============================================================
++describe("内容级 tracing · 脱敏（顺序：先脱敏再截断）", () => {
++  beforeEach(() => { process.env[ENV_SWITCH] = "1"; });
++
++  test("内容里的密钥被脱敏后才进 span", async () => {
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat 1");
++    addResponseContent(span, { text: 'export AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"' });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    const body = String(events.find((e) => e.name === "content.model_output")!.attributes?.content);
++    expect(body).toContain("*");
++    expect(body).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
++  });
++
++  test("横跨截断点的凭证不会被切成半截裸传——先截断再脱敏就会漏", async () => {
++    const { bus, spans } = createBus();
++    const secret = 'AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"';
++    // 把凭证放在恰好跨越字节上限的位置：前面塞到只剩几十字节
++    const padding = "a".repeat(MAX_CONTENT_BYTES - 20);
++    const span = bus.startSpan("chat", "chat 1");
++    addResponseContent(span, { text: padding + secret });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    const body = String(events.find((e) => e.name === "content.model_output")!.attributes?.content);
++    // 关键断言：产物里绝不能出现密钥明文的任何一段可辨识前缀
++    expect(body).not.toContain("wJalrXUtnFEMI");
++  });
++
++  test("工具入参里的路径与内容也过脱敏", async () => {
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("execute_tool", "execute_tool bash");
++    addToolContent(span, {
++      toolInput: { command: 'curl -H "Authorization: Bearer sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"' },
++    });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    const body = String(events.find((e) => e.name === "content.tool_input")!.attributes?.content);
++    expect(body).not.toContain("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
++  });
++});
++
++// ============================================================
++// 健壮性：旁路绝不影响主流程
++// ============================================================
++describe("内容级 tracing · 旁路健壮性", () => {
++  beforeEach(() => { process.env[ENV_SWITCH] = "1"; });
++
++  test("循环引用不抛异常", () => {
++    const { bus } = createBus();
++    const span = bus.startSpan("chat", "chat 1");
++    const circular: Record<string, unknown> = { a: 1 };
++    circular.self = circular;
++    expect(() => addRequestContent(span, { system: circular })).not.toThrow();
++    expect(() => addToolContent(span, { toolInput: circular })).not.toThrow();
++    span.end();
++  });
++
++  test("空 / undefined 载荷不产生空事件", async () => {
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat 1");
++    addRequestContent(span, {});
++    addResponseContent(span, {});
++    addToolContent(span, {});
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    expect(events.filter((e) => e.name.startsWith("content."))).toHaveLength(0);
++  });
++
++  test("空字符串文本不产生事件（区别于「内容为空的事件」）", async () => {
++    const { bus, spans } = createBus();
++    const span = bus.startSpan("chat", "chat 1");
++    addResponseContent(span, { text: "" });
++    span.end();
++
++    const events = await collectEvents(bus, spans);
++    expect(events.filter((e) => e.name === "content.model_output")).toHaveLength(0);
++  });
++});

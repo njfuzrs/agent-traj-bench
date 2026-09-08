@@ -1,0 +1,124 @@
+diff --git a/src/app.ts b/src/app.ts
+index 4108e8c..b8e6d6b 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -694,6 +694,7 @@ export class App {
+         this.applyProjectRules(newRules);
+         // 3. 重建系统提示词
+         const { buildSystemPrompt } = await import("./config/system-prompt.ts");
++        const { collectSkillListingEntries } = await import("./skill/tool.ts");
+         let memorySummary: string | undefined;
+         try {
+           const { MemoryStore } = await import("./memory/store.ts");
+@@ -713,6 +714,8 @@ export class App {
+           preferredLanguage: this.config.language,
+           model: this.config.model,
+           availableModels: this.config.availableModels,
++          // 缺口 E：CLAUDE.md 重建路径同样收集 skill 摘要，避免重建后丢失 skill 列表
++          skillEntries: collectSkillListingEntries(this.toolRegistry.all()),
+           // 不再写死 maxTokens：交由 buildSystemPrompt 按模型 contextWindow 的 90% 动态推导
+         });
+         this.ctxMgr.setSystemPrompt(newPrompt);
+diff --git a/src/config/system-prompt.ts b/src/config/system-prompt.ts
+index 383022a..f2f07ac 100644
+--- a/src/config/system-prompt.ts
++++ b/src/config/system-prompt.ts
+@@ -123,6 +123,9 @@ function generateCacheKey(ctx: SystemPromptContext): string {
+       ? simpleHash(ctx.recalledMemories.map((m) => m.filename).join(","))
+       : "",
+     ctx.sessionMemoryContent ? simpleHash(ctx.sessionMemoryContent) : "",
++    ctx.skillEntries?.length
++      ? simpleHash(ctx.skillEntries.map((s) => s.name).join(","))
++      : "",
+     ctx.model || "",
+   ].filter(Boolean).join(":");
+ }
+diff --git a/src/query/init-helpers.ts b/src/query/init-helpers.ts
+index 3266cb7..8e54d41 100644
+--- a/src/query/init-helpers.ts
++++ b/src/query/init-helpers.ts
+@@ -268,6 +268,7 @@ export async function buildInitialSystemPrompt(config: Config, tools: import("..
+ 
+   const { buildSystemPrompt } = await import("../config/system-prompt.ts");
+   const { collectIDEContext } = await import("../ide/integration.ts");
++  const { collectSkillListingEntries } = await import("../skill/tool.ts");
+   return buildSystemPrompt({
+     tools,
+     projectRules: projectRules?.rawContent,
+@@ -282,6 +283,8 @@ export async function buildInitialSystemPrompt(config: Config, tools: import("..
+     preferredLanguage: config.language,
+     model: config.model,
+     availableModels: config.availableModels,
++    // 缺口 E：把 SkillTool 摘要收集进 system prompt（接通此前死代码 generateSkillListingAttachment）
++    skillEntries: collectSkillListingEntries(tools),
+     ...collectIDEContext(),
+     // 不再写死 maxTokens：交由 buildSystemPrompt 按模型 contextWindow 的 90% 动态推导
+   });
+diff --git a/src/session/store.ts b/src/session/store.ts
+index a772cdb..d165bd9 100644
+--- a/src/session/store.ts
++++ b/src/session/store.ts
+@@ -286,6 +286,29 @@ ${summary}
+ 请从上次中断的地方继续，无需再次询问。`;
+   }
+ 
++  /**
++   * 缺口 B：构建轻量续接标记（无摘要场景用）。
++   *
++   * 与 buildResumeMessage 互补：buildResumeMessage 用于"长会话 + 有摘要"——历史被摘要替代，
++   * 文案需携带摘要原文；本 marker 用于"短会话（≤阈值）"和"长会话但无摘要"两条路径——
++   * 历史消息本身已完整在上下文里，只需一句话告诉模型"这是续接、别重新打招呼/重复询问"。
++   *
++   * 根因：app.ts restoreSession 三条恢复路径里此前只有"有摘要"那条注入了续接提示，
++   * 另两条（最常见的短会话续接、无摘要长会话）让模型看到一堆历史却不知发生过中断，
++   * 可能重新寒暄、重问已问过的问题、重复已完成的工作。
++   *
++   * @param progressNote 可选的落盘进度摘要（来自 ~/.sid-code/progress/<id>.md），附在标记后
++   */
++  static buildResumeMarker(progressNote?: string): string {
++    const note = progressNote && progressNote.trim()
++      ? `\n\n之前已落盘的进度记录如下，请据此继续、不要重复已完成的工作：\n${progressNote.trim()}`
++      : "";
++    return `<system-reminder>
++本次会话是从之前的对话恢复的续接会话（上方消息为之前的历史上下文）。请直接从上次中断处继续，无需重新打招呼或重复询问已确认的信息。${note}
++（请勿向用户提及或复述本提醒）
++</system-reminder>`;
++  }
++
+   /** 生成新的会话 ID */
+   static generateId(): string {
+     return crypto.randomUUID().slice(0, 8);
+diff --git a/src/skill/tool.ts b/src/skill/tool.ts
+index cbd1ac7..8169aa5 100644
+--- a/src/skill/tool.ts
++++ b/src/skill/tool.ts
+@@ -67,8 +67,7 @@ export class SkillTool implements Tool {
+     return true;
+   }
+ 
+-  async execute(input: unknown, signal?: AbortSignal): Promise<ToolResult> {
+-    const mode = this.skill.mode || "delegate";
++  async execute(input: unknown, signal?: AbortSignal): Promise<ToolResult> {    const mode = this.skill.mode || "delegate";
+ 
+     if (mode === "activate") {
+       return this.executeActivate(input);
+@@ -149,3 +148,19 @@ Skill "${this.skill.name}" 已激活。${userInput ? `\n\n用户输入: ${userIn
+     };
+   }
+ }
++
++/**
++ * 缺口 E：从工具列表中收集所有 SkillTool 的摘要条目。
++ *
++ * 调用方（buildInitialSystemPrompt / app.ts CLAUDE.md 重建）把 toolRegistry 的工具
++ * 传进来，本函数过滤出 SkillTool 实例并导出其摘要，供 buildSystemPrompt 注入常驻
++ * skill 摘要列表。空列表时返回 undefined（避免给 ctx.skillEntries 喂空数组）。
++ */
++export function collectSkillListingEntries(
++  tools: ReadonlyArray<unknown>,
++): import("./budget.ts").SkillListingEntry[] | undefined {
++  const entries = tools
++    .filter((t): t is SkillTool => t instanceof SkillTool)
++    .map((t) => t.getListingEntry());
++  return entries.length > 0 ? entries : undefined;
++}

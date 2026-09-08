@@ -1,0 +1,932 @@
+diff --git a/scripts/provider-health.ts b/scripts/provider-health.ts
+new file mode 100644
+index 0000000..7405e92
+--- /dev/null
++++ b/scripts/provider-health.ts
+@@ -0,0 +1,122 @@
++#!/usr/bin/env bun
++/**
++ * T15.3：Provider 健康度 CLI 看板
++ *
++ * 用法：
++ *   bun run scripts/provider-health.ts [--period 1h|24h|7d] [--provider deepseek]
++ *
++ * 从最近 N 个会话的 events.jsonl 聚合各 provider 的健康指标并输出格式化看板。
++ */
++
++import { aggregateProviderHealth, type HealthReport } from "../src/telemetry/provider-health.ts";
++
++// ─── 参数解析 ───
++
++const args = process.argv.slice(2);
++let periodMs = 3600_000; // 默认 1h
++let filterProvider: string | undefined;
++
++for (let i = 0; i < args.length; i++) {
++  if (args[i] === "--period" && args[i + 1]) {
++    const v = args[++i];
++    if (v === "1h") periodMs = 3600_000;
++    else if (v === "24h") periodMs = 86400_000;
++    else if (v === "7d") periodMs = 86400_000 * 7;
++    else { console.error(`未知周期: ${v}，支持 1h/24h/7d`); process.exit(1); }
++  } else if (args[i] === "--provider" && args[i + 1]) {
++    filterProvider = args[++i];
++  } else if (args[i] === "--help" || args[i] === "-h") {
++    console.log("用法: bun run scripts/provider-health.ts [--period 1h|24h|7d] [--provider NAME]");
++    process.exit(0);
++  }
++}
++
++// ─── 运行聚合 ───
++
++const report = aggregateProviderHealth({ periodMs, provider: filterProvider });
++
++// ─── 渲染看板 ───
++
++const ANSI = {
++  reset: "\x1b[0m",
++  bold: "\x1b[1m",
++  red: "\x1b[31m",
++  green: "\x1b[32m",
++  yellow: "\x1b[33m",
++  cyan: "\x1b[36m",
++  gray: "\x1b[90m",
++};
++
++function c(color: keyof typeof ANSI, text: string): string {
++  return `${ANSI[color]}${text}${ANSI.reset}`;
++}
++
++function renderReport(report: HealthReport): void {
++  console.log("");
++  console.log(c("bold", `  ═══ Provider 健康度看板 ═══  周期: ${report.periodLabel}  生成: ${report.generatedAt.slice(11, 19)}`));
++  console.log("");
++
++  if (report.providers.length === 0) {
++    console.log(c("gray", "  无数据（指定时间范围内无 events.jsonl 事件）"));
++    return;
++  }
++
++  // 告警区
++  if (report.alerts.length > 0) {
++    console.log(c("bold", "  ⚠ 告警:"));
++    for (const alert of report.alerts) {
++      const icon = alert.severity === "critical" ? c("red", "✘") : c("yellow", "⚡");
++      console.log(`    ${icon} [${alert.provider}] ${alert.message}`);
++    }
++    console.log("");
++  }
++
++  // 表格
++  const header = `  ${"Provider".padEnd(15)} ${"请求".padStart(6)} ${"成功率".padStart(7)} ${"超时".padStart(5)} ${"重试".padStart(5)} ${"TTFT P50".padStart(10)} ${"TTFT P95".padStart(10)} ${"P95 延迟".padStart(10)}`;
++  console.log(c("gray", header));
++  console.log(c("gray", "  " + "─".repeat(75)));
++
++  for (const p of report.providers) {
++    const successRate = p.requests.total > 0
++      ? (p.requests.succeeded / p.requests.total * 100).toFixed(1) + "%"
++      : "N/A";
++    const rateColor = p.requests.total > 0 && p.requests.succeeded / p.requests.total < 0.95 ? "red" : "green";
++
++    const ttftP50 = p.latency.ttft_p50 ? `${(p.latency.ttft_p50 / 1000).toFixed(1)}s` : "-";
++    const ttftP95 = p.latency.ttft_p95 ? `${(p.latency.ttft_p95 / 1000).toFixed(1)}s` : "-";
++    const totalP95 = p.latency.total_p95 ? `${(p.latency.total_p95 / 1000).toFixed(1)}s` : "-";
++
++    const timeoutStr = String(p.requests.timedOut);
++    const retryStr = String(p.requests.retried);
++
++    console.log(
++      `  ${c("cyan", p.provider.padEnd(15))} ` +
++      `${String(p.requests.total).padStart(6)} ` +
++      `${c(rateColor, successRate.padStart(7))} ` +
++      `${(p.requests.timedOut > 0 ? c("yellow", timeoutStr) : timeoutStr).padStart(5 + (p.requests.timedOut > 0 ? 9 : 0))} ` +
++      `${retryStr.padStart(5)} ` +
++      `${ttftP50.padStart(10)} ` +
++      `${ttftP95.padStart(10)} ` +
++      `${totalP95.padStart(10)}`
++    );
++
++    // 超时分布详情
++    if (Object.keys(p.timeouts.byLayer).length > 0) {
++      const layers = Object.entries(p.timeouts.byLayer).map(([k, v]) => `${k}:${v}`).join(" ");
++      console.log(c("gray", `${"".padStart(18)}超时分布: ${layers}`));
++    }
++  }
++
++  console.log("");
++
++  // 重试/降级汇总
++  const totalRetries = report.providers.reduce((s, p) => s + p.retries.total, 0);
++  const totalFallbacks = report.providers.reduce((s, p) => s + p.retries.fallbackTriggered, 0);
++  const totalExhausted = report.providers.reduce((s, p) => s + p.retries.exhausted, 0);
++  if (totalRetries > 0 || totalFallbacks > 0) {
++    console.log(c("gray", `  重试: ${totalRetries}  降级: ${totalFallbacks}  重试耗尽: ${totalExhausted}`));
++    console.log("");
++  }
++}
++
++renderReport(report);
+diff --git a/src/agent/agentic-loop.ts b/src/agent/agentic-loop.ts
+index 65c2b6f..82eb602 100644
+--- a/src/agent/agentic-loop.ts
++++ b/src/agent/agentic-loop.ts
+@@ -13,6 +13,7 @@ import { accumulateUsage, normalizeCacheUsage } from "../llm/types.ts";
+ import { Manager as ContextManager } from "../context/manager.ts";
+ import { Registry as ToolRegistry } from "../tool/registry.ts";
+ import { getLogger } from "../debug/logger.ts";
++import { emitStreamPhase } from "../trace/stream-observer.ts";
+ import type { HookSystem } from "../hook/system.ts";
+ import { LoopDetector, LOOP_RECOVERY_PROMPT } from "./loop-detection.ts";
+ import { processStream, type StreamProcessResult } from "./stream-processor.ts";
+@@ -131,6 +132,12 @@ export async function runAgentLoop(config: AgentLoopConfig): Promise<AgentLoopRe
+     // 5min Promise.race——它在 Bun 事件循环阻塞时可能延迟数分钟才 fire）。
+     const turnAbort = new AbortController();
+     const combinedSignal = AbortSignal.any([signal, turnAbort.signal]);
++
++    // T13.1：子代理 LLM 调用 StreamPhase 事件（fetch_sent）
++    const agentStreamIndex = 10000 + turns;
++    const turnStartTime = Date.now();
++    emitStreamPhase(agentStreamIndex, "fetch_sent", { caller: "sub-agent", model });
++
+     const stream = provider.sendMessageStream(sendParams, combinedSignal);
+ 
+     // B2: 子代理硬超时保护（对齐主循环 L1），作为 T4 setInterval 心跳之上的最后兜底
+@@ -151,7 +158,11 @@ export async function runAgentLoop(config: AgentLoopConfig): Promise<AgentLoopRe
+         }),
+         timeoutPromise,
+       ]);
++      // T13.1：子代理 LLM 调用完成
++      emitStreamPhase(agentStreamIndex, "completed", { caller: "sub-agent", model, elapsed_ms: Date.now() - turnStartTime });
+     } catch (err: any) {
++      // T13.1：子代理 LLM 调用失败
++      emitStreamPhase(agentStreamIndex, "error", { caller: "sub-agent", model, error: err.message, elapsed_ms: Date.now() - turnStartTime });
+       // 超时或 abort 都走错误返回
+       log.error("AGENT_LOOP", `流式处理异常: ${err.message}`);
+       return {
+diff --git a/src/app.ts b/src/app.ts
+index 22bf9a6..d5c3fac 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1235,6 +1235,13 @@ export class App {
+       (this.queryEngine as any).deps.traceCollector = traceCollector;
+     }
+ 
++    // T12：绑定 RetryTelemetry 事件写入器（延迟绑定，此时 writer 已就绪）
++    if (traceCollector) {
++      this._retryTelemetryWriter = (event) => {
++        traceCollector.writeRetryTelemetry(event as unknown as Record<string, unknown>);
++      };
++    }
++
+     // session_start hook（非阻塞）。
+     // Bug3 桥接：resume 时上报 source="resume" + resumedFrom=旧会话 id，
+     // 使 trajectory 元数据能反查到 SessionStore 的 sessions/{旧id}.jsonl。
+diff --git a/src/hook/types.ts b/src/hook/types.ts
+index 910a0d8..c578875 100644
+--- a/src/hook/types.ts
++++ b/src/hook/types.ts
+@@ -281,6 +281,8 @@ export interface AfterModelInput extends HookInput {
+     cache_savings_usd?: number;
+     /** 首 token 延迟（毫秒），供 telemetry probe 消费 */
+     ttft_ms?: number;
++    /** T12.3：Provider 名称（"anthropic" | "openai" | "ollama" 等） */
++    provider?: string;
+   };
+ 
+   // ── Harness 扩展点 ──
+diff --git a/src/llm/anthropic.ts b/src/llm/anthropic.ts
+index e24c998..b7edfcc 100644
+--- a/src/llm/anthropic.ts
++++ b/src/llm/anthropic.ts
+@@ -28,7 +28,7 @@ import { updateRateLimitStatus } from "../api/rate-limit.ts";
+ import { guardOutgoingMessages } from "./protocol-sentinel.ts";
+ import { createStreamLifecycle, LIFECYCLE_PRESETS } from "./stream-lifecycle.ts";
+ import type { StreamTelemetrySignal } from "./types.ts";
+-import { emitTimeoutFired } from "../trace/stream-observer.ts";
++import { emitTimeoutFired, emitStreamPhase } from "../trace/stream-observer.ts";
+ import { currentSseDumpContext } from "./sse-chunk-dumper.ts";
+ import { normalizeToolInput } from "./normalize-tool-input.ts";
+ import { buildSystemBlocks } from "../api/cache-strategy.ts";
+@@ -360,7 +360,12 @@ export class AnthropicProvider implements Provider {
+               // 记录首 token 延迟（TTFT）
+               if (!firstTokenTime) {
+                 firstTokenTime = Date.now();
+-                log.debug("LLM:ANTHROPIC", `首 token 延迟: ${firstTokenTime - requestStartTime}ms`);
++                const ttft = firstTokenTime - requestStartTime;
++                log.debug("LLM:ANTHROPIC", `首 token 延迟: ${ttft}ms`);
++                // T14.2：emit first_content StreamPhase
++                try {
++                  emitStreamPhase(currentSseDumpContext().turnIndex, "first_content", { ttft_ms: ttft, model: this._model });
++                } catch { /* 可观测性不影响主流程 */ }
+               }
+ 
+               if (delta.type === "text_delta") {
+diff --git a/src/llm/openai.ts b/src/llm/openai.ts
+index 2425efa..4ffbdf7 100644
+--- a/src/llm/openai.ts
++++ b/src/llm/openai.ts
+@@ -768,7 +768,10 @@ export class OpenAIProvider implements Provider {
+         // 记录首 token 延迟（TTFT）
+         if (event.type === "content_block_delta" && !firstTokenTime) {
+           firstTokenTime = Date.now();
+-          log.debug("LLM:OPENAI", `首 token 延迟: ${firstTokenTime - requestStartTime}ms`);
++          const ttft = firstTokenTime - requestStartTime;
++          log.debug("LLM:OPENAI", `首 token 延迟: ${ttft}ms`);
++          // T14.1：emit first_content StreamPhase
++          emitStreamPhase(obsIndex, "first_content", { ttft_ms: ttft, model: effectiveModel });
+         }
+ 
+         // PARSE-4：累积文本增量（仅文本，工具调用 JSON 不计入输出估算的主体）
+diff --git a/src/memory/recall.ts b/src/memory/recall.ts
+index 3d3e0b3..4cf28c7 100644
+--- a/src/memory/recall.ts
++++ b/src/memory/recall.ts
+@@ -97,6 +97,19 @@ export async function findRelevantMemories(
+     selectedNames = parseSelection(out, validFilenames);
+   } catch (err: any) {
+     log.debug("MEMORY", `记忆召回 sideQuery 失败，跳过: ${err.message}`);
++    // T13.3：记录失败的 side-call
++    recordSideCall({
++      label: "memory-recall",
++      model: "unknown",
++      inputTokens: 0,
++      outputTokens: 0,
++      cacheReadTokens: 0,
++      cacheCreationTokens: 0,
++      durationMs: 0,
++      success: false,
++      error: err.message,
++      timedOut: /timeout|超时|timed out/i.test(err.message),
++    });
+     return [];
+   }
+ 
+diff --git a/src/query/auto-compact.ts b/src/query/auto-compact.ts
+index 8b9e8d7..c9136b6 100644
+--- a/src/query/auto-compact.ts
++++ b/src/query/auto-compact.ts
+@@ -271,6 +271,19 @@ async function doAutoCompact(
+   } catch (err: any) {
+     log.warn("COMPACT", `LLM 摘要失败，使用简单截断: ${err.message}`);
+     recordFailure();
++    // T13.3：记录失败的 side-call
++    recordSideCall({
++      label: "auto-compact",
++      model: deps.compactModel || deps.config.model,
++      inputTokens: 0,
++      outputTokens: 0,
++      cacheReadTokens: 0,
++      cacheCreationTokens: 0,
++      durationMs: 0,
++      success: false,
++      error: err.message,
++      timedOut: /timeout|超时|timed out/i.test(err.message),
++    });
+   }
+ 
+   // 降级：简单截断
+diff --git a/src/query/compact/context-collapse.ts b/src/query/compact/context-collapse.ts
+index e99c4ec..fc58900 100644
+--- a/src/query/compact/context-collapse.ts
++++ b/src/query/compact/context-collapse.ts
+@@ -242,6 +242,19 @@ export async function contextCollapse(
+       prevSummary = summary;
+     } catch (err: any) {
+       log.warn("CONTEXT_COLLAPSE", `段 [${seg.start},${seg.end}) 摘要失败: ${err.message}`);
++      // T13.3：记录失败的 side-call
++      recordSideCall({
++        label: "context-collapse",
++        model: options.model,
++        inputTokens: 0,
++        outputTokens: 0,
++        cacheReadTokens: 0,
++        cacheCreationTokens: 0,
++        durationMs: 0,
++        success: false,
++        error: err.message,
++        timedOut: /timeout|超时|timed out/i.test(err.message),
++      });
+       // 单段失败不影响其它段
+     }
+   }
+diff --git a/src/query/loop.ts b/src/query/loop.ts
+index 8071697..5fc38dd 100644
+--- a/src/query/loop.ts
++++ b/src/query/loop.ts
+@@ -1101,6 +1101,7 @@ export async function* queryLoop(
+           api_duration_ms: apiDuration,
+           cache_savings_usd: cacheSavingsUSD,
+           ttft_ms: ttftMs,
++          provider: config.provider,  // T12.3：Provider 维度标记
+         },
+       );
+       if (afterModelResult.finalOutput?.isBlockingDecision()) {
+diff --git a/src/session/warmup.ts b/src/session/warmup.ts
+index 121d326..2f5ecc6 100644
+--- a/src/session/warmup.ts
++++ b/src/session/warmup.ts
+@@ -95,6 +95,19 @@ export async function warmupPromptCache(params: WarmupParams): Promise<boolean>
+   } catch (err: any) {
+     // 预热失败完全无害——只意味着首轮请求会 cache_creation 而非 cache_read
+     log.debug("CACHE_WARMUP", `预热失败（非阻断）: ${err?.message?.slice(0, 100)}`);
++    // T13.3：记录失败的 side-call
++    recordSideCall({
++      label: "cache-warmup",
++      model: "",
++      inputTokens: 0,
++      outputTokens: 0,
++      cacheReadTokens: 0,
++      cacheCreationTokens: 0,
++      durationMs: 0,
++      success: false,
++      error: err?.message?.slice(0, 200),
++      timedOut: /timeout|超时|timed out/i.test(err?.message ?? ""),
++    });
+     return false;
+   }
+ }
+diff --git a/src/telemetry/provider-health.ts b/src/telemetry/provider-health.ts
+new file mode 100644
+index 0000000..b981e50
+--- /dev/null
++++ b/src/telemetry/provider-health.ts
+@@ -0,0 +1,269 @@
++/**
++ * T15：Provider 健康度聚合
++ *
++ * 从 events.jsonl 聚合各 provider 的健康指标：成功率/延迟/超时/重试。
++ * 供 CLI 看板和 digest 集成使用。
++ */
++
++import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
++import { join } from "node:path";
++import { sidPaths } from "../config/paths.ts";
++
++// ─── 接口定义 ───
++
++export interface ProviderHealthMetrics {
++  provider: string;
++  period: { start: number; end: number };
++  requests: {
++    total: number;
++    succeeded: number;
++    failed: number;
++    timedOut: number;
++    retried: number;
++  };
++  latency: {
++    ttft_p50?: number;
++    ttft_p95?: number;
++    ttft_p99?: number;
++    total_p50?: number;
++    total_p95?: number;
++  };
++  timeouts: {
++    byLayer: Record<string, number>;
++  };
++  retries: {
++    total: number;
++    exhausted: number;
++    fallbackTriggered: number;
++  };
++}
++
++export interface HealthReport {
++  generatedAt: string;
++  periodLabel: string;
++  providers: ProviderHealthMetrics[];
++  alerts: HealthAlert[];
++}
++
++export interface HealthAlert {
++  provider: string;
++  severity: "warning" | "critical";
++  message: string;
++}
++
++// ─── 核心聚合逻辑 ───
++
++interface RawEvent {
++  event?: string;
++  timestamp?: string;
++  data?: Record<string, unknown>;
++}
++
++interface ProviderAccumulator {
++  totalLatencies: number[];
++  ttfts: number[];
++  requests: number;
++  failed: number;
++  timedOut: number;
++  retried: number;
++  exhausted: number;
++  fallbackTriggered: number;
++  timeoutsByLayer: Record<string, number>;
++  timestamps: number[];
++}
++
++/**
++ * 从指定时间范围内的 events.jsonl 文件聚合 provider 健康指标。
++ */
++export function aggregateProviderHealth(options: {
++  periodMs?: number;
++  provider?: string;
++  sessionsDir?: string;
++}): HealthReport {
++  const {
++    periodMs = 3600_000, // 默认 1h
++    provider: filterProvider,
++    sessionsDir,
++  } = options;
++
++  const trajDir = sessionsDir || join(sidPaths.trajectories(), "sessions");
++  const cutoffTs = Date.now() - periodMs;
++
++  // 收集所有符合时间范围的 session 目录
++  const events = collectEvents(trajDir, cutoffTs);
++
++  // 按 provider 聚合
++  const accumulators = new Map<string, ProviderAccumulator>();
++  const ensure = (p: string): ProviderAccumulator => {
++    if (!accumulators.has(p)) {
++      accumulators.set(p, {
++        totalLatencies: [],
++        ttfts: [],
++        requests: 0,
++        failed: 0,
++        timedOut: 0,
++        retried: 0,
++        exhausted: 0,
++        fallbackTriggered: 0,
++        timeoutsByLayer: {},
++        timestamps: [],
++      });
++    }
++    return accumulators.get(p)!;
++  };
++
++  for (const e of events) {
++    if (e.event === "AfterModelRaw" && e.data) {
++      const prov = (e.data.provider as string) || "unknown";
++      if (filterProvider && prov !== filterProvider) continue;
++      const acc = ensure(prov);
++      acc.requests++;
++      const elapsed = (e.data.elapsed_ms as number) || 0;
++      if (elapsed > 0) acc.totalLatencies.push(elapsed);
++      const ttft = e.data.ttft_ms as number | undefined;
++      if (ttft && ttft > 0) acc.ttfts.push(ttft);
++      const ts = e.timestamp ? new Date(e.timestamp).getTime() : 0;
++      if (ts > 0) acc.timestamps.push(ts);
++    }
++
++    if (e.event === "RetryTelemetry" && e.data) {
++      const prov = (e.data.provider as string) || (e.data.model as string) || "unknown";
++      if (filterProvider && prov !== filterProvider) continue;
++      const acc = ensure(prov);
++      const type = e.data.type as string;
++      if (type === "retry") acc.retried++;
++      else if (type === "529_dropped") acc.failed++;
++      else if (type === "fallback") acc.fallbackTriggered++;
++      else if (type === "persistent_failure") acc.exhausted++;
++      else if (type?.includes("timeout")) acc.timedOut++;
++    }
++
++    if (e.event === "TimeoutFired" && e.data) {
++      const layer = (e.data.layer as string) || "unknown";
++      const model = (e.data.model as string) || "";
++      const prov = model.includes("deepseek") ? "openai" : model.includes("claude") ? "anthropic" : "unknown";
++      if (filterProvider && prov !== filterProvider) continue;
++      const acc = ensure(prov);
++      acc.timeoutsByLayer[layer] = (acc.timeoutsByLayer[layer] || 0) + 1;
++      acc.timedOut++;
++    }
++  }
++
++  // 生成报告
++  const providers: ProviderHealthMetrics[] = [];
++  const alerts: HealthAlert[] = [];
++
++  for (const [prov, acc] of accumulators) {
++    const sortedLatencies = acc.totalLatencies.sort((a, b) => a - b);
++    const sortedTtfts = acc.ttfts.sort((a, b) => a - b);
++    const succeeded = acc.requests - acc.failed - acc.timedOut;
++    const minTs = acc.timestamps.length > 0 ? Math.min(...acc.timestamps) : cutoffTs;
++    const maxTs = acc.timestamps.length > 0 ? Math.max(...acc.timestamps) : Date.now();
++
++    const metrics: ProviderHealthMetrics = {
++      provider: prov,
++      period: { start: minTs, end: maxTs },
++      requests: {
++        total: acc.requests,
++        succeeded: Math.max(0, succeeded),
++        failed: acc.failed,
++        timedOut: acc.timedOut,
++        retried: acc.retried,
++      },
++      latency: {
++        ttft_p50: percentile(sortedTtfts, 0.5),
++        ttft_p95: percentile(sortedTtfts, 0.95),
++        ttft_p99: percentile(sortedTtfts, 0.99),
++        total_p50: percentile(sortedLatencies, 0.5),
++        total_p95: percentile(sortedLatencies, 0.95),
++      },
++      timeouts: { byLayer: acc.timeoutsByLayer },
++      retries: {
++        total: acc.retried,
++        exhausted: acc.exhausted,
++        fallbackTriggered: acc.fallbackTriggered,
++      },
++    };
++    providers.push(metrics);
++
++    // 生成告警
++    const successRate = acc.requests > 0 ? (Math.max(0, succeeded) / acc.requests) : 1;
++    const timeoutRate = acc.requests > 0 ? acc.timedOut / acc.requests : 0;
++    const ttftP95 = metrics.latency.ttft_p95;
++
++    if (successRate < 0.9) {
++      alerts.push({ provider: prov, severity: "critical", message: `成功率 ${(successRate * 100).toFixed(1)}% < 90%` });
++    } else if (successRate < 0.95) {
++      alerts.push({ provider: prov, severity: "warning", message: `成功率 ${(successRate * 100).toFixed(1)}% < 95%` });
++    }
++    if (timeoutRate > 0.1) {
++      alerts.push({ provider: prov, severity: "critical", message: `超时率 ${(timeoutRate * 100).toFixed(1)}% > 10%` });
++    } else if (timeoutRate > 0.05) {
++      alerts.push({ provider: prov, severity: "warning", message: `超时率 ${(timeoutRate * 100).toFixed(1)}% > 5%` });
++    }
++    if (ttftP95 && ttftP95 > 60000) {
++      alerts.push({ provider: prov, severity: "critical", message: `TTFT P95 ${(ttftP95 / 1000).toFixed(1)}s > 60s` });
++    } else if (ttftP95 && ttftP95 > 30000) {
++      alerts.push({ provider: prov, severity: "warning", message: `TTFT P95 ${(ttftP95 / 1000).toFixed(1)}s > 30s` });
++    }
++  }
++
++  const periodLabel = periodMs >= 86400_000 * 7 ? "7d"
++    : periodMs >= 86400_000 ? "24h"
++    : periodMs >= 3600_000 ? "1h"
++    : `${Math.round(periodMs / 60_000)}min`;
++
++  return {
++    generatedAt: new Date().toISOString(),
++    periodLabel,
++    providers,
++    alerts,
++  };
++}
++
++// ─── 辅助函数 ───
++
++function collectEvents(sessionsDir: string, cutoffTs: number): RawEvent[] {
++  if (!existsSync(sessionsDir)) return [];
++  const events: RawEvent[] = [];
++
++  try {
++    const entries = readdirSync(sessionsDir);
++    for (const entry of entries) {
++      const sessionDir = join(sessionsDir, entry);
++      try {
++        const stat = statSync(sessionDir);
++        if (!stat.isDirectory()) continue;
++        // 按目录修改时间过滤
++        if (stat.mtimeMs < cutoffTs) continue;
++      } catch { continue; }
++
++      const eventsPath = join(sessionDir, "events.jsonl");
++      if (!existsSync(eventsPath)) continue;
++
++      try {
++        const content = readFileSync(eventsPath, "utf-8");
++        for (const line of content.split("\n")) {
++          if (!line.trim()) continue;
++          try {
++            const parsed = JSON.parse(line) as RawEvent;
++            // 时间过滤
++            if (parsed.timestamp) {
++              const ts = new Date(parsed.timestamp).getTime();
++              if (ts < cutoffTs) continue;
++            }
++            events.push(parsed);
++          } catch { /* 跳过格式错误行 */ }
++        }
++      } catch { /* 读取失败跳过 */ }
++    }
++  } catch { /* 目录不存在或无权限 */ }
++
++  return events;
++}
++
++function percentile(sorted: number[], p: number): number | undefined {
++  if (sorted.length === 0) return undefined;
++  const idx = Math.ceil(sorted.length * p) - 1;
++  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
++}
+diff --git a/src/trace/collector.ts b/src/trace/collector.ts
+index 2fab651..91d0ef1 100644
+--- a/src/trace/collector.ts
++++ b/src/trace/collector.ts
+@@ -659,6 +659,8 @@ export class TraceCollector {
+           usage: { input_tokens: inputTokens, output_tokens: outputTokens, cache_read: cacheRead },
+           content_types: contentBlocks.filter(Boolean).map((b: any) => b.type),
+           elapsed_ms: (resp as any).api_duration_ms,
++          provider: resp.provider,  // T12.4：Provider 维度标记
++          ttft_ms: (resp as any).ttft_ms,  // T14.4：TTFT 持久化
+         },
+       });
+     } catch {
+@@ -1063,6 +1065,14 @@ export class TraceCollector {
+       data: {
+         reason: input.reason,
+         exit_status: this.metadata.exit_status,
++        // T13.4：side-call 失败统计
++        sideCallStats: sideStats.apiCalls > 0 ? {
++          total: sideStats.apiCalls,
++          succeeded: sideStats.apiCalls - sideStats.failed,
++          failed: sideStats.failed,
++          timedOut: sideStats.timedOut,
++          byLabel: sideStats.byLabel,
++        } : undefined,
+       },
+     });
+ 
+@@ -1427,4 +1437,17 @@ export class TraceCollector {
+   getPrevMessageCount(): number {
+     return this.prevMessageCount;
+   }
++
++  /** T12：写入 RetryTelemetry 事件到 events.jsonl */
++  writeRetryTelemetry(event: Record<string, unknown>): void {
++    if (!this.initialized) return;
++    try {
++      this.writer.appendEvent({
++        event: "RetryTelemetry",
++        session_id: this.metadata.session_id,
++        timestamp: new Date().toISOString(),
++        data: event,
++      });
++    } catch { /* 遥测写入失败不影响主流程 */ }
++  }
+ }
+diff --git a/src/trace/digest.ts b/src/trace/digest.ts
+index 4631f14..12aad8c 100644
+--- a/src/trace/digest.ts
++++ b/src/trace/digest.ts
+@@ -159,6 +159,21 @@ export interface ToolStep {
+   orphan: boolean;
+ }
+ 
++/** T12.5：Provider 维度聚合统计 */
++export interface ProviderDigestStats {
++  provider: string;
++  requests: number;
++  failed: number;
++  timedOut: number;
++  retried: number;
++  avgLatencyMs: number;
++  /** T14.5：TTFT 分位数 */
++  ttft_p50?: number;
++  ttft_p95?: number;
++  /** 超时率 > 10% 时标记 warning */
++  warning?: string;
++}
++
+ export interface Digest {
+   sessionId: string;
+   model: string;
+@@ -180,6 +195,8 @@ export interface Digest {
+   pointers: { label: string; path: string; hint: string }[];
+   ledger?: LedgerEntry;
+   crash?: { reason?: string; attribution?: unknown };
++  /** T12.5：按 Provider 聚合的健康诊断 */
++  providerStats?: ProviderDigestStats[];
+ }
+ 
+ export interface SessionRef {
+@@ -911,6 +928,25 @@ export function buildDigest(ref: SessionRef, full: boolean, paths: DigestPaths):
+     }
+   }
+ 
++  // ── T13.5：Side-call 健康诊断 ──
++  const sessionEndEvent = events.find(e => e.event === "SessionEnd");
++  const sideCallData = (sessionEndEvent?.data as any)?.sideCallStats;
++  if (sideCallData && sideCallData.failed > 0) {
++    anomalies.push({
++      layer: "L0",
++      severity: sideCallData.failed > 3 ? "high" : "medium",
++      kind: "side_call_failures",
++      detail: `Side-call 失败 ${sideCallData.failed}/${sideCallData.total}（超时 ${sideCallData.timedOut} 次）`,
++      provenance: [{
++        sourceFile: eventsPath,
++        lineRef: `event=SessionEnd sideCallStats`,
++        rawValue: JSON.stringify(sideCallData.byLabel),
++        mtime: fileMtimeIso(eventsPath),
++      }],
++      pointer: `各 side-call 失败明细: ${Object.entries(sideCallData.byLabel || {}).filter(([, v]: [string, any]) => v.failed > 0).map(([k, v]: [string, any]) => `${k}(${v.failed}失败)`).join(", ")}`,
++    });
++  }
++
+   // ── 该看哪个原始文件(指针) ──
+   const pointers: Digest["pointers"] = [
+     { label: "完整轨迹", path: join(ref.dir, "session.traj"), hint: "TAO 步骤 + history + metadata,SFT/回溯用" },
+@@ -966,6 +1002,9 @@ export function buildDigest(ref: SessionRef, full: boolean, paths: DigestPaths):
+     (a, b) => layerRank[a.layer] - layerRank[b.layer] || sevRank[a.severity] - sevRank[b.severity],
+   );
+ 
++  // ── T12.5：按 Provider 聚合诊断信号 ──
++  const providerStats = aggregateProviderStats(events);
++
+   return {
+     sessionId: ref.id,
+     model: ledger?.model || meta.model || "unknown",
+@@ -987,6 +1026,7 @@ export function buildDigest(ref: SessionRef, full: boolean, paths: DigestPaths):
+     pointers,
+     ledger: ledger || undefined,
+     crash: crashSnapshot ? { reason: crashSnapshot.reason, attribution: crashSnapshot.attribution } : undefined,
++    providerStats: providerStats.length > 0 ? providerStats : undefined,
+   };
+ }
+ 
+@@ -1110,6 +1150,18 @@ export function renderHuman(d: Digest, opts: RenderOptions = {}): string {
+     L.push(c("gray", `  ${truncate(JSON.stringify(d.crash.attribution), 400)}`));
+   }
+ 
++  // T15.4：Provider 健康摘要
++  if (d.providerStats && d.providerStats.length > 0) {
++    L.push("");
++    L.push(c("bold", "Provider 健康:"));
++    for (const ps of d.providerStats) {
++      const successRate = ps.requests > 0 ? ((ps.requests - ps.failed - ps.timedOut) / ps.requests * 100).toFixed(0) : "N/A";
++      const ttft = ps.ttft_p50 ? `TTFT P50=${(ps.ttft_p50 / 1000).toFixed(1)}s` : "";
++      const warn = ps.warning ? c("yellow", ` ⚡${ps.warning}`) : "";
++      L.push(`  ${c("cyan", ps.provider.padEnd(12))} 请求:${ps.requests} 成功率:${successRate}% 延迟:${ps.avgLatencyMs}ms ${ttft}${warn}`);
++    }
++  }
++
+   // 原始文件指针
+   L.push("");
+   L.push(c("bold", "深挖原始数据:"));
+@@ -1139,3 +1191,82 @@ export function renderList(all: SessionRef[], opts: RenderOptions = {}): string
+   L.push(c("gray", `  用 \`${invocation} <id前缀>\` 看某个会话的详细摘要`));
+   return L.join("\n");
+ }
++
++// ─────────────────────────── T12.5：Provider 聚合 ───────────────────────────
++
++/** 从 events.jsonl 事件列表聚合 per-provider 统计（导出供测试 + provider-health 使用） */
++export function aggregateProviderStats(events: Array<{ event?: string; data?: Record<string, unknown> }>): ProviderDigestStats[] {
++  const map = new Map<string, { requests: number; failed: number; timedOut: number; retried: number; totalLatencyMs: number; ttfts: number[] }>();
++
++  const ensure = (p: string) => {
++    if (!map.has(p)) map.set(p, { requests: 0, failed: 0, timedOut: 0, retried: 0, totalLatencyMs: 0, ttfts: [] });
++    return map.get(p)!;
++  };
++
++  // 从 AfterModelRaw 事件统计每 provider 的请求数和延迟
++  for (const e of events) {
++    if (e.event === "AfterModelRaw" && e.data) {
++      const provider = (e.data.provider as string) || "unknown";
++      const stats = ensure(provider);
++      stats.requests++;
++      const elapsed = (e.data.elapsed_ms as number) || 0;
++      stats.totalLatencyMs += elapsed;
++      // T14.5：收集 TTFT
++      const ttft = e.data.ttft_ms as number | undefined;
++      if (ttft && ttft > 0) stats.ttfts.push(ttft);
++    }
++    // 从 RetryTelemetry 事件统计重试/超时
++    if (e.event === "RetryTelemetry" && e.data) {
++      const provider = (e.data.provider as string) || (e.data.model as string) || "unknown";
++      const stats = ensure(provider);
++      const type = e.data.type as string;
++      if (type === "retry") {
++        stats.retried++;
++      } else if (type === "stream_idle_timeout" || type === "stream_content_progress_timeout" || type === "stream_overall_timeout") {
++        stats.timedOut++;
++      } else if (type === "529_dropped") {
++        stats.failed++;
++      }
++    }
++    // 从 TimeoutFired 事件补充超时计数
++    if (e.event === "TimeoutFired" && e.data) {
++      const model = (e.data.model as string) || "";
++      // TimeoutFired 没有 provider 字段，用 model 推断
++      if (model) {
++        const stats = ensure(model.includes("deepseek") ? "openai" : model.includes("claude") ? "anthropic" : "unknown");
++        stats.timedOut++;
++      }
++    }
++  }
++
++  const result: ProviderDigestStats[] = [];
++  for (const [provider, stats] of map) {
++    const timeoutRate = stats.requests > 0 ? stats.timedOut / stats.requests : 0;
++    const sortedTtfts = stats.ttfts.sort((a, b) => a - b);
++    let warning: string | undefined;
++    if (timeoutRate > 0.1) warning = `超时率 ${(timeoutRate * 100).toFixed(1)}% > 10%`;
++    // T14.5：TTFT > 30s 标记 warning
++    const ttftP95 = percentile(sortedTtfts, 0.95);
++    if (ttftP95 && ttftP95 > 30000 && !warning) warning = `TTFT P95 ${(ttftP95 / 1000).toFixed(1)}s > 30s`;
++
++    result.push({
++      provider,
++      requests: stats.requests,
++      failed: stats.failed,
++      timedOut: stats.timedOut,
++      retried: stats.retried,
++      avgLatencyMs: stats.requests > 0 ? Math.round(stats.totalLatencyMs / stats.requests) : 0,
++      ttft_p50: percentile(sortedTtfts, 0.5),
++      ttft_p95: ttftP95,
++      warning,
++    });
++  }
++  return result;
++}
++
++/** 计算已排序数组的百分位数 */
++function percentile(sorted: number[], p: number): number | undefined {
++  if (sorted.length === 0) return undefined;
++  const idx = Math.ceil(sorted.length * p) - 1;
++  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
++}
+diff --git a/src/trace/side-call-sink.ts b/src/trace/side-call-sink.ts
+index fb2ace0..e62f934 100644
+--- a/src/trace/side-call-sink.ts
++++ b/src/trace/side-call-sink.ts
+@@ -22,6 +22,12 @@ export interface SideCallRecord {
+   cacheCreationTokens: number;
+   durationMs: number;
+   costUSD: number;
++  /** T13.2：调用是否成功（默认 true，向后兼容） */
++  success: boolean;
++  /** T13.2：失败原因 */
++  error?: string;
++  /** T13.2：是否超时 */
++  timedOut?: boolean;
+ }
+ 
+ export interface SideCallStats {
+@@ -30,6 +36,10 @@ export interface SideCallStats {
+   tokensSent: number;
+   tokensReceived: number;
+   details: Array<{ label: string; model: string; inputTokens: number; outputTokens: number; costUSD: number }>;
++  /** T13.4：失败统计 */
++  failed: number;
++  timedOut: number;
++  byLabel: Record<string, { success: number; failed: number }>;
+ }
+ 
+ let _calls: SideCallRecord[] = [];
+@@ -54,8 +64,9 @@ export function setSideCostObserver(fn: (costUSD: number) => void): void {
+ 
+ /**
+  * 记录一次辅助 LLM 调用的用量。影子调用点在收到响应后调用。
++ * T13.2：扩展支持 success/error/timedOut 字段记录失败调用。
+  */
+-export function recordSideCall(record: Omit<SideCallRecord, "costUSD"> & { costUSD?: number }): void {
++export function recordSideCall(record: Omit<SideCallRecord, "costUSD" | "success"> & { costUSD?: number; success?: boolean; error?: string; timedOut?: boolean }): void {
+   const cost = record.costUSD ?? (
+     _costCalculator
+       ? _costCalculator(record.model, {
+@@ -66,7 +77,7 @@ export function recordSideCall(record: Omit<SideCallRecord, "costUSD"> & { costU
+         })
+       : 0
+   );
+-  _calls.push({ ...record, costUSD: cost });
++  _calls.push({ ...record, costUSD: cost, success: record.success ?? true });
+   // 实时通知观察者（SessionState.addSideCost），使展示层和 quota 守卫看到真实总花费
+   if (_costObserver && cost > 0) {
+     try { _costObserver(cost); } catch { /* 观察者异常不影响记录 */ }
+@@ -80,6 +91,9 @@ export function getSideStats(): SideCallStats {
+   let costUSD = 0;
+   let tokensSent = 0;
+   let tokensReceived = 0;
++  let failed = 0;
++  let timedOut = 0;
++  const byLabel: Record<string, { success: number; failed: number }> = {};
+   const details: SideCallStats["details"] = [];
+ 
+   for (const c of _calls) {
+@@ -93,6 +107,14 @@ export function getSideStats(): SideCallStats {
+       outputTokens: c.outputTokens,
+       costUSD: c.costUSD,
+     });
++    // T13.4：累计失败统计
++    if (!c.success) {
++      failed++;
++      if (c.timedOut) timedOut++;
++    }
++    if (!byLabel[c.label]) byLabel[c.label] = { success: 0, failed: 0 };
++    if (c.success) byLabel[c.label].success++;
++    else byLabel[c.label].failed++;
+   }
+ 
+   return {
+@@ -101,6 +123,9 @@ export function getSideStats(): SideCallStats {
+     tokensSent,
+     tokensReceived,
+     details,
++    failed,
++    timedOut,
++    byLabel,
+   };
+ }
+ 

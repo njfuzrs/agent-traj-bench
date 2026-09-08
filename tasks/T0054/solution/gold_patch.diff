@@ -1,0 +1,367 @@
+diff --git a/src/command/language.ts b/src/command/language.ts
+index a27dea8..2e1955b 100644
+--- a/src/command/language.ts
++++ b/src/command/language.ts
+@@ -2,7 +2,8 @@
+  * /language 命令 — 切换输出语言偏好
+  *
+  * 用法：
+- *   /language              — 显示当前语言偏好
++ *   /language              — 打开交互式语言选择面板（键盘 ↑↓ + Enter）
++ *   /language status       — 以纯文本显示当前语言偏好 + 用法（别名 list / ls / show）
+  *   /language zh           — 切换为中文优先（仅当前会话）
+  *   /language en           — 切换为英文优先（仅当前会话）
+  *   /language auto         — 跟随用户输入语言（**不是**"回退默认"，见下）
+@@ -16,6 +17,8 @@
+  * 状态显示还把"未设置"回显成 `auto`，让用户以为自己已经在自动模式了。
+  *
+  * 持久化语义与 /model、/effort、/theme 对齐：默认仅当会话生效，加 -p 才写盘。
++ * 无参打开的**交互面板**里选定视为用户主动选择，自动带 -p（见 App.tsx handleLanguageSelect），
++ * 与 /model、/theme 面板同构——这正是"切了却重开回退"痛点的正解。
+  * 切换后立即重建系统提示词，下一轮 LLM 调用即用新语言（不必等重开会话）。
+  * 别名 /lang。
+  */
+@@ -32,24 +35,34 @@ import {
+ /** 显式回退缺省的说法（与 auto 区分开） */
+ const UNSET_TOKENS = new Set(["unset", "default", "none"]);
+ 
++/** 纯文本状态输出的说法（无参已改为开面板，文本视图需显式索取；对齐 /theme list） */
++const STATUS_TOKENS = new Set(["status", "list", "ls", "show"]);
++
+ export class LanguageCommand implements Command {
+   name() { return "language"; }
+   aliases() { return ["lang"]; }
+   description() { return "显示或切换输出语言偏好（-p 持久化）"; }
+-  argumentHint() { return "[zh|en|auto|unset] [-p]"; }
++  argumentHint() { return "[zh|en|auto|unset|status] [-p]"; }
+ 
+   async execute(args: string, ctx: AppContext): Promise<CommandResult> {
+     const tokens = args.trim().split(/\s+/).filter(Boolean);
+     const persist = tokens.some((t) => t === "-p" || t === "--persist" || t === "save");
+     const langArg = tokens.find((t) => t !== "-p" && t !== "--persist" && t !== "save");
+ 
+-    // 无参数 → 显示当前语言 + 用法。
++    // 无参数 → 打开交互式语言面板（对齐 /model、/theme、/effort、/think）。
++    // 纯文本状态视图仍可用 /language status 取——脚本化 / 无头场景以及"只想看当前值
++    // 不想触发面板"的用法都还在，只是不再占用无参这个最高频入口。
+     if (!langArg) {
+-      return { kind: "message", message: this.buildStatus(ctx) };
++      return { kind: "dialog", dialog: "language" };
+     }
+ 
+     const raw = langArg.toLowerCase();
+ 
++    // status / list / ls / show → 纯文本状态 + 用法（面板之外的逃生口）。
++    if (STATUS_TOKENS.has(raw)) {
++      return { kind: "message", message: this.buildStatus(ctx) };
++    }
++
+     // unset / default / none → 删除偏好字段，回落缺省（中文优先）。
+     if (UNSET_TOKENS.has(raw)) {
+       await ctx.setLanguage?.(undefined, persist);
+@@ -104,6 +117,7 @@ export class LanguageCommand implements Command {
+       "  unset  — 清除偏好，回落缺省（中文优先）",
+       "",
+       "用法: /language <zh|en|auto|unset> [-p]（-p 持久化到 settings.json）",
++      "      /language          打开交互式选择面板（↑↓ 导航 · Enter 切换，选定即持久化）",
+       "也可用 --language 启动参数或 SID_LANGUAGE 环境变量（优先级：参数 > 环境变量 > settings.json）",
+     ].join("\n");
+   }
+@@ -119,6 +133,7 @@ export class LanguageCommand implements Command {
+       "  unset  — 清除偏好，回落缺省（中文优先）",
+       "",
+       `用法: /language <${LANGUAGE_PREFS.join("|")}|unset> [-p]`,
++      "      /language 无参可打开交互式选择面板",
+     ].join("\n");
+   }
+ }
+diff --git a/src/command/types.ts b/src/command/types.ts
+index c70e831..f108d72 100644
+--- a/src/command/types.ts
++++ b/src/command/types.ts
+@@ -148,6 +148,7 @@ export type DialogType =
+   | "mcp"
+   | "effort"
+   | "think"
++  | "language"
+   | "permissions"
+   | "memory"
+   | "config"
+diff --git a/src/ui/App.tsx b/src/ui/App.tsx
+index b104566..ce19305 100644
+--- a/src/ui/App.tsx
++++ b/src/ui/App.tsx
+@@ -1084,6 +1084,17 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+     bridge.update({ activeDialog: null });
+   }, [callbacks, bridge]);
+ 
++  const handleLanguageSelect = useCallback(
++    (choice: import("./components/LanguageDialog.tsx").LanguageChoice) => {
++      // 同 handleThemeSelect / handleModelSelect：面板选择是用户主动的偏好表达，附 -p 持久化。
++      // "unset" 直接原样透传——/language 命令认这个 token（UNSET_TOKENS），语义是删字段回落缺省，
++      // **不能**替换成 auto（auto 是"跟随用户输入语言"这一档有效偏好，两者行为不同）。
++      callbacks.onSlashCommand("language", `${choice} -p`);
++      bridge.update({ activeDialog: null });
++    },
++    [callbacks, bridge],
++  );
++
+   // Shift+Tab 权限模式循环切换：转交 app.ts 的 cyclePermissionMode（切模式 + 刷状态栏 + 提示）。
+   const handleCyclePermissionMode = useCallback(() => {
+     callbacks.onCyclePermissionMode?.();
+@@ -1210,6 +1221,7 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+           availableThemes={availableThemes}
+           currentTheme={currentTheme}
+           onThemeSelect={handleThemeSelect}
++          onLanguageSelect={handleLanguageSelect}
+           onCompleteOnboarding={handleCompleteOnboarding}
+           mcpManager={callbacks.mcpManager}
+           sessionState={callbacks.sessionState}
+@@ -1267,6 +1279,7 @@ function TUIAppInner({ initialState, callbacks, bridge, alternateBuffer }: AppPr
+           availableThemes={availableThemes}
+           currentTheme={currentTheme}
+           onThemeSelect={handleThemeSelect}
++          onLanguageSelect={handleLanguageSelect}
+           onCompleteOnboarding={handleCompleteOnboarding}
+           mcpManager={callbacks.mcpManager}
+           sessionState={callbacks.sessionState}
+diff --git a/src/ui/components/DefaultAppLayout.tsx b/src/ui/components/DefaultAppLayout.tsx
+index 3df6e20..d30e439 100644
+--- a/src/ui/components/DefaultAppLayout.tsx
++++ b/src/ui/components/DefaultAppLayout.tsx
+@@ -109,6 +109,8 @@ interface DefaultAppLayoutProps {
+   availableThemes: Array<{ name: string; type: "light" | "dark"; description?: string }>;
+   currentTheme: string;
+   onThemeSelect: (themeName: string) => void;
++  /** /language 面板：选定语言偏好（"unset" 表示清除偏好） */
++  onLanguageSelect: (choice: import("./LanguageDialog.tsx").LanguageChoice) => void;
+   /** 首次启动引导完成回调（写 settings.json + 热加载 Provider） */
+   onCompleteOnboarding?: (result: OnboardingResult) => void;
+   /** MCP 管理器引用（/mcp 面板用） */
+@@ -178,6 +180,7 @@ export const DefaultAppLayout: React.FC<DefaultAppLayoutProps> = ({
+   availableThemes,
+   currentTheme,
+   onThemeSelect,
++  onLanguageSelect,
+   onCompleteOnboarding,
+   mcpManager,
+   sessionState,
+@@ -284,6 +287,7 @@ export const DefaultAppLayout: React.FC<DefaultAppLayoutProps> = ({
+             availableThemes={availableThemes}
+             currentTheme={currentTheme}
+             onThemeSelect={onThemeSelect}
++            onLanguageSelect={onLanguageSelect}
+             onCompleteOnboarding={onCompleteOnboarding}
+             model={model}
+             mcpManager={mcpManager}
+diff --git a/src/ui/components/DialogSwitch.tsx b/src/ui/components/DialogSwitch.tsx
+index 918a3bf..9614edc 100644
+--- a/src/ui/components/DialogSwitch.tsx
++++ b/src/ui/components/DialogSwitch.tsx
+@@ -18,6 +18,7 @@ import { OnboardingDialog } from "./OnboardingDialog.tsx";
+ import { McpDialog } from "./McpDialog.tsx";
+ import { EffortDialog } from "./EffortDialog.tsx";
+ import { ThinkDialog } from "./ThinkDialog.tsx";
++import { LanguageDialog } from "./LanguageDialog.tsx";
+ import { PermissionsDialog } from "./PermissionsDialog.tsx";
+ import { MemoryDialog } from "./MemoryDialog.tsx";
+ import { ConfigDialog } from "./ConfigDialog.tsx";
+@@ -60,6 +61,8 @@ export interface DialogSwitchProps {
+   availableThemes: Array<{ name: string; type: "light" | "dark"; description?: string }>;
+   currentTheme: string;
+   onThemeSelect: (themeName: string) => void;
++  /** /language 面板：选定语言偏好（"unset" 表示清除偏好）。 */
++  onLanguageSelect: (choice: import("./LanguageDialog.tsx").LanguageChoice) => void;
+   onCompleteOnboarding?: (result: OnboardingResult) => void;
+   model: string;
+ 
+@@ -105,6 +108,7 @@ export const DialogSwitch: React.FC<DialogSwitchProps> = ({
+   availableThemes,
+   currentTheme,
+   onThemeSelect,
++  onLanguageSelect,
+   onCompleteOnboarding,
+   model,
+   mcpManager,
+@@ -202,6 +206,15 @@ export const DialogSwitch: React.FC<DialogSwitchProps> = ({
+       />
+     );
+   }
++  if (activeDialog === "language") {
++    return (
++      <LanguageDialog
++        onClose={onDialogClose}
++        currentLanguage={callbacks.config?.language}
++        onLanguageSelect={onLanguageSelect}
++      />
++    );
++  }
+   if (activeDialog === "permissions" && sessionState) {
+     return <PermissionsDialog onClose={onDialogClose} config={callbacks.config} sessionState={sessionState} />;
+   }
+diff --git a/src/ui/components/LanguageDialog.tsx b/src/ui/components/LanguageDialog.tsx
+new file mode 100644
+index 0000000..9357ef6
+--- /dev/null
++++ b/src/ui/components/LanguageDialog.tsx
+@@ -0,0 +1,131 @@
++/**
++ * 输出语言快捷切换面板（/language 无参时打开）
++ *
++ * 选项固定（zh/en/auto/unset），结构同 ThinkDialog / EffortDialog。
++ * - 当前生效项用 ● 标记（区别于光标指示的 ›）
++ * - 四档字形靠「填充度」表达确定性递进（L1 元原则①）：
++ *   zh/en 是显式指定（实心 ●）、auto 是运行时判定（半填 ◐）、unset 是无偏好（空心 ○）
++ *
++ * 「当前值」的判定必须区分 `auto` 与 `undefined`——前者是**有偏好**（跟随用户输入语言），
++ * 后者是**无偏好**（回落缺省中文优先）。旧版 /language 文本输出曾把未设置回显成 auto，
++ * 让用户以为已在自动模式，实际行为却是强制中文；面板不能重犯这个错，故 unset 独立成一档。
++ */
++
++import React from "react";
++import Box from "../../ink/components/Box.js";
++import Text from "../../ink/components/Text.js";
++import { theme } from "../semantic-colors.ts";
++import { BaseSelectionList, type SelectionListItem } from "./shared/BaseSelectionList.tsx";
++import {
++  ARROW_PROMPT,
++  TODO_COMPLETED,
++  TODO_IN_PROGRESS,
++  TODO_PENDING,
++} from "../constants/figures.ts";
++import { useKeypress, KeypressPriority, type Key } from "../contexts/KeypressContext.tsx";
++import {
++  describeLanguagePref,
++  detectSystemLanguage,
++  type LanguagePref,
++} from "../../config/prompt-lang.ts";
++
++/** 面板选项 value：真实偏好值 + "unset" 哨兵（代表 undefined，即清除偏好）。 */
++export type LanguageChoice = LanguagePref | "unset";
++
++interface LanguageDialogProps {
++  onClose: () => void;
++  /** 当前语言偏好（undefined = 未设置，回落缺省中文优先）。 */
++  currentLanguage: LanguagePref | undefined;
++  /** 选定回调。"unset" 表示清除偏好；关闭由外部回调统一处理（同 onThemeSelect）。 */
++  onLanguageSelect: (choice: LanguageChoice) => void;
++}
++
++interface LanguageItem extends SelectionListItem<LanguageChoice> {
++  glyph: string;
++  label: string;
++  desc: string;
++}
++
++const OPTIONS: LanguageItem[] = [
++  { value: "zh", key: "zh", glyph: TODO_COMPLETED, label: "zh", desc: "中文优先" },
++  { value: "en", key: "en", glyph: TODO_COMPLETED, label: "en", desc: "英文优先" },
++  {
++    value: "auto",
++    key: "auto",
++    glyph: TODO_IN_PROGRESS,
++    label: "auto",
++    desc: "跟随用户输入语言（每轮按用户所用语言应答）",
++  },
++  {
++    value: "unset",
++    key: "unset",
++    glyph: TODO_PENDING,
++    label: "unset",
++    desc: "清除偏好，回落缺省（中文优先）",
++  },
++];
++
++export const LanguageDialog: React.FC<LanguageDialogProps> = ({
++  onClose,
++  currentLanguage,
++  onLanguageSelect,
++}) => {
++  useKeypress(KeypressPriority.Critical, (key: Key) => {
++    if (key.name === "escape") {
++      onClose();
++      return true;
++    }
++    return false;
++  });
++
++  // undefined（未设置）映射到 unset 档，而不是 auto——两者语义不同，见文件头注释。
++  const currentValue: LanguageChoice = currentLanguage ?? "unset";
++  const initialIndex = Math.max(0, OPTIONS.findIndex((o) => o.value === currentValue));
++
++  const statusLine = currentLanguage
++    ? `当前: ${currentLanguage} — ${describeLanguagePref(currentLanguage)}`
++    : "当前: 未设置 — 默认（中文优先）";
++
++  // auto 档额外说明"判断不出时落到哪"——否则用户切了 auto 却无从判断系统 locale 探测结果。
++  const autoFallback = currentLanguage === "auto"
++    ? `判断不出用户语言时回落: ${detectSystemLanguage() === "en" ? "英文" : "中文"}（按系统 locale）`
++    : "";
++
++  const handleSelect = (choice: LanguageChoice) => {
++    onLanguageSelect(choice);
++  };
++
++  return (
++    <Box flexDirection="column" borderStyle="round" borderColor={theme.ui.active} paddingX={1} paddingY={0}>
++      <Text bold color={theme.ui.active}>输出语言</Text>
++      <Text color={theme.text.secondary}>{statusLine}</Text>
++      {autoFallback && <Text color={theme.text.secondary}>{autoFallback}</Text>}
++      <Box marginTop={1} flexDirection="column">
++        <BaseSelectionList<LanguageChoice, LanguageItem>
++          items={OPTIONS}
++          initialIndex={initialIndex}
++          onSelect={handleSelect}
++          isFocused={true}
++          showNumbers={false}
++          maxItemsToShow={6}
++          selectedIndicator={ARROW_PROMPT}
++          renderItem={(item, { isSelected }) => {
++            const isCurrent = item.value === currentValue;
++            return (
++              <Box>
++                <Text color={isSelected ? theme.ui.focus : theme.text.primary}>
++                  {item.glyph} {item.label}
++                </Text>
++                <Text color={theme.text.secondary}>  {item.desc}</Text>
++                {isCurrent && <Text color={theme.ui.active}> {TODO_COMPLETED} 当前</Text>}
++              </Box>
++            );
++          }}
++        />
++      </Box>
++      <Box marginTop={1}>
++        <Text dimColor italic>↑↓ 导航 · Enter 切换（自动持久化）· Esc 取消</Text>
++      </Box>
++    </Box>
++  );
++};
+diff --git a/src/ui/components/MainScreenLayout.tsx b/src/ui/components/MainScreenLayout.tsx
+index 4005f89..c308f3c 100644
+--- a/src/ui/components/MainScreenLayout.tsx
++++ b/src/ui/components/MainScreenLayout.tsx
+@@ -115,6 +115,8 @@ interface MainScreenLayoutProps {
+   availableThemes: Array<{ name: string; type: "light" | "dark"; description?: string }>;
+   currentTheme: string;
+   onThemeSelect: (themeName: string) => void;
++  /** /language 面板：选定语言偏好（"unset" 表示清除偏好） */
++  onLanguageSelect: (choice: import("./LanguageDialog.tsx").LanguageChoice) => void;
+   /** 首次启动引导完成回调 */
+   onCompleteOnboarding?: (result: OnboardingResult) => void;
+   /** MCP 管理器引用（/mcp 面板用） */
+@@ -180,6 +182,7 @@ export const MainScreenLayout: React.FC<MainScreenLayoutProps> = memo(function M
+   availableThemes,
+   currentTheme,
+   onThemeSelect,
++  onLanguageSelect,
+   onCompleteOnboarding,
+   mcpManager,
+   sessionState,
+@@ -284,6 +287,7 @@ export const MainScreenLayout: React.FC<MainScreenLayoutProps> = memo(function M
+             availableThemes={availableThemes}
+             currentTheme={currentTheme}
+             onThemeSelect={onThemeSelect}
++            onLanguageSelect={onLanguageSelect}
+             onCompleteOnboarding={onCompleteOnboarding}
+             model={model}
+             mcpManager={mcpManager}

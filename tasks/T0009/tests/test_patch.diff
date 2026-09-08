@@ -1,0 +1,407 @@
+diff --git a/tests/context/meta-preservation.test.ts b/tests/context/meta-preservation.test.ts
+new file mode 100644
+index 0000000..0c32da0
+--- /dev/null
++++ b/tests/context/meta-preservation.test.ts
+@@ -0,0 +1,103 @@
++/**
++ * 消息保真：重建消息对象时 `_meta` 必须默认透传（审计第 5 条回归测试）
++ *
++ * 两处历史缺陷都是手写字段列表 `{role, content}` 重建消息，静默丢弃 `_meta`：
++ *   - `Manager.getCleanedMessages()` 的「大输出清理」分支
++ *   - `ToolOutputMaskingService.mask()` 的遮罩分支
++ *
++ * `_meta` 里三样东西丢了都有真实后果：
++ *   - `reasoning_content`：DeepSeek 协议要求原样回传，丢了推理链断裂
++ *   - `compact_boundary`：压缩判断的锚点
++ *   - `origin`：TUI 隐藏标记，丢了内部消息会重新出现在界面上
++ *
++ * 这两条路径都只在**长会话**触发（可清理大输出 > KEEP_RECENT_OUTPUTS / 超出保护窗口），
++ * 所以短用例测不出来——下面的 fixture 刻意把量堆到触发阈值以上。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { Manager } from "../../src/context/manager.ts";
++import { ToolOutputMaskingService } from "../../src/context/tool-output-masking.ts";
++import type { Message } from "../../src/llm/types.ts";
++
++/** 一组 tool_use / tool_result 配对，assistant 侧带 _meta */
++function pushToolPair(mgr: Manager, id: string, output: string): void {
++  mgr.addMessage({
++    role: "assistant",
++    content: [{ type: "tool_use", id, name: "read", input: { file_path: `/tmp/${id}.txt` } }],
++    _meta: { reasoning_content: `思考 ${id}`, origin: `origin-${id}` },
++  });
++  mgr.addMessage({
++    role: "user",
++    content: [{ type: "tool_result", tool_use_id: id, content: output }],
++  });
++}
++
++describe("_meta 保真", () => {
++  test("getCleanedMessages 触发大输出清理后仍保留 _meta", () => {
++    const mgr = new Manager({ maxTokens: 1_000_000 });
++    // KEEP_RECENT_OUTPUTS 默认 6，需要 > 6 个可清理大输出才进清理分支
++    const PAIRS = 9;
++    for (let i = 0; i < PAIRS; i++) {
++      pushToolPair(mgr, `t${i}`, "x".repeat(40_000)); // > OUTPUT_THRESHOLD(30000)
++    }
++    mgr.addCompactBoundary("摘要文本", 3);
++
++    const cleaned = mgr.getCleanedMessages();
++
++    // 前提校验：确实走进了清理分支（否则本测试是空跑）
++    const clearedCount = cleaned.filter(m =>
++      m.content.some(b => b.type === "tool_result" && String(b.content).includes("已清理")),
++    ).length;
++    expect(clearedCount).toBeGreaterThan(0);
++
++    // 1. assistant 侧 _meta 全部存活
++    const withReasoning = cleaned.filter(m => m._meta?.reasoning_content);
++    expect(withReasoning.length).toBe(PAIRS);
++    expect(cleaned.filter(m => m._meta?.origin).length).toBe(PAIRS);
++
++    // 2. compact_boundary 存活
++    expect(cleaned.some(m => m._meta?.compact_boundary)).toBe(true);
++  });
++
++  test("ToolOutputMaskingService.mask 遮罩后仍保留 _meta", () => {
++    const svc = new ToolOutputMaskingService("test-meta-preserve");
++    const messages: Message[] = [{ role: "user", content: [{ type: "text", text: "start" }] }];
++    for (let i = 0; i < 10; i++) {
++      messages.push({
++        role: "assistant",
++        content: [{ type: "tool_use", id: `m${i}`, name: "read", input: {} }],
++        _meta: { reasoning_content: `思考 ${i}`, origin: `origin-${i}` },
++      });
++      messages.push({
++        role: "user",
++        content: [{ type: "tool_result", tool_use_id: `m${i}`, content: "a".repeat(50_000) }],
++      });
++    }
++
++    const masked = svc.mask(messages);
++
++    // 前提校验：确实触发了遮罩（未触发时 mask 原样返回同一引用）
++    expect(masked).not.toBe(messages);
++
++    expect(masked.filter(m => m._meta?.reasoning_content).length).toBe(10);
++    expect(masked.filter(m => m._meta?.origin).length).toBe(10);
++  });
++
++  test("releaseBeforeBoundary 叠加 gc_released 而非覆盖已有 _meta", () => {
++    const mgr = new Manager({ maxTokens: 1_000_000 });
++    mgr.addMessage({
++      role: "user",
++      content: [{ type: "text", text: "y".repeat(500) }],
++      _meta: { origin: "command-expansion" },
++    });
++    mgr.addCompactBoundary("摘要", 1);
++
++    const released = mgr.releaseBeforeBoundary();
++    expect(released).toBe(1);
++
++    const first = mgr.getMessages()[0];
++    expect(first._meta?.gc_released).toBe(true);
++    // 关键：原有 origin 不能被整体覆盖抹掉（否则内部消息会重现在 TUI）
++    expect(first._meta?.origin).toBe("command-expansion");
++  });
++});
+diff --git a/tests/llm/openai-block-fidelity.test.ts b/tests/llm/openai-block-fidelity.test.ts
+new file mode 100644
+index 0000000..f2e02bd
+--- /dev/null
++++ b/tests/llm/openai-block-fidelity.test.ts
+@@ -0,0 +1,134 @@
++/**
++ * 消息保真：OpenAI 兼容路径的块/字段不得静默丢弃（审计第 6 条回归测试）
++ *
++ * 三个丢弃点：
++ *   1. `redacted_thinking` 落进"未识别"→ 整块静默丢弃（分派链无此分支、无 default 兜底）
++ *   2. `tool_result.is_error` 丢弃 —— **任何工具报错 + OpenAI 兼容 provider 即必现**：
++ *      模型无法区分"工具成功返回这段文本"与"工具失败了，这段是错误信息"
++ *   3. `tool_result.mediaBlocks` 丢弃：模型看不到图，却看到 content 说"已附上截图"
++ *
++ * 对照 `anthropic.ts` 的 `serializeToolResultBlock`（三字段都发），OpenAI 侧此前只取 content。
++ * 修复后两条 OpenAI 家族路径（Chat Completions / Responses API）共用
++ * `serializeToolResultContentForOpenAI`；`ollama.ts` 继承 OpenAIProvider 自动跟随。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { OpenAIProvider } from "../../src/llm/openai.ts";
++import { buildResponsesRequest } from "../../src/llm/openai-responses-request.ts";
++import {
++  serializeToolResultContentForOpenAI,
++  OPENAI_TOOL_ERROR_PREFIX,
++} from "../../src/llm/openai-tool-result-content.ts";
++import type { Message } from "../../src/llm/types.ts";
++
++class TestableProvider extends OpenAIProvider {
++  convert(messages: Message[]): any[] {
++    return (this as any).convertMessages(messages);
++  }
++}
++
++const provider = new TestableProvider("test-key", "gpt-5");
++
++/** 一次成功的工具往返，assistant 侧先声明 tool_use（否则会被游离 tool_result 兜底丢弃） */
++function toolRoundtrip(id: string, resultBlock: Record<string, unknown>): Message[] {
++  return [
++    { role: "assistant", content: [{ type: "tool_use", id, name: "bash", input: {} }] },
++    { role: "user", content: [{ type: "tool_result", tool_use_id: id, ...resultBlock } as any] },
++  ];
++}
++
++describe("tool_result.is_error 不再静默丢弃", () => {
++  test("is_error=true → content 带 [ERROR] 前缀（Chat Completions）", () => {
++    const result = provider.convert(
++      toolRoundtrip("c1", { content: "command not found: fooo", is_error: true }),
++    );
++    const toolMsg = result.find(m => m.role === "tool");
++    expect(toolMsg).toBeDefined();
++    expect(toolMsg.content.startsWith(OPENAI_TOOL_ERROR_PREFIX)).toBe(true);
++    expect(toolMsg.content).toContain("command not found: fooo");
++  });
++
++  test("is_error 缺省 → 不加前缀（成功结果不能被误标为错误）", () => {
++    const result = provider.convert(toolRoundtrip("c2", { content: "ok" }));
++    const toolMsg = result.find(m => m.role === "tool");
++    expect(toolMsg.content).toBe("ok");
++  });
++
++  test("is_error=true → Responses API 的 output 同样带前缀", () => {
++    const req = buildResponsesRequest(
++      {
++        model: "gpt-5",
++        maxTokens: 100,
++        messages: toolRoundtrip("c3", { content: "boom", is_error: true }),
++      },
++      "gpt-5",
++    );
++    const out = req.input.find((i: any) => i.type === "function_call_output") as any;
++    expect(out).toBeDefined();
++    expect(out.output.startsWith(OPENAI_TOOL_ERROR_PREFIX)).toBe(true);
++  });
++});
++
++describe("tool_result.mediaBlocks 降级为文本说明而非静默丢弃", () => {
++  test("含图片附件 → content 追加「看不到这些内容」的如实说明", () => {
++    const result = provider.convert(
++      toolRoundtrip("c4", {
++        content: "已附上截图",
++        mediaBlocks: [{ kind: "image", mediaType: "image/png", data: "AAAA" }],
++      }),
++    );
++    const toolMsg = result.find(m => m.role === "tool");
++    expect(toolMsg.content).toContain("已附上截图");
++    // 关键：必须如实告知模型有附件但看不到，否则模型会对着"已附上截图"空想
++    expect(toolMsg.content).toContain("image/png");
++    expect(toolMsg.content).toContain("你看不到这些内容");
++  });
++
++  test("无 mediaBlocks → content 不被污染（字节级不变）", () => {
++    const result = provider.convert(toolRoundtrip("c5", { content: "纯文本结果" }));
++    const toolMsg = result.find(m => m.role === "tool");
++    expect(toolMsg.content).toBe("纯文本结果");
++  });
++});
++
++describe("redacted_thinking 不再静默消失（可观测）", () => {
++  test("仅含 redacted_thinking 的 assistant 消息不崩、且不把密文塞进 content", () => {
++    const result = provider.convert([
++      {
++        role: "assistant",
++        content: [{ type: "redacted_thinking", data: "ENCRYPTED_BLOB_XYZ" }],
++      },
++      { role: "user", content: [{ type: "text", text: "继续" }] },
++    ]);
++    const assistantMsg = result.find(m => m.role === "assistant");
++    expect(assistantMsg).toBeDefined();
++    // 密文不可读，不能当正文喂给模型
++    expect(JSON.stringify(assistantMsg)).not.toContain("ENCRYPTED_BLOB_XYZ");
++  });
++
++  test("redacted_thinking 与正常文本混排时，文本仍完整保留", () => {
++    const result = provider.convert([
++      {
++        role: "assistant",
++        content: [
++          { type: "redacted_thinking", data: "BLOB" },
++          { type: "text", text: "这是答复正文" },
++        ],
++      },
++    ]);
++    const assistantMsg = result.find(m => m.role === "assistant");
++    expect(assistantMsg.content).toBe("这是答复正文");
++  });
++});
++
++describe("serializeToolResultContentForOpenAI 单元契约", () => {
++  test("空 content → 兜底 (empty)，满足协议非空要求", () => {
++    expect(serializeToolResultContentForOpenAI({ tool_use_id: "x", content: "" }, "t")).toBe("(empty)");
++  });
++
++  test("空 content + is_error → 前缀 + 兜底占位", () => {
++    expect(
++      serializeToolResultContentForOpenAI({ tool_use_id: "x", content: "", is_error: true }, "t"),
++    ).toBe(`${OPENAI_TOOL_ERROR_PREFIX}(empty)`);
++  });
++});
+diff --git a/tests/ui/hidden-path-tool-result.test.ts b/tests/ui/hidden-path-tool-result.test.ts
+new file mode 100644
+index 0000000..5a67b73
+--- /dev/null
++++ b/tests/ui/hidden-path-tool-result.test.ts
+@@ -0,0 +1,152 @@
++/**
++ * 消息保真：整条分流/隐藏路径不得丢弃同消息内的 tool_result（审计第 8 条回归测试）
++ *
++ * 病理链：`ctxMgr.addMessage` 的角色交替**合并**会把内部消息（斜杠命令展开 / 压缩 ack /
++ * 后台任务通知）追加进上一条同为 user 的、含 `tool_result` 的消息。若分流分支无条件
++ * `continue`，那条 `tool_result` 一并被丢弃 → 对应 `tool_use` 永久滞留 pendingToolCalls
++ * → 被函数末尾兜底逻辑输出成 executing 态并追加到历史**末尾**。
++ * 用户看到的现象：任务已完成、总结已输出，屏幕最后却挂着一行"执行中"的工具气泡。
++ *
++ * 三条路径共用 `pushRemainingBlocks` 出口。`task-notification` 那条此前已单独修过，
++ * 这里连同另外两条（command-expansion / internal-origin）一起钉住——
++ * 逐处打补丁已经失败过一次，本测试覆盖全部三条，防止再漏第四处。
++ */
++
++import { describe, test, expect } from "bun:test";
++import { messagesToHistoryItems, isHiddenFromDisplay } from "../../src/ui/history-adapter.ts";
++import { ToolCallStatus } from "../../src/ui/types.ts";
++import type { Message } from "../../src/llm/types.ts";
++import { REATTACH_ORIGIN } from "../../src/query/compact/reattach-markers.ts";
++
++/** assistant 侧发起一次工具调用 */
++function toolUseMsg(id: string, name: string): Message {
++  return {
++    role: "assistant",
++    content: [{ type: "tool_use", id, name, input: {} }],
++  };
++}
++
++/** 断言：没有任何工具停在 executing（即没有"末尾挂执行中气泡"） */
++function expectNoExecutingTool(items: ReturnType<typeof messagesToHistoryItems>): void {
++  const executing = items
++    .filter(i => i.type === "tool_group")
++    .flatMap(i => (i.type === "tool_group" ? i.tools : []))
++    .filter(t => t.status === ToolCallStatus.Executing);
++  expect(executing).toEqual([]);
++}
++
++/** 断言：该 tool_use 已配上结果、渲染为成功态 */
++function expectToolSucceeded(
++  items: ReturnType<typeof messagesToHistoryItems>,
++  name: string,
++): void {
++  const tools = items
++    .filter(i => i.type === "tool_group")
++    .flatMap(i => (i.type === "tool_group" ? i.tools : []));
++  const target = tools.find(t => t.name === name);
++  expect(target).toBeDefined();
++  expect(target?.status).toBe(ToolCallStatus.Success);
++}
++
++describe("分流路径保留同消息内的 tool_result", () => {
++  test("command-expansion 与 tool_result 合并时，tool_result 不丢", () => {
++    const msgs: Message[] = [
++      toolUseMsg("call_1", "task_stop"),
++      {
++        role: "user",
++        content: [
++          { type: "tool_result", tool_use_id: "call_1", content: "已停止后台任务" },
++          { type: "text", text: "这里是 /commit 展开后的一大段提示词，只该喂 LLM" },
++        ],
++        _meta: { origin: "command-expansion", displayCommand: "/commit" },
++      },
++    ];
++
++    const items = messagesToHistoryItems(msgs);
++
++    // 命令历史项照常渲染（只显命令名）
++    const cmd = items.find(i => i.type === "command");
++    expect(cmd).toBeDefined();
++    expect((cmd as { input: string }).input).toBe("/commit");
++
++    // 展开后的提示词正文不泄漏到屏幕
++    const userTexts = items.filter(i => i.type === "user").map(i => (i as { text: string }).text);
++    expect(userTexts.join("\n")).not.toContain("展开后的一大段提示词");
++
++    // 关键：tool_result 未被丢弃，工具配对成功、没有 executing 残留
++    expectToolSucceeded(items, "task_stop");
++    expectNoExecutingTool(items);
++  });
++
++  test("内部 origin（压缩 ack）与 tool_result 合并时，tool_result 不丢", () => {
++    const msgs: Message[] = [
++      toolUseMsg("call_2", "read"),
++      {
++        role: "user",
++        content: [
++          { type: "tool_result", tool_use_id: "call_2", content: "文件内容" },
++          { type: "text", text: "了解，继续。" },
++        ],
++        _meta: { origin: REATTACH_ORIGIN },
++      },
++    ];
++
++    const items = messagesToHistoryItems(msgs);
++
++    // 内部 ack 文本仍不展示（含工具块时不整条隐藏，但文本要吃掉）
++    const userTexts = items.filter(i => i.type === "user").map(i => (i as { text: string }).text);
++    expect(userTexts.join("\n")).not.toContain("了解，继续。");
++
++    expectToolSucceeded(items, "read");
++    expectNoExecutingTool(items);
++  });
++
++  test("task-notification 与 tool_result 合并时，tool_result 不丢（既有修复的守卫）", () => {
++    const msgs: Message[] = [
++      toolUseMsg("call_3", "task_stop"),
++      {
++        role: "user",
++        content: [
++          { type: "tool_result", tool_use_id: "call_3", content: "任务已停止" },
++          { type: "text", text: "<task-notification><task-id>t1</task-id><status>completed</status><summary>done</summary></task-notification>" },
++        ],
++        _meta: { origin: "task-notification", notif: [{ taskId: "t1", status: "completed", summary: "done" }] },
++      },
++    ];
++
++    const items = messagesToHistoryItems(msgs);
++
++    expect(items.some(i => i.type === "task_notification")).toBe(true);
++    expectToolSucceeded(items, "task_stop");
++    expectNoExecutingTool(items);
++  });
++
++  test("纯内部消息（无工具块）仍整条隐藏 —— 不是一刀切放行", () => {
++    // 对照组：这是修复必须保住的既有行为，防止改成"内部消息一律渲染"
++    const ackOnly: Message = {
++      role: "assistant",
++      content: [{ type: "text", text: "了解，继续。" }],
++      _meta: { origin: REATTACH_ORIGIN },
++    };
++    expect(isHiddenFromDisplay(ackOnly)).toBe(true);
++
++    const items = messagesToHistoryItems([
++      { role: "user", content: [{ type: "text", text: "帮我改个 bug" }] },
++      ackOnly,
++    ]);
++    const texts = items.filter(i => i.type === "user" || i.type === "assistant");
++    expect(texts.length).toBe(1);
++  });
++
++  test("含工具块的内部 origin 消息不再整条隐藏", () => {
++    const mixed: Message = {
++      role: "user",
++      content: [
++        { type: "tool_result", tool_use_id: "call_x", content: "结果" },
++        { type: "text", text: "了解，继续。" },
++      ],
++      _meta: { origin: REATTACH_ORIGIN },
++    };
++    expect(isHiddenFromDisplay(mixed)).toBe(false);
++  });
++});
