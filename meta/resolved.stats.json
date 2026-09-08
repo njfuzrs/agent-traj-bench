@@ -1,0 +1,53 @@
+{
+  "task": "T2",
+  "source": "bench/v0.2-mini/meta/candidates.jsonl",
+  "n_input": 182,
+  "n_ok": 70,
+  "acceptance": {
+    "exact_rate": 1.0,
+    "exact_rate_min": 0.85,
+    "n_anchor_qualified": 147,
+    "n_anchor_qualified_min": 100,
+    "n_apply_check_passed": 70
+  },
+  "drop_reasons": {
+    "rebuild_failed": 55,
+    "not_two_sided": 37,
+    "gitignored_paths": 12,
+    "no_code_ops": 5,
+    "incomplete_paths": 3
+  },
+  "dropped_paths": {
+    "out_of_scope": 75,
+    "cross_repo": 25,
+    "gitignored": 73,
+    "same_repo_worktree": 47
+  },
+  "n_failed_ops_skipped": 43,
+  "n_excluded_doc_files": 49,
+  "distributions": {
+    "by_band": {
+      "S": 5,
+      "L": 40,
+      "M": 25
+    },
+    "by_category": {
+      "test_authoring": 42,
+      "bug_fix": 28
+    },
+    "by_repo": {
+      "person/sid-code": 65,
+      "ruijie/iam-studio-fe": 5
+    },
+    "by_month": {
+      "2026-07": 26,
+      "2026-08": 20,
+      "2026-06": 24
+    }
+  },
+  "totals": {
+    "code_files": 413,
+    "test_files": 161,
+    "new_files": 149
+  }
+}
