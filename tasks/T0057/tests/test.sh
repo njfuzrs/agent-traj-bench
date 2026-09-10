@@ -5,7 +5,12 @@
 # 规则2：先无条件覆盖为 0，跑完再按结果改写
 mkdir -p /logs/verifier
 echo 0 > /logs/verifier/reward.txt
-printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error":"test_sh_did_not_finish"}\n' \
+# ⚠️ reward.json **只能放标量**（T5 实测）：harbor 的 rewards 是
+#    dict[str, float | int]，放字符串会让整条 trial 判 ValidationError ——
+#    比 reward=0 更糟，因为它进的是 Exceptions 而不是「没解出来」。
+#    所以错误用数值编码：1=test.sh 没跑完，2=test_patch 打不上，
+#    3/4/5 见 score.py 的 ERROR_CODES。
+printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error_code":1}\n' \
   > /logs/verifier/reward.json
 
 cd /repo
@@ -55,7 +60,8 @@ rm -f 'tests/permission/rule-loader.test.ts'
 git update-index -q --refresh || true
 if ! git apply --3way /tests/test_patch.diff 2>>/logs/verifier/apply.log; then
   echo "TEST_PATCH_APPLY_FAILED" >> /logs/verifier/apply.log
-  printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error":"test_patch_apply_failed"}\n' \
+  # error_code=2 = test_patch 打不上（同上：只能放标量）
+  printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error_code":2}\n' \
     > /logs/verifier/reward.json
   echo 0 > /logs/verifier/reward.txt
   exit 0    # 注意：exit 0 —— 要 reward=0，不要 trial error（§4 T3）
