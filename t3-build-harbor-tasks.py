@@ -290,7 +290,12 @@ def test_sh(task_id: str, f2p: list[str], p2p: list[str], restore: list[str], re
 # 规则2：先无条件覆盖为 0，跑完再按结果改写
 mkdir -p /logs/verifier
 echo 0 > /logs/verifier/reward.txt
-printf '{{"reward":0.0,"f2p":0.0,"p2p":0.0,"error":"test_sh_did_not_finish"}}\\n' \\
+# ⚠️ reward.json **只能放标量**（T5 实测）：harbor 的 rewards 是
+#    dict[str, float | int]，放字符串会让整条 trial 判 ValidationError ——
+#    比 reward=0 更糟，因为它进的是 Exceptions 而不是「没解出来」。
+#    所以错误用数值编码：1=test.sh 没跑完，2=test_patch 打不上，
+#    3/4/5 见 score.py 的 ERROR_CODES。
+printf '{{"reward":0.0,"f2p":0.0,"p2p":0.0,"error_code":1}}\\n' \\
   > /logs/verifier/reward.json
 
 cd /repo
@@ -309,7 +314,8 @@ cd /repo
 git update-index -q --refresh || true
 if ! git apply --3way /tests/test_patch.diff 2>>/logs/verifier/apply.log; then
   echo "TEST_PATCH_APPLY_FAILED" >> /logs/verifier/apply.log
-  printf '{{"reward":0.0,"f2p":0.0,"p2p":0.0,"error":"test_patch_apply_failed"}}\\n' \\
+  # error_code=2 = test_patch 打不上（同上：只能放标量）
+  printf '{{"reward":0.0,"f2p":0.0,"p2p":0.0,"error_code":2}}\\n' \\
     > /logs/verifier/reward.json
   echo 0 > /logs/verifier/reward.txt
   exit 0    # 注意：exit 0 —— 要 reward=0，不要 trial error（§4 T3）
@@ -329,10 +335,12 @@ python3 /tests/score.py
 
 
 def score_py() -> str:
-    """解析 junit XML 并报分。**这个文件承担两处实测纠正**（见模块 docstring）：
+    """解析 junit XML 并报分。**这个文件承担三处实测纠正**（见模块 docstring）：
 
     ① 写 `reward.json`（单数）—— harbor 只认这个名字，方案写的 `rewards.json` 会被静默忽略
     ② 做**文件覆盖核对** —— junit XML 会整份漏掉加载失败的文件，只看 failures 会给满分
+    ③ `reward.json` **只放标量**（T5 实测）—— `rewards: dict[str, float | int]`，
+      放嵌套 dict 或字符串会让整个 trial 判 ValidationError，详见下方 docstring
     """
     return '''#!/usr/bin/env python3
 """T3 生成，勿手改。解析 junit XML → 写 reward.json / reward.txt。
@@ -343,6 +351,20 @@ def score_py() -> str:
 harbor 读 `/logs/verifier/reward.json`，**没有** `rewards.json` 这个名字。
 写复数的后果不是报错而是**静默降级** —— harbor 退回读 `reward.txt`（单值），
 `f2p` / `p2p` 两个键永远不进 result.json。
+
+## 🔴 reward.json 只能放标量（T5 实测，2026-09-10）
+
+`harbor/models/verifier/result.py:5` 是 `rewards: dict[str, float | int] | None`。
+放**嵌套 dict**（原先的 `f2p_detail` / `p2p_detail`）或**字符串**（原先的 `error`）
+会让 pydantic 校验失败，形态是 **`Trials=0 / Exceptions=N` 全部 ValidationError** ——
+整条 trial 判错，连 reward=0 都拿不到。
+
+这个坑 T3 与 TZ 都发现不了：TZ 跑的 hello-world 用 harbor 自带的单键 reward.json；
+T3 是 `docker run` 直跑 bun，**没有经过 harbor 的结果解析层**。只有 T5 会撞上。
+
+所以：诊断详情写到 **`score-detail.json`**（harbor 不解析这个名字，但它在
+`/logs/verifier/` 下，会被完整收进 trial 产物，T5/T6 照样能读）；
+错误标记降级成 **`error_code` 数值键**（0=正常，见 ERROR_CODES）。
 
 ## 🔴 为什么必须做文件覆盖核对，不能只读 failures
 
@@ -356,7 +378,8 @@ harbor 读 `/logs/verifier/reward.json`，**没有** `rewards.json` 这个名字
 
 ## 每条路径都要写 reward（规则1）
 
-XML 缺失或解析失败 → 判 0 并在 `reward.json` 记 `error`，**不抛异常**。
+XML 缺失或解析失败 → 判 0 并在 `reward.json` 记 `error_code`（数值），
+详情进 `score-detail.json`，**不抛异常**。
 只单跑一个加载失败的文件时 bun 连 XML 都不写，这条路径是真实会走到的。
 """
 
@@ -370,6 +393,15 @@ VERIFIER_DIR = Path("/logs/verifier")
 #: 名单由 T3 字面写入（规则5），与 test.sh 里那两行同源
 F2P_FILES = json.loads(Path("/tests/f2p.json").read_text())
 P2P_FILES = json.loads(Path("/tests/p2p.json").read_text())
+
+#: reward.json 只能放标量，所以错误用数值编码。0 = 正常跑完。
+#: 与 test.sh 里两处兜底 printf 的 error_code 同一套编号，不要各写一套。
+ERROR_CODES = {
+    None: 0,
+    "empty_file_list": 3,
+    "xml_missing": 4,
+    "xml_parse_error": 5,
+}
 
 
 def side_score(xml_name: str, required: list[str]) -> tuple[float, dict]:
@@ -411,10 +443,33 @@ def main() -> int:
     p2p, p2p_detail = side_score("p2p.xml", P2P_FILES)
     # reward = 两侧都过才算解出来：F2P 证明修好了，P2P 证明没砸别处
     reward = 1.0 if (f2p == 1.0 and p2p == 1.0) else 0.0
-    doc = {"reward": reward, "f2p": f2p, "p2p": p2p, "f2p_detail": f2p_detail, "p2p_detail": p2p_detail}
+
+    # ── reward.json：**只放标量**（见模块 docstring 第二条）──────────────
+    # 多放一个 dict 或 str 就让整条 trial 变成 ValidationError，比 reward=0 更糟：
+    # 后者是「没解出来」，前者是「这题没测到」，而 harbor 把它算进 Exceptions。
+    err = ERROR_CODES.get(f2p_detail.get("error")) or ERROR_CODES.get(
+        p2p_detail.get("error")
+    ) or 0
+    doc = {
+        "reward": reward,
+        "f2p": f2p,
+        "p2p": p2p,
+        "error_code": err,
+        # 下面四个是标量摘要，够 T5 判「是哪一侧、缺几个文件」，不用翻 detail
+        "f2p_n_required": float(f2p_detail.get("n_required") or 0),
+        "f2p_n_seen": float(f2p_detail.get("n_seen") or 0),
+        "p2p_n_required": float(p2p_detail.get("n_required") or 0),
+        "p2p_n_seen": float(p2p_detail.get("n_seen") or 0),
+    }
     # 双源：harbor 优先读 reward.json，reward.txt 供 T5 交叉核对（§3.8-D）
     (VERIFIER_DIR / "reward.json").write_text(json.dumps(doc, ensure_ascii=False) + "\\n")
     (VERIFIER_DIR / "reward.txt").write_text(f"{reward}\\n")
+    # 文件名单等嵌套详情单独落盘 —— harbor 不解析这个名字，但它在 /logs/verifier/ 下，
+    # 会被完整收进 trial 产物，T5/T6 定位「哪个文件没加载起来」照样有据可查。
+    (VERIFIER_DIR / "score-detail.json").write_text(
+        json.dumps({"f2p": f2p_detail, "p2p": p2p_detail}, ensure_ascii=False, indent=2)
+        + "\\n"
+    )
     print(json.dumps(doc, ensure_ascii=False))
     return 0
 

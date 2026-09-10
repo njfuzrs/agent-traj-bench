@@ -505,7 +505,7 @@ def test_task_dir_missing_test_script_is_invalid(tmp_path):
         # T2 已在 2026-09-08 实现，从这张名单里移出（它现在归下面的 ⑫-⑯ 管）
         # T4 已在 2026-09-08 实现，归下面的 ⑰-㉑ 管
         # T3 已在 2026-09-08 实现，归下面的 ㉒-㉘ 管
-        "t5-gate.sh",
+        # T5 已在 2026-09-10 实现（t5-gate.py + t5_gate_lib.py），归下面的 ㊵-㊷ 管
         "t7-baseline.sh",
     ],
 )
@@ -519,6 +519,34 @@ def test_unimplemented_skeletons_exit_nonzero(script):
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
     assert proc.returncode != 0, f"{script} 未实现却以 0 退出"
     assert "尚未实现" in (proc.stdout + proc.stderr)
+
+
+def test_no_script_starts_a_real_run_when_merely_executed():
+    """🔴 **跑批脚本不许「一执行就真跑」** —— 2026-09-10 的实测教训。
+
+    T5 实现后，`t5-gate.sh` 曾被改成 `exec python3 t5-gate.py` 的转发壳。
+    后果：上面那个骨架测试会 `bash t5-gate.sh` 一下，**真的起了一批 harbor**
+    （65 条 task、9 个 trial 跑完才被发现），与正在跑的正式批次抢容器与磁盘。
+
+    教训是「转发壳即地雷」：一个文件只要被执行就产生副作用，那么任何**以为自己
+    只是在探测它**的调用方（测试、`--help`、shell 补全）都会触发副作用。
+    所以 `t5-gate.sh` 已删除，跑批统一走 `python3 scripts/mvp/t5-gate.py`。
+
+    这条守的是不变式：`scripts/mvp/` 下不得再出现「无参数执行就调 harbor」的 .sh。
+    """
+    offenders = []
+    for sh in sorted(MVP.glob("*.sh")):
+        text = sh.read_text(encoding="utf-8")
+        # 去掉注释行再看，注释里提命令是可以的（骨架文件正是这么记的）
+        code = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        if "exec " in code and "t5-gate.py" in code:
+            offenders.append(f"{sh.name}: 转发到 t5-gate.py（执行即真跑）")
+        # 未实现的骨架必须在调 harbor 之前就退出
+        if "harbor run" in code and "exit 64" not in code and "尚未实现" not in text:
+            offenders.append(f"{sh.name}: 无守卫地调 harbor run")
+    assert not offenders, "发现执行即产生副作用的脚本：" + "; ".join(offenders)
 
 
 # ── 目录约定（§4 T0 四条纪律） ─────────────────────────────────────
@@ -1555,3 +1583,248 @@ def test_t3_sampler_resume_retries_failed_bases():
     assert re.search(
         r'done = \{b: d for b, d in done_all\.items\(\) if d\.get\("ok"\)\}', src
     ), "resume 的跳过名单没有按 ok 过滤 —— 失败的 base 会被永久跳过"
+
+
+# ── ㊵-㊸ T5 门禁判定（2026-09-10 实现，每条都对应一次实测代价） ──────
+
+
+def _row(task="T0001", **kw):
+    """造一条 TrialRow。默认双源一致（否则所有判定都会先撞双源检查）。"""
+    import t5_gate_lib as lib
+
+    kw.setdefault("reward", 1.0)
+    kw.setdefault("reward_txt", kw["reward"])
+    return lib.TrialRow(task=task, trial_dir=Path("/nonexistent"), **kw)
+
+
+def test_t5_nop_gate_flags_fake_task_by_f2p_not_total_reward():
+    """㊵ 门禁②必须看 **f2p 分量**，不是总 reward（v1.2 修正，且实测抓到 4 条）。
+
+    🔴 真实战果：T0001/T0006/T0015/T0037 在 nop 下 **f2p=1** —— 什么都不改测试就绿，
+    即「测试改动不构成 fail-to-pass」。这类假 task **T3 的 oracle 自检完全抓不到**
+    （oracle 也是满分），只有 nop 能抓。
+
+    而如果按总 reward 判：假 task 的 reward = f2p AND p2p = 1 AND 1 = 1，
+    会被判成「通过」——正好放过唯一该抓的那类。
+    """
+    import t5_gate_lib as lib
+
+    fake = _row(reward=1.0, f2p=1.0, p2p=1.0)
+    v = lib.gate_nop([fake])[0]
+    assert not v.ok, "nop 下 f2p=1 是假 task，必须报红"
+    assert "假 task" in v.reason
+    assert not v.infra, "假 task 是 task 自身问题，不是基础设施问题"
+
+    good = _row(reward=0.0, f2p=0.0, p2p=1.0)
+    assert lib.gate_nop([good])[0].ok, "nop 下 f2p=0 且 p2p=1 才是健康 task"
+
+
+def test_t5_nop_gate_separates_bad_env_from_fake_task():
+    """㊶ `p2p=0` 是**坏环境**，必须标 infra —— 不要去动 task。
+
+    快照缺文件 / 依赖装不上 / P2P 采到被剔除的测试，都会让 P2P 恒败。
+    压成「淘汰」会让人去改本来没坏的 task。
+    """
+    import t5_gate_lib as lib
+
+    v = lib.gate_nop([_row(reward=0.0, f2p=0.0, p2p=0.0)])[0]
+    assert not v.ok and v.infra, "p2p=0 是基础设施问题，要标 infra"
+    assert "坏环境" in v.reason
+
+
+def test_t5_oracle_gate_does_not_kill_task_when_only_p2p_red():
+    """㊷ 🔴 `f2p=1` 但 P2P 红 ≠ task 该淘汰 —— 这是当场修掉的一次**误杀**。
+
+    首版把「reward != 1」一律判成淘汰。但 T0017/T0027 的实际形态是
+    **F2P 全绿、P2P 红**，即「参考解打上后砸了别处」，与「gold patch 打不上」
+    是两个完全不同的诊断。且这两条在 nop 下 P2P 全绿、失败的 P2P
+    （abort-graceful / turn-hard-timeout / stream-interrupt-recovery）全是 timing 类。
+
+    两种可能必须复跑才能分辨，所以标 infra 进「待复查」而不是「已淘汰」：
+      ① 参考解真引入回归 → 淘汰；② P2P 是 flaky → task 无罪。
+
+    教训与 T4 的 `--selftest-substring-leak` 同源：**判据写粗了，门禁就会以
+    「全绿/全红」的样子给出错误结论**。这里的粗糙不在阈值而在**分类**。
+    """
+    import t5_gate_lib as lib
+
+    v = lib.gate_oracle([_row(reward=0.0, f2p=1.0, p2p=0.0)])[0]
+    assert not v.ok, "reward != 1 仍然没过门禁"
+    assert v.infra, "f2p=1 而 p2p 红 → 待复查，不能直接淘汰 task"
+    assert "不淘汰" in v.reason or "复跑" in v.reason
+
+    # 对照：F2P 真红才是 task 自身问题
+    hard = lib.gate_oracle([_row(reward=0.0, f2p=0.0, p2p=1.0)])[0]
+    assert not hard.ok and not hard.infra, "F2P 红是 task 不可解，属真淘汰"
+
+
+def test_t5_dual_source_mismatch_is_infra_not_task_failure():
+    """㊸ reward 双源不一致 = **取数路径写错**，不是分数变了（§3.8-D）。
+
+    `result.json` 的值必须与 `verifier/reward.txt` 一致。不一致时若判成
+    「task 淘汰」，就会把一个取数 bug 记成一批 task 的质量问题。
+    两边都缺也算不一致 —— 那说明 verifier 根本没写分。
+    """
+    import t5_gate_lib as lib
+
+    for gate in (lib.gate_oracle, lib.gate_nop):
+        v = gate([_row(reward=1.0, reward_txt=0.0, f2p=1.0, p2p=1.0)])[0]
+        assert not v.ok and v.infra, f"{gate.__name__}: 双源不一致必须标 infra"
+        assert "双源" in v.reason
+
+    missing = lib.gate_oracle([_row(reward=1.0, reward_txt=None, f2p=1.0, p2p=1.0)])[0]
+    assert not missing.ok and missing.infra, "reward.txt 缺失也算双源不一致"
+
+
+def test_t5_consistency_gate_needs_at_least_two_runs():
+    """㊹ 门禁③：单次运行**判不了**一致性，不能默认放过。
+
+    `-k 3` 若因故只落了 1 个 trial，把它判成「一致」等于凭一次运行发通过证 ——
+    正是 R1「绿着坏掉」的形态。标 infra（要补跑），不是淘汰 task。
+    """
+    import t5_gate_lib as lib
+
+    one = lib.gate_consistency([_row(reward=1.0)])[0]
+    assert not one.ok and one.infra, "只有 1 次运行必须标 infra，不能判通过"
+
+    same = lib.gate_consistency([_row(reward=1.0), _row(reward=1.0), _row(reward=1.0)])[0]
+    assert same.ok, "三次一致应通过"
+
+    flaky = lib.gate_consistency([_row(reward=1.0), _row(reward=0.0), _row(reward=1.0)])[0]
+    assert not flaky.ok and not flaky.infra, "三次不一致是 task 有随机性，属真淘汰"
+
+
+def test_t5_report_does_not_claim_three_gates_when_fewer_ran():
+    """㊺ 报告措辞必须反映**实际跑了几道门禁**。
+
+    `--only nop` 时若写「三道门禁后存活 61 条」，读者会把 61 当终值，
+    而 oracle/k3 还没跑（实测 oracle 又淘汰了 19 条，真值是 40）。
+    **报告自己说谎比没有报告更糟**。
+    """
+    src = (MVP / "t5-gate.py").read_text(encoding="utf-8")
+    assert "已跑门禁" in src, "报告必须显式列出实际跑了哪几道"
+    assert "这不是终值" in src, "门禁不齐时必须警告当前存活不是终值"
+    assert 'len(summaries) == 3' in src, "必须按实际门禁数决定措辞"
+
+
+def test_t5_partial_run_does_not_wipe_other_gates_conclusions():
+    """㊻ 🔴 `--only <一道>` 收尾时**不许把其它门禁的结论覆盖掉**。
+
+    实测缺陷（2026-09-10，跑 `--only oracle` 时真发生了）：`write_outputs` 只写
+    `summaries` 里有的门禁，而 `--only` 模式下它只有一项 —— 于是 `gate.jsonl`
+    被整份重写成只剩那一道，**把前一道跑了 38 分钟的 nop 结论静默抹掉**。
+
+    形态与 T3 采样脚本的 ㊳㊴ 同源：**命令报成功、产物悄悄不对**。
+    发现它靠的是落盘前备份时顺手核了一眼「备份里含几道门禁」。
+
+    修法：落盘前把没在本次跑、但已有 run 产物的门禁用 `load()` 一并读进来。
+    这也是把判定与跑批解耦的价值 —— 原始 run 产物完好时，`--from-runs`
+    能零成本重算回来，不必重跑容器。
+    """
+    src = (MVP / "t5-gate.py").read_text(encoding="utf-8")
+    # 必须在写盘前补齐其它门禁
+    assert "（并入已有产物）" in src, "落盘前没有并入已有产物的其它门禁 —— 会覆盖它们"
+    idx_merge = src.index("（并入已有产物）")
+    idx_write = src.rindex("write_outputs(summaries)")
+    assert idx_merge < idx_write, "并入逻辑必须在 write_outputs 之前"
+    # 报告顺序固定，不随跑批先后变化
+    assert '("oracle", "nop", "oracle-k3") if k in summaries' in src, "报告门禁顺序未固定"
+
+
+# ── ㊸-㊺ T5 反向自证机制本身的守卫 ────────────────────────────────
+
+
+def _selftest_src() -> str:
+    return (MVP / "t5-gate.py").read_text(encoding="utf-8")
+
+
+def test_t5_selftest_missing_mutant_counts_as_failure():
+    """产物里找不到某个变异体，必须判**不通过**，不能当它不存在就跳过。
+
+    这是反向自证最危险的失效方式：变异体因为 harbor 没发现（目录名不合规、
+    符号链接断了、`-p` 指错）而**一个都没跑**，于是「没有不符合预期的」
+    被写成「四条全部通过」—— 自证自己变成恒绿。
+    """
+    import t5_gate_lib as lib
+
+    cs = lib.SelftestCase("M9-never-ran", "oracle", False, "故意不给产物")
+    out = lib.check_selftest([cs], {"oracle": []}, {"oracle": []})
+    assert len(out) == 1
+    assert not out[0].ok, "变异体没跑起来必须判不通过"
+    assert "找不到" in out[0].detail
+
+
+def test_t5_selftest_checks_why_it_is_red_not_just_that_it_is_red():
+    """红得对不对也要核 —— 「因环境坏而红」不能算「因检测生效而红」。
+
+    实测背景：M2（空参考解）期望的是 `infra=False` 的 F2P 红。如果它因为
+    双源不一致 / trial 异常而红（都是 `infra=True`），那门禁并没有证明
+    「能抓住空参考解」，只证明了「环境有问题」。
+    """
+    import t5_gate_lib as lib
+
+    cs = lib.SelftestCase(
+        "M2-empty-solution", "oracle", False, "期望 F2P 红",
+        expect_infra=False, expect_reason_has="f2p=0.0",
+    )
+    # 红了，但红的理由是 infra —— 必须判不通过
+    infra_red = [lib.Verdict("M2-empty-solution", False, "trial 异常：Boom", infra=True)]
+    out = lib.check_selftest([cs], {"oracle": infra_red}, {"oracle": []})
+    assert not out[0].ok, "infra 红不能冒充检测生效"
+    assert "红的理由不对" in out[0].detail
+
+    # 红且理由对 —— 通过
+    right_red = [lib.Verdict("M2-empty-solution", False, "oracle reward=0.0（f2p=0.0；正常跑完）")]
+    assert lib.check_selftest([cs], {"oracle": right_red}, {"oracle": []})[0].ok
+
+
+def test_t5_selftest_requires_unmutated_control():
+    """自证批次里必须有**未变异对照**且要求它过。
+
+    没有它，「整批因构建失败而全红」与「四条检测全部生效」在报告里
+    长得一模一样 —— 全红会被读成全部通过。
+    """
+    src = _selftest_src()
+    assert "M0-control" in src, "自证必须带未变异对照"
+    # 对照的期望必须是「过」（must_pass=True）
+    idx = src.index('"M0-control", "oracle"')
+    assert "True" in src[idx : idx + 60], "对照的期望必须是 must_pass=True"
+
+
+def test_t5_selftest_keeps_the_m4_m5_pair():
+    """M4（有保护→绿）与 M5（拿掉保护→红）**必须成对存在**。
+
+    🔴 单有 M4 时它的绿不可信：「垃圾被清掉了所以绿」与「垃圾根本没写进去
+    所以绿」在产物里无法区分。M5 拿掉保护后必须报红，才排除了后者。
+    删掉 M5 会让 M4 退化成一条看起来在检查、实际啥也没证明的自证 ——
+    与 T4 那条阈值拍错的恒绿自检是同一种失效。
+    """
+    src = _selftest_src()
+    assert "M4-agent-tampers-tests" in src and "M5-tamper-unprotected" in src, (
+        "M4/M5 必须成对 —— 少一条，测试保护这项就没被真正验证"
+    )
+    # M4 期望过、M5 期望红
+    i4 = src.index('"M4-agent-tampers-tests", "oracle"')
+    i5 = src.index('"M5-tamper-unprotected", "oracle"')
+    assert "True" in src[i4 : i4 + 60], "M4 应期望通过（保护生效）"
+    assert "False" in src[i5 : i5 + 60], "M5 应期望报红（保护缺失）"
+
+
+def test_t5_selftest_mutants_share_one_environment_image():
+    """变异体只许改 `tests/` 与 `solution/`，`environment/` 必须逐字节同源。
+
+    `environment_content_hash()` 只哈希 `environment/` 下的真实文件，所以
+    原样硬链接 → 六个副本共享一个 `environment_id` → **镜像只构建一次**。
+    一旦有人往变异体的 `environment/` 里写东西，每个变异体各建一次镜像
+    （约 30 秒 + 数百 MB），在磁盘紧的机器上会直接把批次跑崩。
+    """
+    src = _selftest_src()
+    assert "os.link" in src, "environment/ 必须硬链接，不能复制或改写"
+    # 变异写入只允许落在 tests/ 或 solution/ 下
+    import re
+
+    for m in re.finditer(r'\(m\d+ / "([^"]+)"', src):
+        assert m.group(1) in ("tests", "solution"), (
+            f"变异体写入了 {m.group(1)}/ —— 只许改 tests/ 与 solution/，"
+            f"改 environment/ 会破坏镜像共享"
+        )
