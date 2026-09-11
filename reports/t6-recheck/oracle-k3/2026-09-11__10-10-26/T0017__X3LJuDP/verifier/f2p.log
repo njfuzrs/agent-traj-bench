@@ -1,0 +1,134 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/llm/effort.test.ts:
+(pass) isEffortLevel / EFFORT_LEVELS > 4 档标度 [0.02ms]
+(pass) isEffortLevel / EFFORT_LEVELS > 合法/非法判定 [0.02ms]
+(pass) resolveEffortCapability — 协议分类 > 规则1 DeepSeek OpenAI 端点 [0.02ms]
+(pass) resolveEffortCapability — 协议分类 > 规则2 DeepSeek Anthropic 端点（baseURL 含 /anthropic） [0.08ms]
+(pass) resolveEffortCapability — 协议分类 > 规则3 Anthropic 原生 Claude [0.04ms]
+(pass) resolveEffortCapability — 协议分类 > 规则4 OpenAI o-series（无 max） [0.02ms]
+(pass) resolveEffortCapability — 协议分类 > 规则5 未知端点（兜底全不支持） [0.03ms]
+(pass) resolveEffortCapability — 协议分类 > 必删-3：GLM（OpenAI 兼容）supportsThinkingToggle=true [0.01ms]
+(pass) resolveEffortCapability — 协议分类 > 必删-3：Grok（OpenAI 兼容）无 thinking 开关但 reasoning_effort 独立生效 [0.02ms]
+(pass) resolveEffortCapability — 协议分类 > 优先级1：modelConfig.supportsThinking=false 强制全不支持 [0.01ms]
+(pass) applyToSendParams — 线格式映射 > 规则1 DeepSeek OpenAI：effort→reasoningEffort 二值钳制 [0.03ms]
+(pass) applyToSendParams — 线格式映射 > 规则1 DeepSeek：思考关闭则不下发 effort [0.01ms]
+(pass) applyToSendParams — 线格式映射 > 规则3 Anthropic 原生：effort→budgetTokens 档位映射 [0.11ms]
+(pass) applyToSendParams — 线格式映射 > 规则3 Anthropic 原生：thinking off 不开思考 [0.04ms]
+(pass) applyToSendParams — 线格式映射 > 规则4 o-series：max→high，low/medium 原样 [0.02ms]
+(pass) applyToSendParams — 线格式映射 > 规则5 未知端点：全 no-op，不下发任何字段 [0.03ms]
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > env 未设(null)用 runtime [0.01ms]
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > env 强制档位覆盖 runtime
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > env 强制 auto(undefined) 覆盖 runtime
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > max→high：模型不支持 max 时降级
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > runtime auto 保持 undefined
+(pass) getDisplayedEffort / isEffortAuto > auto 态展示模型默认档 [0.02ms]
+(pass) getDisplayedEffort / isEffortAuto > 显式档位展示该档（基线，非服务端钳制后）
+(pass) getDisplayedEffort / isEffortAuto > env 强制 auto → isEffortAuto true [0.01ms]
+(pass) resolveThinking — 优先级链 > env 覆盖最高 [0.03ms]
+(pass) resolveThinking — 优先级链 > runtime on/off [0.02ms]
+(pass) resolveThinking — 优先级链 > auto 跟随 cap.thinkingDefaultOn
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > SID_CODE_EFFORT_LEVEL 优先于 CLAUDE_CODE_EFFORT_LEVEL [0.03ms]
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > 兼容别名 CLAUDE_CODE_EFFORT_LEVEL
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > unset / auto → 强制 auto(undefined)
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > 未设 → null
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > 非法值 → null
+(pass) getThinkingEnvOverride > on/true/1 → true [0.02ms]
+(pass) getThinkingEnvOverride > off/false/0 → false
+(pass) getThinkingEnvOverride > auto / 未设 / 非法 → null
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > DeepSeek OpenAI 端点：low/medium 实际下发 high（被钳制） [0.02ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > DeepSeek OpenAI 端点：high/max 原样下发（无钳制）
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > DeepSeek Anthropic 端点：low/medium→high（走 output_config.effort） [0.03ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > o-series：max 实际下发 high（被钳制），low/medium 原样 [0.02ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > 原生 Claude：走 budget_tokens 无显式 effort 下发 → 返回原档（视为无钳制） [0.07ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > unknown：no-op → 返回原档 [0.01ms]
+
+tests/llm/fallback.test.ts:
+(pass) ModelFallback > 成功请求直接返回所有事件 [2.03ms]
+(pass) ModelFallback > Terminal 错误（认证失败）直接进入 fallback [0.48ms]
+(pass) ModelFallback > 模型已标记 terminal 时直接使用 fallback [0.14ms]
+(pass) ModelFallback > 无 fallback Provider 时返回错误事件 [0.09ms]
+(pass) ModelFallback > 空响应触发 StreamValidationError 并重试 [5.87ms]
+(pass) ModelFallback > 重试时触发 onRetry 回调 [3.88ms]
+(pass) ModelFallback > fallback 时触发 onFallback 回调 [0.11ms]
+(pass) ModelFallback > 用户中断时不重试也不 fallback [0.09ms]
+(pass) ModelFallback > reset 重置 hasFallenBack 状态 [0.09ms]
+(pass) ModelFallback > getAvailability 返回可用性服务实例 [0.02ms]
+(pass) ModelFallback > 未传入 availability 时自动创建 [0.01ms]
+(pass) ModelFallback 增强 > 401 连接阶段触发认证刷新并重试一次 [0.09ms]
+(pass) ModelFallback 增强 > 401 连接阶段重试后仍失败进入 fallback [0.10ms]
+(pass) ModelFallback 增强 > ECONNRESET 后重试成功（连接阶段） [1768.91ms]
+(pass) ModelFallback 增强 > max_tokens 溢出自动恢复重试成功 [2159.57ms]
+(pass) ModelFallback 增强 > #8：大窗口下极小剩余空间默认放弃 max_tokens 恢复（floor 按比例提高） [4.99ms]
+(pass) ModelFallback 增强 > #8：SID_RECOVERY_FLOOR_TOKENS 放宽 floor 后可从同样的溢出中恢复 [2.02ms]
+(pass) ModelFallback 增强 > 流式阶段连续 3 次 529 触发降级 [4.17ms]
+(pass) ModelFallback 增强 > 后台 529 立即放弃（不重试） [0.60ms]
+(pass) ModelFallback 增强 > persistent 模式：重试耗尽后进入无限等待(persistent_retry_wait)而非降级 [152.02ms]
+(pass) ModelFallback 增强 > 非 persistent(默认)：重试耗尽后降级到备用 provider，不进入 persistent 等待 [0.42ms]
+(pass) ModelFallback 增强 > persistent 心跳：长睡眠拆成 10s 分段并 yield 剩余时间进度事件 [10008.88ms]
+(pass) ModelFallback 增强 > shouldRetry529: 前台 true, 后台 false [1.23ms]
+(pass) ModelFallback 增强 > FOREGROUND_SOURCES 包含正确的源 [0.08ms]
+(pass) ModelFallback 增强 > Telemetry 回调接收事件 [5.39ms]
+(pass) ModelFallback 增强 > 自定义 streamTimeoutMs [0.34ms]
+(pass) ModelFallback 增强 > 流 hang 触发超时 abort 时走重试/fallback 而非永久阻塞 [6450.95ms]
+(pass) ModelFallback 增强 > 用户 abort（外部 signal）立即传播 RequestAbortedError [38.27ms]
+(pass) T6 — 流内错误提前检测（stream-level error） > Anthropic 200 + overloaded_error 首事件（消息无关键词）→ 重试后成功 [2210.95ms]
+(pass) T6 — 流内错误提前检测（stream-level error） > OpenAI 200 + error chunk 首事件 → 重试后成功 [1851.49ms]
+(pass) T6 — 流内错误提前检测（stream-level error） > 正常首事件 → 正常消费（不误触发重试） [0.61ms]
+(pass) T6 — 流内错误提前检测（stream-level error） > 流内认证错误（terminal）不重试 → 进 fallback [0.90ms]
+
+tests/config/network-profile.test.ts:
+(pass) resolveLoopTimeouts — 层级优先级 > 无任何覆盖 → 全部取统一默认值 [0.39ms]
+(pass) resolveLoopTimeouts — 层级优先级 > settings.network 覆盖默认值 [0.08ms]
+(pass) resolveLoopTimeouts — 层级优先级 > 环境变量优先级高于 settings.network [0.06ms]
+(pass) resolveLoopTimeouts — 层级优先级 > 非法环境变量（负数/非数字）被忽略，回退下一层 [0.12ms]
+(pass) resolveLoopTimeouts — 层级优先级 > maxTimeoutRetries=0 是合法值（nonNegative），不被当作未设置 [0.04ms]
+(pass) resolveLoopTimeouts — 层级优先级 > 统一默认值：保活优先（阈值足够宽） [0.06ms]
+(pass) resolveHeaderTimeoutMs — provider 内部两层 > 默认取统一 header 超时 [0.05ms]
+(pass) resolveHeaderTimeoutMs — provider 内部两层 > 环境变量覆盖 [0.05ms]
+(pass) resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2） > 无覆盖 → 全部取统一默认值（不按模型分档） [0.13ms]
+(pass) resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2） > openai idle / content-progress env 覆盖 [0.12ms]
+(pass) resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2） > anthropic content-progress / overall 用各自 env 名 [0.13ms]
+(pass) resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2） > fetch-absolute env 两 provider 共用 [0.06ms]
+(pass) resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2） > 非法 env（负数/非数字）被忽略，回退默认 [0.05ms]
+(pass) resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2） > 默认 providerKind 为 openai [0.10ms]
+(pass) computeBackoffMs — 指数退避 + jitter + 封顶 > 随 attempt 指数增长（含 ±15% jitter，取区间断言） [0.10ms]
+(pass) computeBackoffMs — 指数退避 + jitter + 封顶 > 封顶 maxMs（含 jitter 上界） [0.05ms]
+
+tests/sdk/message-converter.test.ts:
+(pass) convertToSDKMessage > user_message_added → null（不转发） [1.29ms]
+(pass) convertToSDKMessage > tombstone → null（内部信号） [0.06ms]
+(pass) convertToSDKMessage > assistant_message → assistant [0.21ms]
+(pass) convertToSDKMessage > stream_text → stream_event [0.06ms]
+(pass) convertToSDKMessage > tool_start → tool_progress(start) [0.06ms]
+(pass) convertToSDKMessage > tool_end → tool_progress(end) [0.05ms]
+(pass) convertToSDKMessage > compact → compact_boundary [0.04ms]
+(pass) convertToSDKMessage > context_warning → status [0.13ms]
+(pass) convertToSDKMessage > max_turns → result(error_max_turns) [0.08ms]
+(pass) convertToSDKMessage > done → result(success) 骨架 [0.04ms]
+(pass) convertToSDKMessage > hook_blocked → hook_response [0.03ms]
+(pass) convertToSDKMessage > loop_detected → status [0.03ms]
+(pass) convertToSDKMessage > loop_recovery → status [0.03ms]
+(pass) convertToSDKMessage > system → status [0.05ms]
+(pass) convertToSDKMessage > fatal_error → result(error_during_execution)（不再谎报 success） [0.07ms]
+(pass) convertToSDKMessage > fatal_error 带 stack → errors 含堆栈 [0.07ms]
+
+tests/sdk/headless-event-format.test.ts:
+(pass) classifyHeadlessStreamText > 重试进度文案 → isRetryProgress，剥离前缀走 stderr [1.14ms]
+(pass) classifyHeadlessStreamText > 普通文本 → 非重试进度（拼入正文） [0.03ms]
+(pass) classifyHeadlessStreamText > 以重试文案为子串但不在开头 → 不误判 [0.03ms]
+(pass) formatHeadlessEvent > system/error → stderr + 拼入正文兜底（静默-2 核心） [0.13ms]
+(pass) formatHeadlessEvent > system/info → stderr（不进正文，静默-2） [0.04ms]
+(pass) formatHeadlessEvent > system/warning → stderr [0.03ms]
+(pass) formatHeadlessEvent > tombstone → 模型降级提示 [0.06ms]
+(pass) formatHeadlessEvent > hook_blocked → 拦截提示（否则表现为什么都没发生） [0.03ms]
+(pass) formatHeadlessEvent > max_turns → 轮次上限提示 [0.03ms]
+(pass) formatHeadlessEvent > loop_detected → 循环检测提示 [0.02ms]
+(pass) formatHeadlessEvent > loop_recovery → 恢复尝试提示 [0.04ms]
+(pass) formatHeadlessEvent > context_warning → 上下文剩余提示 [0.04ms]
+(pass) formatHeadlessEvent > assistant_message / stream_text / done → null（由 streamBuffer 或主循环处理） [0.04ms]
+
+ 118 pass
+ 0 fail
+ 234 expect() calls
+Ran 118 tests across 5 files. [24.76s]

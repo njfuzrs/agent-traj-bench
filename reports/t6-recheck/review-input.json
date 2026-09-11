@@ -1,0 +1,1175 @@
+[
+ {
+  "task": "T0002",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "76b60150",
+  "sid": "0bfbfc8e",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/telemetry/config-undefined-defaults.test.ts"
+  ],
+  "code_files": [
+   "src/config/config.ts",
+   "src/telemetry/bus.ts",
+   "src/telemetry/exporters/jsonl.ts"
+  ],
+  "test_files": [
+   "tests/telemetry/config-undefined-defaults.test.ts"
+  ],
+  "gp_bytes": 3893,
+  "ins_chars": 103,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260807-遥测落盘恒空-配置undefined覆盖默认值.md' 请按照方案执行代码修复"
+ },
+ {
+  "task": "T0003",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "484bb688",
+  "sid": "0cec5e10",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/ide/context-delta.test.ts",
+   "tests/memory/team/sync.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/command/skill-command.ts",
+   "src/ide/integration.ts",
+   "src/memory/team/store.ts",
+   "src/memory/team/sync.ts",
+   "src/memory/team/watcher.ts",
+   "src/query/engine.ts",
+   "src/query/init-helpers.ts",
+   "src/query/loop.ts",
+   "src/query/types.ts",
+   "src/skill/meta-tool.ts"
+  ],
+  "test_files": [
+   "tests/ide/context-delta.test.ts",
+   "tests/memory/team/sync.test.ts"
+  ],
+  "gp_bytes": 20626,
+  "ins_chars": 113,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/上下文注入作用域审计-发现清单.md' 请根据文档，完成任务：第 2 批：功能等同未上线（第 17、22、19 条）"
+ },
+ {
+  "task": "T0005",
+  "band": "M",
+  "cat": "test_authoring",
+  "base": "50a69824",
+  "sid": "10ff970f",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/debug/logger-level-gate.test.ts"
+  ],
+  "code_files": [
+   "src/debug/logger.ts"
+  ],
+  "test_files": [
+   "tests/debug/logger-level-gate.test.ts"
+  ],
+  "gp_bytes": 1721,
+  "ins_chars": 211,
+  "ins": "走流程发布一个新版本sid-code 记得更新官网更新日志\n</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it. Ignore the language of the examples above."
+ },
+ {
+  "task": "T0007",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "3b916830",
+  "sid": "15e9d5dc",
+  "n_f2p": 3,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/agent/sub-agent-model-whitelist.test.ts",
+   "tests/llm/strict-wire-contract-reconciliation.test.ts",
+   "tests/tool/nullish-normalize.test.ts"
+  ],
+  "code_files": [
+   "src/agent/tool.ts",
+   "src/llm/openai-responses-request.ts",
+   "src/llm/openai.ts",
+   "src/llm/registry.ts",
+   "src/tool/grep.ts",
+   "src/tool/input-validator.ts",
+   "src/tool/nullish-normalize.ts"
+  ],
+  "test_files": [
+   "tests/agent/sub-agent-model-whitelist.test.ts",
+   "tests/llm/strict-wire-contract-reconciliation.test.ts",
+   "tests/tool/nullish-normalize.test.ts"
+  ],
+  "gp_bytes": 16258,
+  "ins_chars": 76,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/_template/gpt参数校验失败.txt' 帮我排查文档中的问题"
+ },
+ {
+  "task": "T0008",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "c8d8fb42",
+  "sid": "18c3d2b0",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/hook/planner-matcher.test.ts"
+  ],
+  "code_files": [
+   "src/hook/planner.ts",
+   "src/hook/runner.ts",
+   "src/hook/types.ts"
+  ],
+  "test_files": [
+   "tests/hook/planner-matcher.test.ts"
+  ],
+  "gp_bytes": 7281,
+  "ins_chars": 142,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/08-Hook系统-对齐claude-code-缺口修复方案.md' 按照文档执行代码修改，所有问题，缺口，差距都需要修复，不要遗漏"
+ },
+ {
+  "task": "T0009",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "d05cc2bc",
+  "sid": "22b844ee",
+  "n_f2p": 3,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/context/meta-preservation.test.ts",
+   "tests/llm/openai-block-fidelity.test.ts",
+   "tests/ui/hidden-path-tool-result.test.ts"
+  ],
+  "code_files": [
+   "src/context/manager.ts",
+   "src/context/tool-output-masking.ts",
+   "src/llm/openai-responses-request.ts",
+   "src/llm/openai-tool-result-content.ts",
+   "src/llm/openai.ts",
+   "src/ui/history-adapter.ts"
+  ],
+  "test_files": [
+   "tests/context/meta-preservation.test.ts",
+   "tests/llm/openai-block-fidelity.test.ts",
+   "tests/ui/hidden-path-tool-result.test.ts"
+  ],
+  "gp_bytes": 13506,
+  "ins_chars": 133,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/上下文注入作用域审计-发现清单.md'                        \n  请根据文档，完成任务：第 5 批：消息保真（第 5、8、6 条）"
+ },
+ {
+  "task": "T0010",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "133e0cfa",
+  "sid": "2701a72b",
+  "n_f2p": 11,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/api/cache-detection.test.ts",
+   "tests/command/clear-resets-cache-state.test.ts",
+   "tests/config/patch-settings.test.ts",
+   "tests/guard/test-isolation-guard.test.ts",
+   "tests/migrations/backfill-team-defaults.test.ts",
+   "tests/migrations/relocate-lossy-project-key.test.ts",
+   "tests/migrations/runner-fs-failure.test.ts",
+   "tests/telemetry/cache-telemetry-rotation.test.ts",
+   "tests/telemetry/no-real-path-writes.test.ts",
+   "tests/trace/crash-marker.test.ts",
+   "tests/trace/pid-manager.test.ts"
+  ],
+  "code_files": [
+   "bunfig.toml",
+   "src/telemetry/cache-telemetry.ts"
+  ],
+  "test_files": [
+   "tests/api/cache-detection.test.ts",
+   "tests/command/clear-resets-cache-state.test.ts",
+   "tests/config/patch-settings.test.ts",
+   "tests/guard/test-isolation-guard.test.ts",
+   "tests/migrations/backfill-team-defaults.test.ts",
+   "tests/migrations/relocate-lossy-project-key.test.ts",
+   "tests/migrations/runner-fs-failure.test.ts",
+   "tests/preload-isolate-sid-home.ts",
+   "tests/telemetry/cache-telemetry-rotation.test.ts",
+   "tests/telemetry/no-real-path-writes.test.ts",
+   "tests/trace/crash-marker.test.ts",
+   "tests/trace/pid-manager.test.ts"
+  ],
+  "gp_bytes": 1104,
+  "ins_chars": 103,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260803-单测污染用户遥测数据-隔离缺口根治方案.md' 请你完成文档中的所有任务和需求"
+ },
+ {
+  "task": "T0011",
+  "band": "M",
+  "cat": "test_authoring",
+  "base": "c279ae8b",
+  "sid": "2a0247d1",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/config/patch-settings.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/config/settings/cache.ts",
+   "src/config/settings/index.ts",
+   "src/config/settings/settings.ts"
+  ],
+  "test_files": [
+   "tests/config/patch-settings.test.ts"
+  ],
+  "gp_bytes": 4033,
+  "ins_chars": 419,
+  "ins": "> /effort\n\n\n  当前推理强度: auto\n  实际档位(auto 解析): high（跟随模型默认）\n  模型支持 max: 是\n\n  可切换: low / medium / high / max / auto\n  用 /effort <档位> 切换，加 -p 持久化到 settings.json；/effort help 查看用法\n\n\n> /effort -p max\n\n\n  推理强度已切换为: max，并已保存到 settings.json 我刚刚把sid-code effort 设置 max 并且之久化之后：'/Users/<USER>/.sid-code/settings.json' 但是我通过sc命令打开报错：zhourusheng@zhourushengdeMacBook-Pro sid-code % sc\n错误: 未设置 OPENAI_API_KEY 环境变量 请你排查一下，我们这个设置的逻辑，有问题"
+ },
+ {
+  "task": "T0012",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "5dba89fe",
+  "sid": "2b7c5bb4",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/query/incremental-tool-settle.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/query/loop.ts",
+   "src/query/tool-executor.ts",
+   "src/query/types.ts",
+   "src/ui/history-adapter.ts"
+  ],
+  "test_files": [
+   "tests/query/incremental-tool-settle.test.ts"
+  ],
+  "gp_bytes": 25527,
+  "ins_chars": 331,
+  "ins": "刚刚是有另一个claude code任务在执行，所以不小心动了你的代码，它已经告知我了：施工期间有另一个进程在并发改这个仓库，中途把我已落盘的 7 个文件连同 2 个新建模块整体回退过一次（同时出现了\n  llm/keepalive.ts、llm/fallback.ts、permission/checker.ts\n  等与本任务无关的改动）。我重新应用了全部改动并逐项校验在位。如果你在跑另一个 agent\n  或有什么自动化在动这个仓库，建议确认一下二者没互相踩——现在磁盘上的状态是完整的，但并发写同一批文件迟早会丢东西。，现在我转告你，我希望恢复你刚刚修改的代码，不要丢失，做安全合理的合并之后，继续完成你的任务，另一个任务已经完成了，你可以放心操作现在"
+ },
+ {
+  "task": "T0013",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "b1fd8f8b",
+  "sid": "2db6858d",
+  "n_f2p": 3,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/mcp/oauth-callback-server.test.ts",
+   "tests/mcp/oauth-core.test.ts",
+   "tests/mcp/oauth-storage.test.ts"
+  ],
+  "code_files": [
+   "src/command/mcp-enhanced.ts",
+   "src/config/config.ts",
+   "src/config/paths.ts",
+   "src/mcp/manager.ts",
+   "src/mcp/oauth-callback-server.ts",
+   "src/mcp/oauth-lock.ts",
+   "src/mcp/oauth-storage.ts",
+   "src/mcp/oauth.ts"
+  ],
+  "test_files": [
+   "tests/mcp/oauth-callback-server.test.ts",
+   "tests/mcp/oauth-core.test.ts",
+   "tests/mcp/oauth-storage.test.ts"
+  ],
+  "gp_bytes": 44329,
+  "ins_chars": 169,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md' 请帮我完成：MCP OAuth 全链路 这个缺口，对标cc源码来实现：'/Users/<USER>/Code/person/claude-code/src'"
+ },
+ {
+  "task": "T0014",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "f2396fb5",
+  "sid": "307d7cc7",
+  "n_f2p": 6,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/goal/goal-gate.test.ts",
+   "tests/query/hypothesis-ledger.test.ts",
+   "tests/query/output-stall.test.ts",
+   "tests/query/reactive-compact.test.ts",
+   "tests/query/thinking-divergence.test.ts",
+   "tests/tool/omission-detector.test.ts"
+  ],
+  "code_files": [
+   "src/query/goal-gate.ts",
+   "src/query/hypothesis-ledger.ts",
+   "src/query/loop.ts",
+   "src/query/output-stall.ts",
+   "src/query/reactive-compact.ts",
+   "src/query/thinking-divergence.ts",
+   "src/query/types.ts",
+   "src/tool/edit.ts",
+   "src/tool/omission-detector.ts",
+   "src/tool/write.ts"
+  ],
+  "test_files": [
+   "tests/goal/goal-gate.test.ts",
+   "tests/query/hypothesis-ledger.test.ts",
+   "tests/query/output-stall.test.ts",
+   "tests/query/reactive-compact.test.ts",
+   "tests/query/thinking-divergence.test.ts",
+   "tests/tool/omission-detector.test.ts"
+  ],
+  "gp_bytes": 24065,
+  "ins_chars": 96,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/约束型误伤机制排查清单.md' 请按照文档来执行代码修复，确保所有问题正确修复落地"
+ },
+ {
+  "task": "T0018",
+  "band": "M",
+  "cat": "test_authoring",
+  "base": "9f8c0bac",
+  "sid": "4b479469",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/agent/loop-detection.test.ts"
+  ],
+  "code_files": [
+   "src/agent/loop-detection.ts",
+   "src/help.ts"
+  ],
+  "test_files": [
+   "tests/agent/loop-detection.test.ts"
+  ],
+  "gp_bytes": 2726,
+  "ins_chars": 154,
+  "ins": "我们这个误判很严重，有没有办法彻底解决这个问题，据我所知好像是没办法避免这个误判？如果没办法解决这个问题，需要先把这个逻辑判断先注释掉，据我所知cc源码就没有做这个校验，因为不准确，可能误杀，有副作用，你可以看下cc源码：'/Users/<USER>/Code/person/claude-code/src'"
+ },
+ {
+  "task": "T0020",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "b1fd8f8b",
+  "sid": "59bfa75f",
+  "n_f2p": 3,
+  "n_p2p": 30,
+  "f2p": [
+   "src/ui/derive-streaming-state.test.ts",
+   "tests/tool/ask-user-question.test.ts",
+   "tests/ui/derive-streaming-state.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/cli.ts",
+   "src/state/app-state.ts",
+   "src/tool/ask-user-question-bridge.ts",
+   "src/tool/ask-user-question.ts",
+   "src/ui/App.tsx",
+   "src/ui/components/DefaultAppLayout.tsx",
+   "src/ui/components/DialogManager.tsx",
+   "src/ui/components/MainScreenLayout.tsx",
+   "src/ui/derive-streaming-state.ts",
+   "src/ui/state-bridge.ts"
+  ],
+  "test_files": [
+   "src/ui/derive-streaming-state.test.ts",
+   "tests/tool/ask-user-question.test.ts",
+   "tests/ui/derive-streaming-state.test.ts"
+  ],
+  "gp_bytes": 29969,
+  "ins_chars": 172,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md' 请完成AskUserQuestionTool 这个缺口，对标cc源码来实现：'/Users/<USER>/Code/person/claude-code/src'"
+ },
+ {
+  "task": "T0022",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "56ff080f",
+  "sid": "5df08a96",
+  "n_f2p": 8,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/config/schema.test.ts",
+   "tests/permission/mode-policy.test.ts",
+   "tests/permission/mode.test.ts",
+   "tests/permission/path-rule-matching.test.ts",
+   "tests/permission/rule-loader.test.ts",
+   "tests/permission/rule-persistence.test.ts",
+   "tests/permission/shell-rule-matching.test.ts",
+   "tests/ui/status-line-data.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/cli.ts",
+   "src/config/config.ts",
+   "src/config/paths.ts",
+   "src/config/policy.ts",
+   "src/config/schema.ts",
+   "src/permission/checker.ts",
+   "src/permission/mode-policy.ts",
+   "src/permission/mode.ts",
+   "src/permission/path-rule-matching.ts",
+   "src/permission/rule-loader.ts",
+   "src/permission/rules.ts",
+   "src/permission/shell-rule-matching.ts",
+   "src/tool/web-fetch-preapproved.ts",
+   "src/tool/web-fetch.ts",
+   "src/ui/App.tsx",
+   "src/ui/components/PermissionPrompt.tsx",
+   "src/ui/hooks/useStatusLineData.ts"
+  ],
+  "test_files": [
+   "tests/config/schema.test.ts",
+   "tests/permission/mode-policy.test.ts",
+   "tests/permission/mode.test.ts",
+   "tests/permission/path-rule-matching.test.ts",
+   "tests/permission/rule-loader.test.ts",
+   "tests/permission/rule-persistence.test.ts",
+   "tests/permission/shell-rule-matching.test.ts",
+   "tests/ui/status-line-data.test.ts"
+  ],
+  "gp_bytes": 59241,
+  "ins_chars": 137,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/07-权限系统-对齐claude-code-缺口修复方案.md' 按照方案执行代码改造，确保所有问题缺口全部落地，不要遗漏"
+ },
+ {
+  "task": "T0024",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "76b60150",
+  "sid": "6f7d912b",
+  "n_f2p": 3,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/llm/replay-provider.test.ts",
+   "tests/telemetry/content-tracing-wiring.test.ts",
+   "tests/telemetry/content-tracing.test.ts"
+  ],
+  "code_files": [
+   "src/config/schema.ts",
+   "src/help.ts",
+   "src/llm/mocks/replay-provider.ts",
+   "src/llm/registry.ts",
+   "src/query/compact/post-compact.ts",
+   "src/telemetry/content-tracing.ts",
+   "src/telemetry/hook-probe.ts",
+   "src/telemetry/index.ts"
+  ],
+  "test_files": [
+   "tests/llm/replay-provider.test.ts",
+   "tests/telemetry/content-tracing-wiring.test.ts",
+   "tests/telemetry/content-tracing.test.ts"
+  ],
+  "gp_bytes": 33356,
+  "ins_chars": 233,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260805-可观测性缺陷清单-埋点接线与OTLP出口.md' 请按照文档完成任务：批次 D（依赖 A） — P1-5 + P1-9 内容级 tracing 用 flag 灰度，所以 flag 得先有真实消费者 和 P2-11 · 无录制回放能力 cc 源码在这里：'/Users/<USER>/Code/person/claude-code/src'"
+ },
+ {
+  "task": "T0026",
+  "band": "M",
+  "cat": "test_authoring",
+  "base": "023be53f",
+  "sid": "7276a2cc",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/lsp/lsp-tool-filters.test.ts"
+  ],
+  "code_files": [
+   "src/tool/lsp.ts"
+  ],
+  "test_files": [
+   "tests/lsp/lsp-tool-filters.test.ts"
+  ],
+  "gp_bytes": 474,
+  "ins_chars": 275,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/可选优化/G7-G9-G10单元测试补全.md' 这是之前排查问题的时候，顺便制定的一个可选的优化方案，也联网查询了一些资料，目的是弥补我们当前系统中的不足，提高性能，优化功能和用户体验，现在需要对这份方案进行二次评审，帮我检查一下，方案中哪些是真正值得做的地方？哪些是性价比高 / 无副作用 / 一次性根治的，我们需要筛选出来，而不是照单全收，我们要避免文档中宏大结论，技术自嗨，避免毫无实用价值的东西，请你结合现在代码和功能帮我分析一下"
+ },
+ {
+  "task": "T0028",
+  "band": "M",
+  "cat": "test_authoring",
+  "base": "b74ead10",
+  "sid": "81d030c9",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/query/empty-param.test.ts",
+   "tests/tool/truncation-detector.test.ts"
+  ],
+  "code_files": [
+   "src/query/empty-param.ts",
+   "src/query/loop.ts",
+   "src/tool/truncation-detector.ts",
+   "src/tool/write.ts"
+  ],
+  "test_files": [
+   "tests/query/empty-param.test.ts",
+   "tests/tool/truncation-detector.test.ts"
+  ],
+  "gp_bytes": 9514,
+  "ins_chars": 65,
+  "ins": "如果有缺口，请你修复一下缺口，然后思考一下我们还有没有可以优化的点，有价值的，高性价比的，可以使用tavily mcp联网查询资料"
+ },
+ {
+  "task": "T0029",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "d70d8380",
+  "sid": "867bd2d3",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/config/token-utils.test.ts"
+  ],
+  "code_files": [
+   "src/api/cost-tracker.ts",
+   "src/app.ts",
+   "src/bootstrap/state.ts",
+   "src/config/token-utils.ts",
+   "src/context/manager.ts"
+  ],
+  "test_files": [
+   "tests/config/token-utils.test.ts"
+  ],
+  "gp_bytes": 6326,
+  "ins_chars": 97,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/Token与费用统计-客观性审计与修复方案.md'检查文档中所有问题是否完全修复落地"
+ },
+ {
+  "task": "T0031",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "b1fd8f8b",
+  "sid": "86eddd3a",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/tool/tool-search-auto.test.ts",
+   "tests/tool/tool-search-scoring.test.ts"
+  ],
+  "code_files": [
+   "src/cli.ts",
+   "src/config/config.ts",
+   "src/query/loop.ts",
+   "src/tool/registry.ts",
+   "src/tool/tool-search-auto.ts",
+   "src/tool/tool-search-scoring.ts",
+   "src/tool/tool-search.ts"
+  ],
+  "test_files": [
+   "tests/tool/tool-search-auto.test.ts",
+   "tests/tool/tool-search-scoring.test.ts"
+  ],
+  "gp_bytes": 21411,
+  "ins_chars": 152,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md' 请帮我完成：ToolSearchTool（P1,工具规模化的前置基础设施） 这个缺口，对标claude code源码来实现"
+ },
+ {
+  "task": "T0033",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "e829e93d",
+  "sid": "929e62ef",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/telemetry/provider-health.test.ts",
+   "tests/trace/retry-telemetry-sink.test.ts"
+  ],
+  "code_files": [
+   "scripts/provider-health.ts",
+   "src/agent/agentic-loop.ts",
+   "src/app.ts",
+   "src/hook/types.ts",
+   "src/llm/anthropic.ts",
+   "src/llm/openai.ts",
+   "src/memory/recall.ts",
+   "src/query/auto-compact.ts",
+   "src/query/compact/context-collapse.ts",
+   "src/query/loop.ts",
+   "src/session/warmup.ts",
+   "src/telemetry/provider-health.ts",
+   "src/trace/collector.ts",
+   "src/trace/digest.ts",
+   "src/trace/side-call-sink.ts"
+  ],
+  "test_files": [
+   "tests/telemetry/provider-health.test.ts",
+   "tests/trace/retry-telemetry-sink.test.ts"
+  ],
+  "gp_bytes": 33548,
+  "ins_chars": 137,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/provider-optimization-roadmap.md' 请按照文档，执行：七点五、Sprint 5 详细 Todo-List（可观测性增强）所有代码修复"
+ },
+ {
+  "task": "T0034",
+  "band": "M",
+  "cat": "test_authoring",
+  "base": "985ee48a",
+  "sid": "93c4aa03",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/workflow/runtime.test.ts"
+  ],
+  "code_files": [
+   "src/agent/sub-agent.ts",
+   "src/tool/workflow.ts",
+   "src/workflow/runtime.ts",
+   "src/workflow/sub-agent-runner.ts"
+  ],
+  "test_files": [
+   "tests/workflow/runtime.test.ts"
+  ],
+  "gp_bytes": 4856,
+  "ins_chars": 100,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/Dynamic Workflows' 帮我检查方案中所有需求是否全部落地到代码中，不要遗漏"
+ },
+ {
+  "task": "T0036",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "cae8838c",
+  "sid": "9d69d342",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/task/notification-truncate.test.ts",
+   "tests/ui/history-adapter.test.ts"
+  ],
+  "code_files": [
+   "src/task/notification.ts",
+   "src/ui/components/HistoryItemDisplay.tsx",
+   "src/ui/components/messages/TaskNotificationMessage.tsx",
+   "src/ui/history-adapter.ts",
+   "src/ui/types.ts"
+  ],
+  "test_files": [
+   "tests/task/notification-truncate.test.ts",
+   "tests/ui/history-adapter.test.ts"
+  ],
+  "gp_bytes": 11011,
+  "ins_chars": 177,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/_template/tui.txt'我们sid-code tui界面输出的子代理的结果好像有点问题，第一个会子代理全部结果直接渲染到界面上，没有折叠，有些子代理会折叠，有的没有折叠，应该统 \n一保持折叠。第二问题是，字代理输出会被截断，结果不完整。请你检查并修复这两个问题"
+ },
+ {
+  "task": "T0038",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "e3e3ff68",
+  "sid": "a4fe9b4e",
+  "n_f2p": 5,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/config/attachments.test.ts",
+   "tests/config/dynamic-boundary-multiprovider.test.ts",
+   "tests/config/system-prompt.test.ts",
+   "tests/plan/plan-reminder-gate.test.ts",
+   "tests/session/reminder-dedup-reset.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/config/attachments.ts",
+   "src/config/system-prompt.ts",
+   "src/plan/prompt.ts",
+   "src/query/permission-reminder.ts",
+   "src/session/state.ts"
+  ],
+  "test_files": [
+   "tests/config/attachments.test.ts",
+   "tests/config/dynamic-boundary-multiprovider.test.ts",
+   "tests/config/system-prompt.test.ts",
+   "tests/plan/plan-reminder-gate.test.ts",
+   "tests/session/reminder-dedup-reset.test.ts"
+  ],
+  "gp_bytes": 13690,
+  "ins_chars": 125,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md' 请按照文档来修复所有相关的代码，确保所有问题正确修复落地，不要遗漏"
+ },
+ {
+  "task": "T0039",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "c8721a35",
+  "sid": "a5735a7d",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/session/sidechain-resume.test.ts",
+   "tests/task/team-task-store.test.ts"
+  ],
+  "code_files": [
+   "src/agent/agent-definition.ts",
+   "src/agent/agent-hooks.ts",
+   "src/agent/color.ts",
+   "src/agent/custom.ts",
+   "src/agent/skill-preload.ts",
+   "src/agent/sub-agent.ts",
+   "src/agent/tool.ts",
+   "src/cli.ts",
+   "src/llm/registry.ts",
+   "src/permission/checker.ts",
+   "src/plugin/loadPluginAgents.ts",
+   "src/session/sidechain.ts",
+   "src/swarm/team.ts",
+   "src/task/structured-task-store.ts",
+   "src/task/team-task-store.ts",
+   "src/tool/send-message.ts",
+   "src/tool/team-create.ts",
+   "src/ui/components/AgentsDialog.tsx"
+  ],
+  "test_files": [
+   "tests/session/sidechain-resume.test.ts",
+   "tests/task/team-task-store.test.ts"
+  ],
+  "gp_bytes": 62980,
+  "ins_chars": 143,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/11-子代理系统-对齐claude-code-缺口修复方案.md' 请按照文档来修复所有缺口的代码，确保所有问题正确修复落地，不要遗漏"
+ },
+ {
+  "task": "T0040",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "bc1ea822",
+  "sid": "a6cb5ed8",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/query/sparse-content-index.test.ts"
+  ],
+  "code_files": [
+   "src/query/loop.ts",
+   "src/query/stream-processor.ts"
+  ],
+  "test_files": [
+   "tests/query/sparse-content-index.test.ts"
+  ],
+  "gp_bytes": 5611,
+  "ins_chars": 112,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/Anthropic代理流式挂死-三层超时失效根因分析.md' 请按照文档中的来执行代码修复，直到所有问题都修复落地"
+ },
+ {
+  "task": "T0042",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "3b916830",
+  "sid": "ab358ff5",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/config/system-prompt.test.ts",
+   "tests/query/hypothesis-gaps.test.ts"
+  ],
+  "code_files": [
+   "src/cli.ts",
+   "src/config/system-prompt.ts",
+   "src/help.ts",
+   "src/query/hypothesis-ledger.ts",
+   "src/query/loop.ts",
+   "src/tool/hypothesis.ts"
+  ],
+  "test_files": [
+   "tests/config/system-prompt.test.ts",
+   "tests/query/hypothesis-gaps.test.ts"
+  ],
+  "gp_bytes": 13665,
+  "ins_chars": 107,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/_template/评估hypothesis_challenge的真实的作用到底有多大到底有没有用.txt' 请根据文档需求进行分析"
+ },
+ {
+  "task": "T0045",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "675425c2",
+  "sid": "b78ff72c",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/tool/bash/sed-validation.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/permission/checker.ts",
+   "src/tool/bash/sed-validation.ts"
+  ],
+  "test_files": [
+   "tests/tool/bash/sed-validation.test.ts"
+  ],
+  "gp_bytes": 6620,
+  "ins_chars": 158,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md' 请你阅读文档，执行：2. P0 差距详解（已建未接线 + 高影响，成本低） 章节所有缺口的代码修复，确保所有问题正确修复落地，不要遗漏"
+ },
+ {
+  "task": "T0047",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "b1fd8f8b",
+  "sid": "b9e05955",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/permission/bash-security.test.ts"
+  ],
+  "code_files": [
+   "src/permission/bash-security.ts",
+   "src/permission/checker.ts"
+  ],
+  "test_files": [
+   "tests/permission/bash-security.test.ts"
+  ],
+  "gp_bytes": 25562,
+  "ins_chars": 187,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md' 请完成：Bash 注入防护深化（P2,security-audit 底座） 这个缺口，对标cc源码来实现：'/Users/<USER>/Code/person/claude-code/src'"
+ },
+ {
+  "task": "T0049",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "c2115a24",
+  "sid": "bd969d9a",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/tool/registry-modernization.test.ts"
+  ],
+  "code_files": [
+   "src/query/compact/g16-g26-decision.ts",
+   "src/query/tool-executor.ts",
+   "src/tool/bridge.ts",
+   "src/tool/edit.ts",
+   "src/tool/read.ts",
+   "src/tool/registry.ts",
+   "src/tool/types.ts",
+   "src/tool/write.ts"
+  ],
+  "test_files": [
+   "tests/tool/registry-modernization.test.ts"
+  ],
+  "gp_bytes": 22869,
+  "ins_chars": 211,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md'          \n  请你阅读文档，执行：4. P2/P3 差距（打磨 + 边缘，择机）                                           \n  章节所有缺口的代码修复，确保所有问题正确修复落地，不要遗漏"
+ },
+ {
+  "task": "T0050",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "1ea5e595",
+  "sid": "be4c5624",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/agent/subagent-tracker-isolation.test.ts"
+  ],
+  "code_files": [
+   "src/agent/agent-definition.ts",
+   "src/agent/sub-agent.ts",
+   "src/agent/tool.ts",
+   "src/cli.ts",
+   "src/config/system-prompt.ts",
+   "src/task/notification.ts",
+   "src/tool/stateful-tools.ts"
+  ],
+  "test_files": [
+   "tests/agent/subagent-tracker-isolation.test.ts"
+  ],
+  "gp_bytes": 10019,
+  "ins_chars": 94,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/子代理委托机制-现状对照与缺口修复方案.md' 请修复文档中所有问题，不要遗漏"
+ },
+ {
+  "task": "T0051",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "14b55b49",
+  "sid": "c1096559",
+  "n_f2p": 2,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/agent/loop-recovery-history-integrity.test.ts",
+   "tests/agent/message-invariants.test.ts"
+  ],
+  "code_files": [
+   "src/agent/loop.ts",
+   "src/agent/message-invariants.ts",
+   "src/query/loop.ts"
+  ],
+  "test_files": [
+   "tests/agent/loop-recovery-history-integrity.test.ts",
+   "tests/agent/message-invariants.test.ts"
+  ],
+  "gp_bytes": 11724,
+  "ins_chars": 578,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/系统级查漏补缺方案.md' 这个方案中的问题今天已经修复了，你可以看下提交记录，并且我已经重新打包，但是刚刚使用sid-code + deepseek 执行任务的时候还是报错： 错误: LLM 错误: OpenAI API 错误: 400 {\"error\":{\"message\":\"An assistant message with\n 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'. (insufficient\n tool messages following tool_calls\n message)\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}} ，你可以看下最新的两条轨迹数据：'/Users/<USER>/.sid-code/trajectories' 中的 28b7eed7 0d21f622 我有两个问题：第一为什么已经修复的问题还是会报错，第二为什么sid-code 只是执行一个任务，但是会有两条轨迹，不应该是一条吗"
+ },
+ {
+  "task": "T0052",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "767dbe27",
+  "sid": "c312a069",
+  "n_f2p": 4,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/goal/evaluator.test.ts",
+   "tests/goal/goal-gate.test.ts",
+   "tests/llm/provider-anthropic-conformance.test.ts",
+   "tests/llm/stream-lifecycle.test.ts"
+  ],
+  "code_files": [
+   "src/query/goal-gate.ts"
+  ],
+  "test_files": [
+   "tests/goal/evaluator.test.ts",
+   "tests/goal/goal-gate.test.ts",
+   "tests/llm/provider-anthropic-conformance.test.ts",
+   "tests/llm/stream-lifecycle.test.ts"
+  ],
+  "gp_bytes": 1285,
+  "ins_chars": 169,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md' 请你深入代码中，帮我检查文档/设计方案中提到的所有问题/优化点/缺口/规划/todo-list等是否在当前的项目代码中落地实现，请你将详细的检查结果汇总，告诉我"
+ },
+ {
+  "task": "T0054",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "6b09d717",
+  "sid": "ced0c251",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/command/language-dialog.test.ts"
+  ],
+  "code_files": [
+   "src/command/language.ts",
+   "src/command/types.ts",
+   "src/ui/App.tsx",
+   "src/ui/components/DefaultAppLayout.tsx",
+   "src/ui/components/DialogSwitch.tsx",
+   "src/ui/components/LanguageDialog.tsx",
+   "src/ui/components/MainScreenLayout.tsx"
+  ],
+  "test_files": [
+   "tests/command/language-dialog.test.ts"
+  ],
+  "gp_bytes": 13976,
+  "ins_chars": 82,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/_template/language命令缺少选项.txt' 请帮我修复文档中的问题"
+ },
+ {
+  "task": "T0055",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "a71f9d2a",
+  "sid": "ced42578",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/api/cache-detection.test.ts"
+  ],
+  "code_files": [
+   "src/api/cache-detection.ts",
+   "src/goal/evaluator.ts",
+   "src/llm/fallback.ts",
+   "src/query/goal-gate.ts",
+   "src/query/stream-processor.ts",
+   "src/trace/collector.ts"
+  ],
+  "test_files": [
+   "tests/api/cache-detection.test.ts"
+  ],
+  "gp_bytes": 14895,
+  "ins_chars": 116,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md' 请按照文档执行代码修复，确保所有问题修复落地，不要遗漏"
+ },
+ {
+  "task": "T0056",
+  "band": "L",
+  "cat": "test_authoring",
+  "base": "0e579797",
+  "sid": "d361ff3f",
+  "n_f2p": 3,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/telemetry/provider-health.test.ts",
+   "tests/telemetry/usage-aggregator.test.ts",
+   "tests/trace/prefix-break-probe.test.ts"
+  ],
+  "code_files": [
+   "scripts/provider-health.ts",
+   "scripts/trace-digest.ts",
+   "src/command/builtins.ts",
+   "src/telemetry/provider-health.ts",
+   "src/telemetry/usage-aggregator.ts",
+   "src/trace/cache-report.ts",
+   "src/trace/collector.ts",
+   "src/trace/digest.ts",
+   "src/trace/prefix-break-probe.ts",
+   "src/trace/ttft-cache-buckets.ts"
+  ],
+  "test_files": [
+   "tests/telemetry/provider-health.test.ts",
+   "tests/telemetry/usage-aggregator.test.ts",
+   "tests/trace/prefix-break-probe.test.ts"
+  ],
+  "gp_bytes": 54704,
+  "ins_chars": 341,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260808-Prompt-Cache-闭环-实测提升命中率与度量根治.md' '/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/cache-bench-20260808.md''/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/prefix-break-分布-20260808.md'  请你深入代码中，帮我检查文档/设计方案中提到的所有问题/优化点/缺口/规划/todo-list等是否在当前的项目代码中落地实现，请你将详细的检查结果汇总，告诉我"
+ },
+ {
+  "task": "T0059",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "617d1e0e",
+  "sid": "d6895607",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/agent/subagent-capability-visibility.test.ts"
+  ],
+  "code_files": [
+   "src/agent/agent-definition.ts",
+   "src/agent/tool.ts",
+   "src/config/system-prompt.ts",
+   "src/skill/tool.ts"
+  ],
+  "test_files": [
+   "tests/agent/subagent-capability-visibility.test.ts"
+  ],
+  "gp_bytes": 5140,
+  "ins_chars": 107,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/harness-llm-可见性缺口-6项缺口改造方案.md' 请按照方案来执行，确保所有问题全部修复落地"
+ },
+ {
+  "task": "T0062",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "56ff080f",
+  "sid": "e47f283e",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/llm/effort.test.ts"
+  ],
+  "code_files": [
+   "src/app.ts",
+   "src/cli.ts",
+   "src/config/config.ts",
+   "src/config/settings/index.ts",
+   "src/config/settings/settings.ts",
+   "src/config/settings/types.ts",
+   "src/help.ts",
+   "src/ide/integration.ts",
+   "src/llm/effort.ts",
+   "src/session/store.ts",
+   "src/session/utils.ts",
+   "src/tool/registry.ts",
+   "src/ui/components/EffortDialog.tsx",
+   "src/ui/constants/figures.ts",
+   "src/ui/hooks/useStatusLineData.ts"
+  ],
+  "test_files": [
+   "tests/llm/effort.test.ts"
+  ],
+  "gp_bytes": 41112,
+  "ins_chars": 141,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/05-CLI命令与参数-对齐claude-code-缺口实施方案.md' 按照方案执行代码改造，确保所有问题缺口全部落地，不要遗漏"
+ },
+ {
+  "task": "T0063",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "7f86f6db",
+  "sid": "e92e1d48",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/tool/path-utils.test.ts"
+  ],
+  "code_files": [
+   "src/config/system-prompt.ts",
+   "src/query/todo-reminder.ts",
+   "src/query/work-log.ts",
+   "src/tool/path-utils.ts"
+  ],
+  "test_files": [
+   "tests/tool/path-utils.test.ts"
+  ],
+  "gp_bytes": 7208,
+  "ins_chars": 82,
+  "ins": "请帮我排查文档中的问题：'/Users/<USER>/Code/person/sid-code/docs/_template/好端端执行任务报错弹窗不显示.txt'"
+ },
+ {
+  "task": "T0064",
+  "band": "L",
+  "cat": "bug_fix",
+  "base": "35649457",
+  "sid": "ea287781",
+  "n_f2p": 5,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/extension/managed-layer.test.ts",
+   "tests/plugin/plugin-skills.test.ts",
+   "tests/skill/activation-coordinator.test.ts",
+   "tests/skill/executor.test.ts",
+   "tests/skill/meta-tool.test.ts"
+  ],
+  "code_files": [
+   "src/agent/sub-agent.ts",
+   "src/app.ts",
+   "src/cli.ts",
+   "src/command/skill-command.ts",
+   "src/command/types.ts",
+   "src/config/paths.ts",
+   "src/extension/loader.ts",
+   "src/extension/types.ts",
+   "src/permission/checker.ts",
+   "src/plugin/loadPluginSkills.ts",
+   "src/query/engine.ts",
+   "src/query/loop.ts",
+   "src/query/types.ts",
+   "src/skill/activation-coordinator.ts",
+   "src/skill/executor.ts",
+   "src/skill/loader.ts",
+   "src/skill/manager.ts",
+   "src/skill/meta-tool.ts",
+   "src/skill/prompt-processor.ts",
+   "src/skill/tool.ts",
+   "src/skill/types.ts",
+   "src/ui/ToolStatus.tsx",
+   "src/ui/ui-utils.ts"
+  ],
+  "test_files": [
+   "tests/extension/managed-layer.test.ts",
+   "tests/plugin/plugin-skills.test.ts",
+   "tests/skill/activation-coordinator.test.ts",
+   "tests/skill/executor.test.ts",
+   "tests/skill/meta-tool.test.ts"
+  ],
+  "gp_bytes": 58722,
+  "ins_chars": 146,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/18-Skills系统-对齐claude-code-缺口修复方案.md' 请按照文档来修复所有缺口的代码，确保所有问题正确修复落地，不要遗漏"
+ },
+ {
+  "task": "T0065",
+  "band": "M",
+  "cat": "bug_fix",
+  "base": "8cf0c536",
+  "sid": "ec36214a",
+  "n_f2p": 1,
+  "n_p2p": 30,
+  "f2p": [
+   "tests/skill/skill.test.ts"
+  ],
+  "code_files": [
+   "src/skill/tool.ts"
+  ],
+  "test_files": [
+   "tests/skill/skill.test.ts"
+  ],
+  "gp_bytes": 2384,
+  "ins_chars": 188,
+  "ins": "'/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/builtin-skill附属文件不释放+delegate读不到references-排查与方案.md' 请你深入代码中，帮我检查文档/设计方案中提到的所有问题/优化点/缺口/规划/todo-list等是否在当前的项目代码中落地实现，请你将详细的检查结果汇总，告诉我"
+ }
+]

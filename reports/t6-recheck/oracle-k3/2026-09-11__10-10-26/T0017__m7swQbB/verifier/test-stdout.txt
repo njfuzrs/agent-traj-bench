@@ -1,0 +1,1 @@
+{"reward": 0.0, "f2p": 1.0, "p2p": 0.0, "error_code": 0, "f2p_n_required": 5.0, "f2p_n_seen": 5.0, "p2p_n_required": 30.0, "p2p_n_seen": 30.0}

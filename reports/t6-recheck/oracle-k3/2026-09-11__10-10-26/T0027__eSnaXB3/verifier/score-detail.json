@@ -1,0 +1,19 @@
+{
+  "f2p": {
+    "n_required": 1,
+    "n_seen": 1,
+    "missing": [],
+    "no_tests": [],
+    "failed": []
+  },
+  "p2p": {
+    "n_required": 30,
+    "n_seen": 30,
+    "missing": [],
+    "no_tests": [],
+    "failed": [
+      "tests/query/abort-graceful.test.ts",
+      "tests/query/turn-hard-timeout.test.ts"
+    ]
+  }
+}

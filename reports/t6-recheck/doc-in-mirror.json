@@ -1,0 +1,220 @@
+{
+ "T0002": [
+  [
+   "docs/bugfixes/todo/20260807-遥测落盘恒空-配置undefined覆盖默认值.md",
+   false
+  ]
+ ],
+ "T0003": [
+  [
+   "docs/bugfixes/todo/上下文注入作用域审计-发现清单.md",
+   false
+  ]
+ ],
+ "T0007": [
+  [
+   "docs/_template/gpt参数校验失败.txt",
+   false
+  ]
+ ],
+ "T0008": [
+  [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/08-Hook系统-对齐claude-code-缺口修复方案.md",
+   false
+  ]
+ ],
+ "T0009": [
+  [
+   "docs/bugfixes/todo/上下文注入作用域审计-发现清单.md",
+   false
+  ]
+ ],
+ "T0010": [
+  [
+   "docs/bugfixes/todo/20260803-单测污染用户遥测数据-隔离缺口根治方案.md",
+   false
+  ]
+ ],
+ "T0013": [
+  [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+   false
+  ]
+ ],
+ "T0014": [
+  [
+   "docs/bugfixes/todo/约束型误伤机制排查清单.md",
+   false
+  ]
+ ],
+ "T0020": [
+  [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+   false
+  ]
+ ],
+ "T0022": [
+  [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/07-权限系统-对齐claude-code-缺口修复方案.md",
+   false
+  ]
+ ],
+ "T0024": [
+  [
+   "docs/bugfixes/todo/20260805-可观测性缺陷清单-埋点接线与OTLP出口.md",
+   false
+  ]
+ ],
+ "T0026": [
+  [
+   "docs/bugfixes/todo/可选优化/G7-G9-G10单元测试补全.md",
+   false
+  ]
+ ],
+ "T0029": [
+  [
+   "docs/bugfixes/todo/Token与费用统计-客观性审计与修复方案.md",
+   false
+  ]
+ ],
+ "T0031": [
+  [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+   false
+  ]
+ ],
+ "T0033": [
+  [
+   "docs/bugfixes/todo/provider-optimization-roadmap.md",
+   false
+  ]
+ ],
+ "T0034": [
+  [
+   "docs/bugfixes/todo/Dynamic",
+   false
+  ]
+ ],
+ "T0036": [
+  [
+   "docs/_template/tui.txt",
+   false
+  ]
+ ],
+ "T0038": [
+  [
+   "docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md",
+   false
+  ]
+ ],
+ "T0039": [
+  [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/11-子代理系统-对齐claude-code-缺口修复方案.md",
+   false
+  ]
+ ],
+ "T0040": [
+  [
+   "docs/bugfixes/todo/Anthropic代理流式挂死-三层超时失效根因分析.md",
+   false
+  ]
+ ],
+ "T0042": [
+  [
+   "docs/_template/评估hypothesis_challenge的真实的作用到底有多大到底有没有用.txt",
+   false
+  ]
+ ],
+ "T0045": [
+  [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md",
+   false
+  ]
+ ],
+ "T0047": [
+  [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+   false
+  ]
+ ],
+ "T0049": [
+  [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md",
+   false
+  ]
+ ],
+ "T0050": [
+  [
+   "docs/bugfixes/todo/子代理委托机制-现状对照与缺口修复方案.md",
+   false
+  ]
+ ],
+ "T0051": [
+  [
+   "docs/bugfixes/系统级查漏补缺方案.md",
+   false
+  ]
+ ],
+ "T0052": [
+  [
+   "docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md",
+   false
+  ]
+ ],
+ "T0054": [
+  [
+   "docs/_template/language命令缺少选项.txt",
+   false
+  ]
+ ],
+ "T0055": [
+  [
+   "docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md",
+   false
+  ]
+ ],
+ "T0056": [
+  [
+   "docs/bugfixes/todo/20260808-Prompt-Cache-闭环-实测提升命中率与度量根治.md",
+   false
+  ],
+  [
+   "docs/bugfixes/todo/cache-bench-20260808.md",
+   false
+  ],
+  [
+   "docs/bugfixes/todo/prefix-break-分布-20260808.md",
+   false
+  ]
+ ],
+ "T0059": [
+  [
+   "docs/bugfixes/todo/harness-llm-可见性缺口-6项缺口改造方案.md",
+   false
+  ]
+ ],
+ "T0062": [
+  [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/05-CLI命令与参数-对齐claude-code-缺口实施方案.md",
+   false
+  ]
+ ],
+ "T0063": [
+  [
+   "docs/_template/好端端执行任务报错弹窗不显示.txt",
+   false
+  ]
+ ],
+ "T0064": [
+  [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/18-Skills系统-对齐claude-code-缺口修复方案.md",
+   false
+  ]
+ ],
+ "T0065": [
+  [
+   "docs/bugfixes/todo/builtin-skill附属文件不释放+delegate读不到references-排查与方案.md",
+   false
+  ]
+ ]
+}

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="10" assertions="20" failures="0" skipped="0" time="0.007928907">
+  <testsuite name="tests/query/hypothesis-guide.test.ts" file="tests/query/hypothesis-guide.test.ts" tests="10" assertions="20" failures="0" skipped="0" time="0" hostname="8a0c25648c8f">
+    <testsuite name="detectInvestigationContext — AND 条件触发" file="tests/query/hypothesis-guide.test.ts" line="14" tests="2" assertions="4" failures="0" skipped="0" time="0" hostname="8a0c25648c8f">
+      <testcase name="路径 + 调查性动词同时出现 → 触发" classname="detectInvestigationContext — AND 条件触发" time="0.000139" file="tests/query/hypothesis-guide.test.ts" line="15" assertions="3" />
+      <testcase name="形如 a/b.ext 的裸路径 + 动词 → 触发" classname="detectInvestigationContext — AND 条件触发" time="0.00003" file="tests/query/hypothesis-guide.test.ts" line="21" assertions="1" />
+    </testsuite>
+    <testsuite name="detectInvestigationContext — 不误伤反例（单条件不触发）" file="tests/query/hypothesis-guide.test.ts" line="26" tests="4" assertions="9" failures="0" skipped="0" time="0" hostname="8a0c25648c8f">
+      <testcase name="只有路径、无调查性动词 → 不触发（可能只是想读代码）" classname="detectInvestigationContext — 不误伤反例（单条件不触发）" time="0.000057" file="tests/query/hypothesis-guide.test.ts" line="27" assertions="2" />
+      <testcase name="只有调查性动词、无路径 → 不触发（可能随口一说）" classname="detectInvestigationContext — 不误伤反例（单条件不触发）" time="0.000047" file="tests/query/hypothesis-guide.test.ts" line="32" assertions="2" />
+      <testcase name="日常任务（翻译/修 typo/加功能/读函数）→ 不触发" classname="detectInvestigationContext — 不误伤反例（单条件不触发）" time="0.000015" file="tests/query/hypothesis-guide.test.ts" line="37" assertions="3" />
+      <testcase name="空串 / 无意义输入 → 不触发" classname="detectInvestigationContext — 不误伤反例（单条件不触发）" time="0.000021" file="tests/query/hypothesis-guide.test.ts" line="43" assertions="2" />
+    </testsuite>
+    <testsuite name="detectInvestigationContext — 已知盲区（方案 Q2 正视，非 bug）" file="tests/query/hypothesis-guide.test.ts" line="49" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="8a0c25648c8f">
+      <testcase name="无路径锚点的纯自然语言核查 → 不触发（由 system-prompt 常驻引导兜底）" classname="detectInvestigationContext — 已知盲区（方案 Q2 正视，非 bug）" time="0.000017" file="tests/query/hypothesis-guide.test.ts" line="50" assertions="1" />
+    </testsuite>
+    <testsuite name="buildHypothesisGuideReminder — 文本约束" file="tests/query/hypothesis-guide.test.ts" line="57" tests="3" assertions="6" failures="0" skipped="0" time="0" hostname="8a0c25648c8f">
+      <testcase name="含 hypothesis_register 工具引导与证伪条件提示" classname="buildHypothesisGuideReminder — 文本约束" time="0.000025" file="tests/query/hypothesis-guide.test.ts" line="58" assertions="3" />
+      <testcase name="是建议而非强制（保留模型裁量权）" classname="buildHypothesisGuideReminder — 文本约束" time="0.000019" file="tests/query/hypothesis-guide.test.ts" line="65" assertions="1" />
+      <testcase name="含 system-reminder 包裹与&apos;请勿向用户复述&apos;约束" classname="buildHypothesisGuideReminder — 文本约束" time="0.000011" file="tests/query/hypothesis-guide.test.ts" line="70" assertions="2" />
+    </testsuite>
+  </testsuite>
+</testsuites>

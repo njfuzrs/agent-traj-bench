@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="118" assertions="234" failures="0" skipped="0" time="23.322407527">
+  <testsuite name="tests/llm/effort.test.ts" file="tests/llm/effort.test.ts" tests="41" assertions="86" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+    <testsuite name="isEffortLevel / EFFORT_LEVELS" file="tests/llm/effort.test.ts" line="24" tests="2" assertions="5" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="4 档标度" classname="isEffortLevel / EFFORT_LEVELS" time="0.00003" file="tests/llm/effort.test.ts" line="25" assertions="1" />
+      <testcase name="合法/非法判定" classname="isEffortLevel / EFFORT_LEVELS" time="0.000033" file="tests/llm/effort.test.ts" line="28" assertions="4" />
+    </testsuite>
+    <testsuite name="resolveEffortCapability — 协议分类" file="tests/llm/effort.test.ts" line="36" tests="8" assertions="21" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="规则1 DeepSeek OpenAI 端点" classname="resolveEffortCapability — 协议分类" time="0.000033" file="tests/llm/effort.test.ts" line="37" assertions="4" />
+      <testcase name="规则2 DeepSeek Anthropic 端点（baseURL 含 /anthropic）" classname="resolveEffortCapability — 协议分类" time="0.000081" file="tests/llm/effort.test.ts" line="49" assertions="3" />
+      <testcase name="规则3 Anthropic 原生 Claude" classname="resolveEffortCapability — 协议分类" time="0.000038" file="tests/llm/effort.test.ts" line="63" assertions="3" />
+      <testcase name="规则4 OpenAI o-series（无 max）" classname="resolveEffortCapability — 协议分类" time="0.000025" file="tests/llm/effort.test.ts" line="70" assertions="3" />
+      <testcase name="规则5 未知端点（兜底全不支持）" classname="resolveEffortCapability — 协议分类" time="0.000031" file="tests/llm/effort.test.ts" line="77" assertions="3" />
+      <testcase name="必删-3：GLM（OpenAI 兼容）supportsThinkingToggle=true" classname="resolveEffortCapability — 协议分类" time="0.000015" file="tests/llm/effort.test.ts" line="87" assertions="1" />
+      <testcase name="必删-3：Grok（OpenAI 兼容）无 thinking 开关但 reasoning_effort 独立生效" classname="resolveEffortCapability — 协议分类" time="0.000031" file="tests/llm/effort.test.ts" line="92" assertions="2" />
+      <testcase name="优先级1：modelConfig.supportsThinking=false 强制全不支持" classname="resolveEffortCapability — 协议分类" time="0.000013" file="tests/llm/effort.test.ts" line="100" assertions="2" />
+    </testsuite>
+    <testsuite name="applyToSendParams — 线格式映射" file="tests/llm/effort.test.ts" line="112" tests="6" assertions="15" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="规则1 DeepSeek OpenAI：effort→reasoningEffort 二值钳制" classname="applyToSendParams — 线格式映射" time="0.000037" file="tests/llm/effort.test.ts" line="113" assertions="3" />
+      <testcase name="规则1 DeepSeek：思考关闭则不下发 effort" classname="applyToSendParams — 线格式映射" time="0.000022" file="tests/llm/effort.test.ts" line="129" assertions="2" />
+      <testcase name="规则3 Anthropic 原生：effort→budgetTokens 档位映射" classname="applyToSendParams — 线格式映射" time="0.000119" file="tests/llm/effort.test.ts" line="141" assertions="4" />
+      <testcase name="规则3 Anthropic 原生：thinking off 不开思考" classname="applyToSendParams — 线格式映射" time="0.000048" file="tests/llm/effort.test.ts" line="156" assertions="1" />
+      <testcase name="规则4 o-series：max→high，low/medium 原样" classname="applyToSendParams — 线格式映射" time="0.000024" file="tests/llm/effort.test.ts" line="163" assertions="2" />
+      <testcase name="规则5 未知端点：全 no-op，不下发任何字段" classname="applyToSendParams — 线格式映射" time="0.000027" file="tests/llm/effort.test.ts" line="173" assertions="3" />
+    </testsuite>
+    <testsuite name="resolveAppliedEffort — 优先级链 + max 钳制" file="tests/llm/effort.test.ts" line="183" tests="5" assertions="5" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="env 未设(null)用 runtime" classname="resolveAppliedEffort — 优先级链 + max 钳制" time="0.000014" file="tests/llm/effort.test.ts" line="191" assertions="1" />
+      <testcase name="env 强制档位覆盖 runtime" classname="resolveAppliedEffort — 优先级链 + max 钳制" time="0.000007" file="tests/llm/effort.test.ts" line="194" assertions="1" />
+      <testcase name="env 强制 auto(undefined) 覆盖 runtime" classname="resolveAppliedEffort — 优先级链 + max 钳制" time="0.000016" file="tests/llm/effort.test.ts" line="197" assertions="1" />
+      <testcase name="max→high：模型不支持 max 时降级" classname="resolveAppliedEffort — 优先级链 + max 钳制" time="0.000011" file="tests/llm/effort.test.ts" line="200" assertions="1" />
+      <testcase name="runtime auto 保持 undefined" classname="resolveAppliedEffort — 优先级链 + max 钳制" time="0.00001" file="tests/llm/effort.test.ts" line="203" assertions="1" />
+    </testsuite>
+    <testsuite name="getDisplayedEffort / isEffortAuto" file="tests/llm/effort.test.ts" line="208" tests="3" assertions="5" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="auto 态展示模型默认档" classname="getDisplayedEffort / isEffortAuto" time="0.000025" file="tests/llm/effort.test.ts" line="214" assertions="2" />
+      <testcase name="显式档位展示该档（基线，非服务端钳制后）" classname="getDisplayedEffort / isEffortAuto" time="0.000009" file="tests/llm/effort.test.ts" line="218" assertions="2" />
+      <testcase name="env 强制 auto → isEffortAuto true" classname="getDisplayedEffort / isEffortAuto" time="0.000009" file="tests/llm/effort.test.ts" line="222" assertions="1" />
+    </testsuite>
+    <testsuite name="resolveThinking — 优先级链" file="tests/llm/effort.test.ts" line="227" tests="3" assertions="6" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="env 覆盖最高" classname="resolveThinking — 优先级链" time="0.000013" file="tests/llm/effort.test.ts" line="235" assertions="2" />
+      <testcase name="runtime on/off" classname="resolveThinking — 优先级链" time="0.000012" file="tests/llm/effort.test.ts" line="239" assertions="2" />
+      <testcase name="auto 跟随 cap.thinkingDefaultOn" classname="resolveThinking — 优先级链" time="0.000007" file="tests/llm/effort.test.ts" line="243" assertions="2" />
+    </testsuite>
+    <testsuite name="getEffortEnvOverride — env 读取 + 别名兼容" file="tests/llm/effort.test.ts" line="249" tests="5" assertions="6" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="SID_CODE_EFFORT_LEVEL 优先于 CLAUDE_CODE_EFFORT_LEVEL" classname="getEffortEnvOverride — env 读取 + 别名兼容" time="0.000042" file="tests/llm/effort.test.ts" line="250" assertions="1" />
+      <testcase name="兼容别名 CLAUDE_CODE_EFFORT_LEVEL" classname="getEffortEnvOverride — env 读取 + 别名兼容" time="0.000009" file="tests/llm/effort.test.ts" line="255" assertions="1" />
+      <testcase name="unset / auto → 强制 auto(undefined)" classname="getEffortEnvOverride — env 读取 + 别名兼容" time="0.00001" file="tests/llm/effort.test.ts" line="258" assertions="2" />
+      <testcase name="未设 → null" classname="getEffortEnvOverride — env 读取 + 别名兼容" time="0.000012" file="tests/llm/effort.test.ts" line="262" assertions="1" />
+      <testcase name="非法值 → null" classname="getEffortEnvOverride — env 读取 + 别名兼容" time="0.000008" file="tests/llm/effort.test.ts" line="265" assertions="1" />
+    </testsuite>
+    <testsuite name="getThinkingEnvOverride" file="tests/llm/effort.test.ts" line="270" tests="3" assertions="8" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="on/true/1 → true" classname="getThinkingEnvOverride" time="0.000026" file="tests/llm/effort.test.ts" line="271" assertions="3" />
+      <testcase name="off/false/0 → false" classname="getThinkingEnvOverride" time="0.000007" file="tests/llm/effort.test.ts" line="276" assertions="2" />
+      <testcase name="auto / 未设 / 非法 → null" classname="getThinkingEnvOverride" time="0.000008" file="tests/llm/effort.test.ts" line="280" assertions="3" />
+    </testsuite>
+    <testsuite name="previewWireEffort — 预演实际下发档（钳制提示用）" file="tests/llm/effort.test.ts" line="287" tests="6" assertions="15" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="DeepSeek OpenAI 端点：low/medium 实际下发 high（被钳制）" classname="previewWireEffort — 预演实际下发档（钳制提示用）" time="0.00002" file="tests/llm/effort.test.ts" line="302" assertions="2" />
+      <testcase name="DeepSeek OpenAI 端点：high/max 原样下发（无钳制）" classname="previewWireEffort — 预演实际下发档（钳制提示用）" time="0.00002" file="tests/llm/effort.test.ts" line="306" assertions="2" />
+      <testcase name="DeepSeek Anthropic 端点：low/medium→high（走 output_config.effort）" classname="previewWireEffort — 预演实际下发档（钳制提示用）" time="0.00001" file="tests/llm/effort.test.ts" line="310" assertions="2" />
+      <testcase name="o-series：max 实际下发 high（被钳制），low/medium 原样" classname="previewWireEffort — 预演实际下发档（钳制提示用）" time="0.000015" file="tests/llm/effort.test.ts" line="314" assertions="3" />
+      <testcase name="原生 Claude：走 budget_tokens 无显式 effort 下发 → 返回原档（视为无钳制）" classname="previewWireEffort — 预演实际下发档（钳制提示用）" time="0.000078" file="tests/llm/effort.test.ts" line="319" assertions="4" />
+      <testcase name="unknown：no-op → 返回原档" classname="previewWireEffort — 预演实际下发档（钳制提示用）" time="0.000015" file="tests/llm/effort.test.ts" line="324" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/fallback.test.ts" file="tests/llm/fallback.test.ts" tests="32" assertions="69" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+    <testsuite name="ModelFallback" file="tests/llm/fallback.test.ts" line="94" tests="11" assertions="15" failures="0" skipped="0" time="0.011" hostname="2a4f2a14d62e">
+      <testcase name="成功请求直接返回所有事件" classname="ModelFallback" time="0.002076" file="tests/llm/fallback.test.ts" line="96" assertions="2" />
+      <testcase name="Terminal 错误（认证失败）直接进入 fallback" classname="ModelFallback" time="0.000523" file="tests/llm/fallback.test.ts" line="106" assertions="2" />
+      <testcase name="模型已标记 terminal 时直接使用 fallback" classname="ModelFallback" time="0.000159" file="tests/llm/fallback.test.ts" line="127" assertions="1" />
+      <testcase name="无 fallback Provider 时返回错误事件" classname="ModelFallback" time="0.000103" file="tests/llm/fallback.test.ts" line="153" assertions="1" />
+      <testcase name="空响应触发 StreamValidationError 并重试" classname="ModelFallback" time="0.006063" file="tests/llm/fallback.test.ts" line="167" assertions="1" />
+      <testcase name="重试时触发 onRetry 回调" classname="ModelFallback" time="0.003802" file="tests/llm/fallback.test.ts" line="191" assertions="0" />
+      <testcase name="fallback 时触发 onFallback 回调" classname="ModelFallback" time="0.000122" file="tests/llm/fallback.test.ts" line="210" assertions="2" />
+      <testcase name="用户中断时不重试也不 fallback" classname="ModelFallback" time="0.000087" file="tests/llm/fallback.test.ts" line="235" assertions="2" />
+      <testcase name="reset 重置 hasFallenBack 状态" classname="ModelFallback" time="0.000092" file="tests/llm/fallback.test.ts" line="263" assertions="1" />
+      <testcase name="getAvailability 返回可用性服务实例" classname="ModelFallback" time="0.000019" file="tests/llm/fallback.test.ts" line="291" assertions="1" />
+      <testcase name="未传入 availability 时自动创建" classname="ModelFallback" time="0.000019" file="tests/llm/fallback.test.ts" line="297" assertions="2" />
+    </testsuite>
+    <testsuite name="ModelFallback 增强" file="tests/llm/fallback.test.ts" line="308" tests="17" assertions="46" failures="0" skipped="0" time="19.443" hostname="2a4f2a14d62e">
+      <testcase name="401 连接阶段触发认证刷新并重试一次" classname="ModelFallback 增强" time="0.000105" file="tests/llm/fallback.test.ts" line="310" assertions="3" />
+      <testcase name="401 连接阶段重试后仍失败进入 fallback" classname="ModelFallback 增强" time="0.00008" file="tests/llm/fallback.test.ts" line="348" assertions="2" />
+      <testcase name="ECONNRESET 后重试成功（连接阶段）" classname="ModelFallback 增强" time="1.92124" file="tests/llm/fallback.test.ts" line="375" assertions="2" />
+      <testcase name="max_tokens 溢出自动恢复重试成功" classname="ModelFallback 增强" time="1.730077" file="tests/llm/fallback.test.ts" line="402" assertions="4" />
+      <testcase name="#8：大窗口下极小剩余空间默认放弃 max_tokens 恢复（floor 按比例提高）" classname="ModelFallback 增强" time="0.004871" file="tests/llm/fallback.test.ts" line="448" assertions="2" />
+      <testcase name="#8：SID_RECOVERY_FLOOR_TOKENS 放宽 floor 后可从同样的溢出中恢复" classname="ModelFallback 增强" time="0.001833" file="tests/llm/fallback.test.ts" line="476" assertions="4" />
+      <testcase name="流式阶段连续 3 次 529 触发降级" classname="ModelFallback 增强" time="0.004015" file="tests/llm/fallback.test.ts" line="518" assertions="2" />
+      <testcase name="后台 529 立即放弃（不重试）" classname="ModelFallback 增强" time="0.000326" file="tests/llm/fallback.test.ts" line="548" assertions="3" />
+      <testcase name="persistent 模式：重试耗尽后进入无限等待(persistent_retry_wait)而非降级" classname="ModelFallback 增强" time="0.154062" file="tests/llm/fallback.test.ts" line="602" assertions="4" />
+      <testcase name="非 persistent(默认)：重试耗尽后降级到备用 provider，不进入 persistent 等待" classname="ModelFallback 增强" time="0.000885" file="tests/llm/fallback.test.ts" line="635" assertions="3" />
+      <testcase name="persistent 心跳：长睡眠拆成 10s 分段并 yield 剩余时间进度事件" classname="ModelFallback 增强" time="10.003375" file="tests/llm/fallback.test.ts" line="656" assertions="1" />
+      <testcase name="shouldRetry529: 前台 true, 后台 false" classname="ModelFallback 增强" time="0.000421" file="tests/llm/fallback.test.ts" line="682" assertions="7" />
+      <testcase name="FOREGROUND_SOURCES 包含正确的源" classname="ModelFallback 增强" time="0.00007" file="tests/llm/fallback.test.ts" line="694" assertions="4" />
+      <testcase name="Telemetry 回调接收事件" classname="ModelFallback 增强" time="0.004446" file="tests/llm/fallback.test.ts" line="702" assertions="2" />
+      <testcase name="自定义 streamTimeoutMs" classname="ModelFallback 增强" time="0.000249" file="tests/llm/fallback.test.ts" line="730" assertions="1" />
+      <testcase name="流 hang 触发超时 abort 时走重试/fallback 而非永久阻塞" classname="ModelFallback 增强" time="5.588505" file="tests/llm/fallback.test.ts" line="739" assertions="1" />
+      <testcase name="用户 abort（外部 signal）立即传播 RequestAbortedError" classname="ModelFallback 增强" time="0.034374" file="tests/llm/fallback.test.ts" line="773" assertions="1" />
+    </testsuite>
+    <testsuite name="T6 — 流内错误提前检测（stream-level error）" file="tests/llm/fallback.test.ts" line="802" tests="4" assertions="8" failures="0" skipped="0" time="3.775" hostname="2a4f2a14d62e">
+      <testcase name="Anthropic 200 + overloaded_error 首事件（消息无关键词）→ 重试后成功" classname="T6 — 流内错误提前检测（stream-level error）" time="1.98003" file="tests/llm/fallback.test.ts" line="824" assertions="2" />
+      <testcase name="OpenAI 200 + error chunk 首事件 → 重试后成功" classname="T6 — 流内错误提前检测（stream-level error）" time="1.795856" file="tests/llm/fallback.test.ts" line="834" assertions="2" />
+      <testcase name="正常首事件 → 正常消费（不误触发重试）" classname="T6 — 流内错误提前检测（stream-level error）" time="0.000768" file="tests/llm/fallback.test.ts" line="858" assertions="2" />
+      <testcase name="流内认证错误（terminal）不重试 → 进 fallback" classname="T6 — 流内错误提前检测（stream-level error）" time="0.000537" file="tests/llm/fallback.test.ts" line="876" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/network-profile.test.ts" file="tests/config/network-profile.test.ts" tests="16" assertions="34" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+    <testsuite name="resolveLoopTimeouts — 层级优先级" file="tests/config/network-profile.test.ts" line="40" tests="6" assertions="13" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="无任何覆盖 → 全部取统一默认值" classname="resolveLoopTimeouts — 层级优先级" time="0.000223" file="tests/config/network-profile.test.ts" line="41" assertions="1" />
+      <testcase name="settings.network 覆盖默认值" classname="resolveLoopTimeouts — 层级优先级" time="0.000081" file="tests/config/network-profile.test.ts" line="46" assertions="3" />
+      <testcase name="环境变量优先级高于 settings.network" classname="resolveLoopTimeouts — 层级优先级" time="0.000067" file="tests/config/network-profile.test.ts" line="56" assertions="1" />
+      <testcase name="非法环境变量（负数/非数字）被忽略，回退下一层" classname="resolveLoopTimeouts — 层级优先级" time="0.000087" file="tests/config/network-profile.test.ts" line="62" assertions="2" />
+      <testcase name="maxTimeoutRetries=0 是合法值（nonNegative），不被当作未设置" classname="resolveLoopTimeouts — 层级优先级" time="0.000058" file="tests/config/network-profile.test.ts" line="70" assertions="1" />
+      <testcase name="统一默认值：保活优先（阈值足够宽）" classname="resolveLoopTimeouts — 层级优先级" time="0.000041" file="tests/config/network-profile.test.ts" line="76" assertions="5" />
+    </testsuite>
+    <testsuite name="resolveHeaderTimeoutMs — provider 内部两层" file="tests/config/network-profile.test.ts" line="87" tests="2" assertions="2" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="默认取统一 header 超时" classname="resolveHeaderTimeoutMs — provider 内部两层" time="0.000046" file="tests/config/network-profile.test.ts" line="88" assertions="1" />
+      <testcase name="环境变量覆盖" classname="resolveHeaderTimeoutMs — provider 内部两层" time="0.000036" file="tests/config/network-profile.test.ts" line="91" assertions="1" />
+    </testsuite>
+    <testsuite name="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" file="tests/config/network-profile.test.ts" line="97" tests="6" assertions="13" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="无覆盖 → 全部取统一默认值（不按模型分档）" classname="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" time="0.000099" file="tests/config/network-profile.test.ts" line="98" assertions="3" />
+      <testcase name="openai idle / content-progress env 覆盖" classname="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" time="0.000117" file="tests/config/network-profile.test.ts" line="106" assertions="2" />
+      <testcase name="anthropic content-progress / overall 用各自 env 名" classname="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" time="0.00007" file="tests/config/network-profile.test.ts" line="114" assertions="3" />
+      <testcase name="fetch-absolute env 两 provider 共用" classname="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" time="0.000043" file="tests/config/network-profile.test.ts" line="126" assertions="2" />
+      <testcase name="非法 env（负数/非数字）被忽略，回退默认" classname="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" time="0.000041" file="tests/config/network-profile.test.ts" line="132" assertions="2" />
+      <testcase name="默认 providerKind 为 openai" classname="resolveProviderStreamTimeouts — provider 流式看门狗（配置-3 / 必删-1/-2）" time="0.000044" file="tests/config/network-profile.test.ts" line="140" assertions="1" />
+    </testsuite>
+    <testsuite name="computeBackoffMs — 指数退避 + jitter + 封顶" file="tests/config/network-profile.test.ts" line="146" tests="2" assertions="6" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="随 attempt 指数增长（含 ±15% jitter，取区间断言）" classname="computeBackoffMs — 指数退避 + jitter + 封顶" time="0.000085" file="tests/config/network-profile.test.ts" line="147" assertions="4" />
+      <testcase name="封顶 maxMs（含 jitter 上界）" classname="computeBackoffMs — 指数退避 + jitter + 封顶" time="0.000036" file="tests/config/network-profile.test.ts" line="159" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/sdk/message-converter.test.ts" file="tests/sdk/message-converter.test.ts" tests="16" assertions="22" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+    <testsuite name="convertToSDKMessage" file="tests/sdk/message-converter.test.ts" line="19" tests="16" assertions="22" failures="0" skipped="0" time="0.001" hostname="2a4f2a14d62e">
+      <testcase name="user_message_added → null（不转发）" classname="convertToSDKMessage" time="0.001259" file="tests/sdk/message-converter.test.ts" line="20" assertions="1" />
+      <testcase name="tombstone → null（内部信号）" classname="convertToSDKMessage" time="0.000075" file="tests/sdk/message-converter.test.ts" line="24" assertions="1" />
+      <testcase name="assistant_message → assistant" classname="convertToSDKMessage" time="0.000129" file="tests/sdk/message-converter.test.ts" line="33" assertions="1" />
+      <testcase name="stream_text → stream_event" classname="convertToSDKMessage" time="0.00004" file="tests/sdk/message-converter.test.ts" line="48" assertions="1" />
+      <testcase name="tool_start → tool_progress(start)" classname="convertToSDKMessage" time="0.000042" file="tests/sdk/message-converter.test.ts" line="53" assertions="1" />
+      <testcase name="tool_end → tool_progress(end)" classname="convertToSDKMessage" time="0.000065" file="tests/sdk/message-converter.test.ts" line="66" assertions="1" />
+      <testcase name="compact → compact_boundary" classname="convertToSDKMessage" time="0.00002" file="tests/sdk/message-converter.test.ts" line="79" assertions="1" />
+      <testcase name="context_warning → status" classname="convertToSDKMessage" time="0.000051" file="tests/sdk/message-converter.test.ts" line="84" assertions="2" />
+      <testcase name="max_turns → result(error_max_turns)" classname="convertToSDKMessage" time="0.000058" file="tests/sdk/message-converter.test.ts" line="90" assertions="2" />
+      <testcase name="done → result(success) 骨架" classname="convertToSDKMessage" time="0.000039" file="tests/sdk/message-converter.test.ts" line="103" assertions="1" />
+      <testcase name="hook_blocked → hook_response" classname="convertToSDKMessage" time="0.000041" file="tests/sdk/message-converter.test.ts" line="114" assertions="1" />
+      <testcase name="loop_detected → status" classname="convertToSDKMessage" time="0.000028" file="tests/sdk/message-converter.test.ts" line="123" assertions="1" />
+      <testcase name="loop_recovery → status" classname="convertToSDKMessage" time="0.000036" file="tests/sdk/message-converter.test.ts" line="128" assertions="1" />
+      <testcase name="system → status" classname="convertToSDKMessage" time="0.000034" file="tests/sdk/message-converter.test.ts" line="136" assertions="1" />
+      <testcase name="fatal_error → result(error_during_execution)（不再谎报 success）" classname="convertToSDKMessage" time="0.000054" file="tests/sdk/message-converter.test.ts" line="144" assertions="4" />
+      <testcase name="fatal_error 带 stack → errors 含堆栈" classname="convertToSDKMessage" time="0.000042" file="tests/sdk/message-converter.test.ts" line="163" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/sdk/headless-event-format.test.ts" file="tests/sdk/headless-event-format.test.ts" tests="13" assertions="23" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+    <testsuite name="classifyHeadlessStreamText" file="tests/sdk/headless-event-format.test.ts" line="17" tests="3" assertions="5" failures="0" skipped="0" time="0.001" hostname="2a4f2a14d62e">
+      <testcase name="重试进度文案 → isRetryProgress，剥离前缀走 stderr" classname="classifyHeadlessStreamText" time="0.001258" file="tests/sdk/headless-event-format.test.ts" line="18" assertions="3" />
+      <testcase name="普通文本 → 非重试进度（拼入正文）" classname="classifyHeadlessStreamText" time="0.000088" file="tests/sdk/headless-event-format.test.ts" line="27" assertions="1" />
+      <testcase name="以重试文案为子串但不在开头 → 不误判" classname="classifyHeadlessStreamText" time="0.000037" file="tests/sdk/headless-event-format.test.ts" line="32" assertions="1" />
+    </testsuite>
+    <testsuite name="formatHeadlessEvent" file="tests/sdk/headless-event-format.test.ts" line="38" tests="10" assertions="18" failures="0" skipped="0" time="0" hostname="2a4f2a14d62e">
+      <testcase name="system/error → stderr + 拼入正文兜底（静默-2 核心）" classname="formatHeadlessEvent" time="0.000188" file="tests/sdk/headless-event-format.test.ts" line="39" assertions="4" />
+      <testcase name="system/info → stderr（不进正文，静默-2）" classname="formatHeadlessEvent" time="0.000059" file="tests/sdk/headless-event-format.test.ts" line="49" assertions="2" />
+      <testcase name="system/warning → stderr" classname="formatHeadlessEvent" time="0.000044" file="tests/sdk/headless-event-format.test.ts" line="56" assertions="2" />
+      <testcase name="tombstone → 模型降级提示" classname="formatHeadlessEvent" time="0.000052" file="tests/sdk/headless-event-format.test.ts" line="63" assertions="1" />
+      <testcase name="hook_blocked → 拦截提示（否则表现为什么都没发生）" classname="formatHeadlessEvent" time="0.000045" file="tests/sdk/headless-event-format.test.ts" line="73" assertions="2" />
+      <testcase name="max_turns → 轮次上限提示" classname="formatHeadlessEvent" time="0.000039" file="tests/sdk/headless-event-format.test.ts" line="80" assertions="1" />
+      <testcase name="loop_detected → 循环检测提示" classname="formatHeadlessEvent" time="0.000037" file="tests/sdk/headless-event-format.test.ts" line="85" assertions="1" />
+      <testcase name="loop_recovery → 恢复尝试提示" classname="formatHeadlessEvent" time="0.000036" file="tests/sdk/headless-event-format.test.ts" line="90" assertions="1" />
+      <testcase name="context_warning → 上下文剩余提示" classname="formatHeadlessEvent" time="0.000124" file="tests/sdk/headless-event-format.test.ts" line="95" assertions="1" />
+      <testcase name="assistant_message / stream_text / done → null（由 streamBuffer 或主循环处理）" classname="formatHeadlessEvent" time="0.000064" file="tests/sdk/headless-event-format.test.ts" line="100" assertions="3" />
+    </testsuite>
+  </testsuite>
+</testsuites>

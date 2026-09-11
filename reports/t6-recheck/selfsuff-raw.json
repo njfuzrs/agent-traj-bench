@@ -1,0 +1,292 @@
+{
+ "T0002": {
+  "rest": "请按照方案执行代码修复",
+  "rest_len": 11,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0003": {
+  "rest": "请根据文档，完成任务：第 2 批：功能等同未上线（第 17、22、19 条）",
+  "rest_len": 38,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0005": {
+  "rest": "走流程发布一个新版本sid-code 记得更新官网更新日志 </session> Write the title in the predominant language of the session — a stray word or code token in another language doesn't change it. Ignore the language of the examples above.",
+  "rest_len": 210,
+  "sym": [],
+  "n_missing": 0
+ },
+ "T0007": {
+  "rest": "帮我排查文档中的问题",
+  "rest_len": 10,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0008": {
+  "rest": "按照文档执行代码修改，所有问题，缺口，差距都需要修复，不要遗漏",
+  "rest_len": 31,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0009": {
+  "rest": "请根据文档，完成任务：第 5 批：消息保真（第 5、8、6 条）",
+  "rest_len": 32,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0010": {
+  "rest": "请你完成文档中的所有任务和需求",
+  "rest_len": 15,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0011": {
+  "rest": "> /effort 当前推理强度: auto 实际档位(auto 解析): high（跟随模型默认） 模型支持 max: 是 可切换: low / medium / high / max / auto 用 /effort <档位> 切换，加 -p 持久化到 settings.json；/effort help 查看用法 > /effort -p max 推理强度已切换为: max，并已保存到 settings.json 我刚刚把sid-code effort 设置 max 并且之久化之后： 但是我通过sc命令打开报错：zhourusheng@zhourushengdeMacBook-Pro sid-code % sc 错误: 未设置 OPENAI_API_KEY 环境变量 请你排查一下，我们这个设置的逻辑，有问题",
+  "rest_len": 361,
+  "sym": [
+   "报错",
+   "有问题",
+   "错误:"
+  ],
+  "n_missing": 0
+ },
+ "T0012": {
+  "rest": "刚刚是有另一个claude code任务在执行，所以不小心动了你的代码，它已经告知我了：施工期间有另一个进程在并发改这个仓库，中途把我已落盘的 7 个文件连同 2 个新建模块整体回退过一次（同时出现了 llm/keepalive.ts、llm/fallback.ts、permission/checker.ts 等与本任务无关的改动）。我重新应用了全部改动并逐项校验在位。如果你在跑另一个 agent 或有什么自动化在动这个仓库，建议确认一下二者没互相踩——现在磁盘上的状态是完整的，但并发写同一批文件迟早会丢东西。，现在我转告你，我希望恢复你刚刚修改的代码，不要丢失，做安全合理的合并之后，继续完成你的任务，另一个任务已经完成了，你可以放心操作现在",
+  "rest_len": 325,
+  "sym": [
+   "丢失"
+  ],
+  "n_missing": 0
+ },
+ "T0013": {
+  "rest": "请帮我完成：MCP OAuth 全链路 这个缺口，对标cc源码来实现：",
+  "rest_len": 35,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0014": {
+  "rest": "请按照文档来执行代码修复，确保所有问题正确修复落地",
+  "rest_len": 25,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0018": {
+  "rest": "我们这个误判很严重，有没有办法彻底解决这个问题，据我所知好像是没办法避免这个误判？如果没办法解决这个问题，需要先把这个逻辑判断先注释掉，据我所知cc源码就没有做这个校验，因为不准确，可能误杀，有副作用，你可以看下cc源码：",
+  "rest_len": 111,
+  "sym": [
+   "误判"
+  ],
+  "n_missing": 0
+ },
+ "T0020": {
+  "rest": "请完成AskUserQuestionTool 这个缺口，对标cc源码来实现：",
+  "rest_len": 38,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0022": {
+  "rest": "按照方案执行代码改造，确保所有问题缺口全部落地，不要遗漏",
+  "rest_len": 28,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0024": {
+  "rest": "请按照文档完成任务：批次 D（依赖 A） — P1-5 + P1-9 内容级 tracing 用 flag 灰度，所以 flag 得先有真实消费者 和 P2-11 · 无录制回放能力 cc 源码在这里：",
+  "rest_len": 101,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0026": {
+  "rest": "这是之前排查问题的时候，顺便制定的一个可选的优化方案，也联网查询了一些资料，目的是弥补我们当前系统中的不足，提高性能，优化功能和用户体验，现在需要对这份方案进行二次评审，帮我检查一下，方案中哪些是真正值得做的地方？哪些是性价比高 / 无副作用 / 一次性根治的，我们需要筛选出来，而不是照单全收，我们要避免文档中宏大结论，技术自嗨，避免毫无实用价值的东西，请你结合现在代码和功能帮我分析一下",
+  "rest_len": 195,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0028": {
+  "rest": "如果有缺口，请你修复一下缺口，然后思考一下我们还有没有可以优化的点，有价值的，高性价比的，可以使用tavily mcp联网查询资料",
+  "rest_len": 65,
+  "sym": [],
+  "n_missing": 0
+ },
+ "T0029": {
+  "rest": "检查文档中所有问题是否完全修复落地",
+  "rest_len": 17,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0031": {
+  "rest": "请帮我完成：ToolSearchTool（P1,工具规模化的前置基础设施） 这个缺口，对标claude code源码来实现",
+  "rest_len": 61,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0033": {
+  "rest": "请按照文档，执行：七点五、Sprint 5 详细 Todo-List（可观测性增强）所有代码修复",
+  "rest_len": 48,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0034": {
+  "rest": "Workflows' 帮我检查方案中所有需求是否全部落地到代码中，不要遗漏",
+  "rest_len": 37,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0036": {
+  "rest": "我们sid-code tui界面输出的子代理的结果好像有点问题，第一个会子代理全部结果直接渲染到界面上，没有折叠，有些子代理会折叠，有的没有折叠，应该统 一保持折叠。第二问题是，字代理输出会被截断，结果不完整。请你检查并修复这两个问题",
+  "rest_len": 117,
+  "sym": [
+   "不完整",
+   "截断",
+   "没有折叠",
+   "渲染"
+  ],
+  "n_missing": 1
+ },
+ "T0038": {
+  "rest": "请按照文档来修复所有相关的代码，确保所有问题正确修复落地，不要遗漏",
+  "rest_len": 33,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0039": {
+  "rest": "请按照文档来修复所有缺口的代码，确保所有问题正确修复落地，不要遗漏",
+  "rest_len": 33,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0040": {
+  "rest": "请按照文档中的来执行代码修复，直到所有问题都修复落地",
+  "rest_len": 26,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0042": {
+  "rest": "请根据文档需求进行分析",
+  "rest_len": 11,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0045": {
+  "rest": "请你阅读文档，执行：2. P0 差距详解（已建未接线 + 高影响，成本低） 章节所有缺口的代码修复，确保所有问题正确修复落地，不要遗漏",
+  "rest_len": 67,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0047": {
+  "rest": "请完成：Bash 注入防护深化（P2,security-audit 底座） 这个缺口，对标cc源码来实现：",
+  "rest_len": 53,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0049": {
+  "rest": "请你阅读文档，执行：4. P2/P3 差距（打磨 + 边缘，择机） 章节所有缺口的代码修复，确保所有问题正确修复落地，不要遗漏",
+  "rest_len": 63,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0050": {
+  "rest": "请修复文档中所有问题，不要遗漏",
+  "rest_len": 15,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0051": {
+  "rest": "这个方案中的问题今天已经修复了，你可以看下提交记录，并且我已经重新打包，但是刚刚使用sid-code + deepseek 执行任务的时候还是报错： 错误: LLM 错误: OpenAI API 错误: 400 {\"error\":{\"message\":\"An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'. (insufficient tool messages following tool_calls message)\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}} ，你可以看下最新的两条轨迹数据： 中的 28b7eed7 0d21f622 我有两个问题：第一为什么已经修复的问题还是会报错，第二为什么sid-code 只是执行一个任务，但是会有两条轨迹，不应该是一条吗",
+  "rest_len": 473,
+  "sym": [
+   "报错",
+   "错误:"
+  ],
+  "n_missing": 1
+ },
+ "T0052": {
+  "rest": "请你深入代码中，帮我检查文档/设计方案中提到的所有问题/优化点/缺口/规划/todo-list等是否在当前的项目代码中落地实现，请你将详细的检查结果汇总，告诉我",
+  "rest_len": 80,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0054": {
+  "rest": "请帮我修复文档中的问题",
+  "rest_len": 11,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0055": {
+  "rest": "请按照文档执行代码修复，确保所有问题修复落地，不要遗漏",
+  "rest_len": 27,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0056": {
+  "rest": "请你深入代码中，帮我检查文档/设计方案中提到的所有问题/优化点/缺口/规划/todo-list等是否在当前的项目代码中落地实现，请你将详细的检查结果汇总，告诉我",
+  "rest_len": 80,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 3
+ },
+ "T0059": {
+  "rest": "请按照方案来执行，确保所有问题全部修复落地",
+  "rest_len": 21,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0062": {
+  "rest": "按照方案执行代码改造，确保所有问题缺口全部落地，不要遗漏",
+  "rest_len": 28,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0063": {
+  "rest": "请帮我排查文档中的问题：",
+  "rest_len": 12,
+  "sym": [],
+  "n_missing": 1
+ },
+ "T0064": {
+  "rest": "请按照文档来修复所有缺口的代码，确保所有问题正确修复落地，不要遗漏",
+  "rest_len": 33,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ },
+ "T0065": {
+  "rest": "请你深入代码中，帮我检查文档/设计方案中提到的所有问题/优化点/缺口/规划/todo-list等是否在当前的项目代码中落地实现，请你将详细的检查结果汇总，告诉我",
+  "rest_len": 80,
+  "sym": [
+   "有问题"
+  ],
+  "n_missing": 1
+ }
+}

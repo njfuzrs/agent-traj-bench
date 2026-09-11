@@ -1,0 +1,5 @@
+Applied patch to 'tests/config/network-profile.test.ts' cleanly.
+Applied patch to 'tests/llm/effort.test.ts' cleanly.
+Applied patch to 'tests/llm/fallback.test.ts' cleanly.
+Falling back to direct application...
+Applied patch to 'tests/sdk/message-converter.test.ts' cleanly.

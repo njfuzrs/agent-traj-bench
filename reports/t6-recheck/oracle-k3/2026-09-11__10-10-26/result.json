@@ -1,0 +1,125 @@
+{
+    "id": "19d48817-7273-4c89-ba16-e67a50e5e53f",
+    "started_at": "2026-09-11T10:10:26.322910",
+    "updated_at": "2026-09-11T10:14:45.543107",
+    "finished_at": "2026-09-11T10:14:45.543107",
+    "n_total_trials": 6,
+    "stats": {
+        "n_completed_trials": 6,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "oracle__tasks": {
+                "n_trials": 6,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "error_code": 0.0,
+                        "f2p": 1.0,
+                        "f2p_n_required": 3.0,
+                        "f2p_n_seen": 3.0,
+                        "p2p": 0.0,
+                        "p2p_n_required": 30.0,
+                        "p2p_n_seen": 30.0,
+                        "reward": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "T0017__xYzvBGo",
+                            "T0027__7n6tiz4",
+                            "T0017__X3LJuDP",
+                            "T0027__eSnaXB3",
+                            "T0017__m7swQbB",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "f2p": {
+                        "1.0": [
+                            "T0017__xYzvBGo",
+                            "T0027__7n6tiz4",
+                            "T0017__X3LJuDP",
+                            "T0027__eSnaXB3",
+                            "T0017__m7swQbB",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "p2p": {
+                        "0.0": [
+                            "T0017__xYzvBGo",
+                            "T0027__7n6tiz4",
+                            "T0017__X3LJuDP",
+                            "T0027__eSnaXB3",
+                            "T0017__m7swQbB",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "error_code": {
+                        "0": [
+                            "T0017__xYzvBGo",
+                            "T0027__7n6tiz4",
+                            "T0017__X3LJuDP",
+                            "T0027__eSnaXB3",
+                            "T0017__m7swQbB",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "f2p_n_required": {
+                        "5.0": [
+                            "T0017__xYzvBGo",
+                            "T0017__X3LJuDP",
+                            "T0017__m7swQbB"
+                        ],
+                        "1.0": [
+                            "T0027__7n6tiz4",
+                            "T0027__eSnaXB3",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "f2p_n_seen": {
+                        "5.0": [
+                            "T0017__xYzvBGo",
+                            "T0017__X3LJuDP",
+                            "T0017__m7swQbB"
+                        ],
+                        "1.0": [
+                            "T0027__7n6tiz4",
+                            "T0027__eSnaXB3",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "p2p_n_required": {
+                        "30.0": [
+                            "T0017__xYzvBGo",
+                            "T0027__7n6tiz4",
+                            "T0017__X3LJuDP",
+                            "T0027__eSnaXB3",
+                            "T0017__m7swQbB",
+                            "T0027__KE6sXmj"
+                        ]
+                    },
+                    "p2p_n_seen": {
+                        "30.0": [
+                            "T0017__xYzvBGo",
+                            "T0027__7n6tiz4",
+                            "T0017__X3LJuDP",
+                            "T0027__eSnaXB3",
+                            "T0017__m7swQbB",
+                            "T0027__KE6sXmj"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

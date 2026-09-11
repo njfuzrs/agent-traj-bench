@@ -1,0 +1,1007 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/query/context-pressure.test.ts:
+(pass) buildContextPressureReminder — 阈值边界 > 使用率低于 warn 阈值时返回 null（不刷屏） [0.06ms]
+(pass) buildContextPressureReminder — 阈值边界 > 恰好达到 warn 阈值时注入温和提醒 [0.03ms]
+(pass) buildContextPressureReminder — 阈值边界 > 恰好达到 urgent 阈值时注入强提醒 [0.01ms]
+(pass) buildContextPressureReminder — 文案分级 > 温和提醒（warn ≤ 使用率 < urgent）措辞平和、安抚不催促 [0.01ms]
+(pass) buildContextPressureReminder — 文案分级 > 强提醒（≥ urgent）安抚而非催收尾（对标 claude-code 哲学） [0.01ms]
+(pass) buildContextPressureReminder — 文案分级 > 含使用率与剩余百分比、含落盘要点 [0.02ms]
+(pass) buildContextPressureReminder — 文案分级 > 两档都明确告知会自动压缩、可无缝继续（消除恐慌） [0.01ms]
+(pass) buildContextPressureReminder — 文案分级 > 剩余百分比为负时夹到 0（防越界文案）
+(pass) buildContextPressureReminder — 文案分级 > 含'请勿向用户提及/复述'约束（对齐既有 reminder 风格） [0.01ms]
+
+tests/query/hook-modified-notice.test.ts:
+(pass) buildHookModifiedNotice — hook 改参告知 > 包含被改工具的名字 [0.91ms]
+(pass) buildHookModifiedNotice — hook 改参告知 > 用 system-reminder 包裹（随消息流、与其它注入边一致） [0.03ms]
+(pass) buildHookModifiedNotice — hook 改参告知 > 明确告知模型以执行结果为准，别按原参数理解 [0.03ms]
+(pass) buildHookModifiedNotice — hook 改参告知 > 只给事实、不渲染具体参数值（防 hook 注入敏感值回灌上下文）
+(pass) buildHookModifiedNotice — hook 改参告知 > 不同工具名生成对应告知（前置可拼接到任意 tool_result） [0.01ms]
+
+tests/query/abort-graceful.test.ts:
+471 |     // hypothesisGuideInjected 与 turnCount===1 双保险，保证同一条消息内不重复注入。
+472 |     // AND 检测（路径+动词）+ system-prompt 常驻引导兜底，详见
+473 |     // docs/bugfixes/todo/最终结论与TODO-彻底修复防线零触发.md。
+474 |     if (state.turnCount === 1 && !state.hypothesisGuideInjected) {
+475 |       const userText = extractLastUserInput(ctxMgr);
+476 |       if (detectInvestigationContext(userText)) {
+                ^
+ReferenceError: detectInvestigationContext is not defined
+      at queryLoop (/repo/src/query/loop.ts:476:11)
+      at next (1:11)
+      at <anonymous> (/repo/tests/query/abort-graceful.test.ts:91:22)
+(fail) A2 — queryLoop abort 优雅收尾 > 路径①：流式响应后 signal 已 abort → 补 cancel result + yield done，不抛 [3.92ms]
+471 |     // hypothesisGuideInjected 与 turnCount===1 双保险，保证同一条消息内不重复注入。
+472 |     // AND 检测（路径+动词）+ system-prompt 常驻引导兜底，详见
+473 |     // docs/bugfixes/todo/最终结论与TODO-彻底修复防线零触发.md。
+474 |     if (state.turnCount === 1 && !state.hypothesisGuideInjected) {
+475 |       const userText = extractLastUserInput(ctxMgr);
+476 |       if (detectInvestigationContext(userText)) {
+                ^
+ReferenceError: detectInvestigationContext is not defined
+      at queryLoop (/repo/src/query/loop.ts:476:11)
+      at next (1:11)
+      at <anonymous> (/repo/tests/query/abort-graceful.test.ts:123:22)
+(fail) A2 — queryLoop abort 优雅收尾 > 路径②：executeTools 抛 AbortError → 补 cancel result + yield done，不抛 [0.22ms]
+153 |       }
+154 |     } catch (e) {
+155 |       thrown = e as Error;
+156 |     }
+157 |     expect(thrown).not.toBeNull();
+158 |     expect(thrown!.message).toContain("真实工具错误");
+                                  ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "真实工具错误"
+Received: "detectInvestigationContext is not defined"
+
+      at <anonymous> (/repo/tests/query/abort-graceful.test.ts:158:29)
+(fail) A2 — queryLoop abort 优雅收尾 > 非 abort 错误仍正常抛出（不被 abort 分支吞掉） [0.24ms]
+
+tests/query/permission-reminder.test.ts:
+(pass) buildPermissionModeReminder — 基础行为 > 已知 mode 复用 PERMISSION_MODE_DESCRIPTIONS 文案 [0.97ms]
+(pass) buildPermissionModeReminder — 基础行为 > acceptEdits / always-allow 等已知 mode 均能生成 [0.06ms]
+(pass) buildPermissionModeReminder — 基础行为 > 未知 mode（无对应描述）返回 null，不喂空洞约束 [0.01ms]
+(pass) buildPermissionModeReminder — 基础行为 > mode 键与 permission/mode.ts 的 PermissionMode 对齐（防再次漂移） [0.01ms]
+(pass) buildPermissionModeReminder — 切换 vs 持续文案 > justChanged=true 强调'已切换' [0.01ms]
+(pass) buildPermissionModeReminder — 切换 vs 持续文案 > justChanged=false 强调'持续遵守' [0.01ms]
+(pass) buildPermissionModeReminder — 切换 vs 持续文案 > 含'请勿向用户提及/复述'约束
+(pass) PERMISSION_MODE_REMINDER_INTERVAL > 节流间隔为正整数 [0.01ms]
+
+tests/query/work-log.test.ts:
+(pass) work-log — P2-2 外部记忆 > snapshotFromTodos 正确分类 [0.05ms]
+(pass) work-log — P2-2 外部记忆 > renderProgressMarkdown 含已完成 / 待办分区 [0.06ms]
+(pass) work-log — P2-2 外部记忆 > buildProgressReminder 有待办时回注、无待办时返回 null [0.04ms]
+(pass) work-log — P2-2 外部记忆 > persistProgress 落盘 + loadProgressMarkdown 读回 [0.77ms]
+(pass) work-log — P2-2 外部记忆 > sessionId 含非法字符时不抛错（文件名清洗） [0.04ms]
+
+tests/query/todo-reminder.test.ts:
+(pass) todo-reminder — P0-2 回注 > countUnfinished 统计 pending + in_progress [0.02ms]
+(pass) todo-reminder — P0-2 回注 > 阈值配置合理（弱模型记忆短，≤ claude-code 的 10）
+(pass) todo-reminder — P0-2 回注 > buildTodoReminder 含完整清单 + 状态标签 + system-reminder 包裹 [0.04ms]
+(pass) todo-reminder — P0-3 完成度闸门 > 最大续命次数为正整数 [0.01ms]
+(pass) todo-reminder — P0-3 完成度闸门 > buildTodoGateMessage 列出未完成项并阻止收尾 [0.03ms]
+(pass) todo-reminder — P0-3 完成度闸门 > buildTodoGateExhaustedMessage 如实列出未完成项（不假装完成） [0.02ms]
+
+tests/query/turn-hard-timeout.test.ts:
+89 |     } catch (e) {
+90 |       thrown = e as Error;
+91 |     }
+92 | 
+93 |     // 走了 timeout 重试分支（isTimeoutError 命中），有重试提示
+94 |     expect(systemTexts.some((t) => t.includes("超时") && t.includes("重试"))).toBe(true);
+                                                                              ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/repo/tests/query/turn-hard-timeout.test.ts:94:74)
+(fail) L1 — queryLoop 单轮硬超时 > processStream 永久 hang → race 超时后让出控制权并重试（不挂死） [0.29ms]
+114 |     } catch (e) {
+115 |       thrown = e as Error;
+116 |     }
+117 |     // 重试 2 次后仍 hang → 最终抛出超时错误（被 isTimeoutError 识别后耗尽重试 → throw）
+118 |     expect(thrown).not.toBeNull();
+119 |     expect(/超时|timeout/i.test(thrown!.message)).toBe(true);
+                                                     ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/repo/tests/query/turn-hard-timeout.test.ts:119:48)
+(fail) L1 — queryLoop 单轮硬超时 > 超时重试耗尽（2 次）后向上抛超时错误 [0.18ms]
+471 |     // hypothesisGuideInjected 与 turnCount===1 双保险，保证同一条消息内不重复注入。
+472 |     // AND 检测（路径+动词）+ system-prompt 常驻引导兜底，详见
+473 |     // docs/bugfixes/todo/最终结论与TODO-彻底修复防线零触发.md。
+474 |     if (state.turnCount === 1 && !state.hypothesisGuideInjected) {
+475 |       const userText = extractLastUserInput(ctxMgr);
+476 |       if (detectInvestigationContext(userText)) {
+                ^
+ReferenceError: detectInvestigationContext is not defined
+      at queryLoop (/repo/src/query/loop.ts:476:11)
+      at next (1:11)
+      at <anonymous> (/repo/tests/query/turn-hard-timeout.test.ts:134:22)
+(fail) L1 — queryLoop 单轮硬超时 > processStream 正常返回时 race 不误伤（清掉定时器，正常走完） [0.19ms]
+
+tests/query/reminder-inject.test.ts:
+(pass) injectReminders — 基础行为 > reminderParts 为空时原样返回（同引用） [0.03ms]
+(pass) injectReminders — 基础行为 > user 消息含 text block 时，reminder 前置到 text 开头 [0.05ms]
+(pass) injectReminders — 基础行为 > 多个 reminderParts 以双换行拼接 [0.02ms]
+(pass) injectReminders — 回归：纯 tool_result 轮（无 text block） > 最后一条 user 只含 tool_result 时，追加独立 text block 承载 reminder [0.03ms]
+(pass) injectReminders — 回归：纯 tool_result 轮（无 text block） > 注入目标是最后一条 user 消息，而非靠前的带 text 的 user 消息 [0.04ms]
+(pass) injectReminders — 回归：纯 tool_result 轮（无 text block） > 多个 tool_result block 也只追加一个 text block 到末尾 [0.03ms]
+(pass) injectReminders — 不变量 > 不修改入参（in-place 安全） [0.02ms]
+(pass) injectReminders — 不变量 > 无 user 消息时原样返回（不抛错） [0.02ms]
+
+tests/query/thinking-only-fallback.test.ts:
+(pass) processStream — 第二层兜底:只思考不答复原地转型 > end_turn + 仅短思考无正文 → thinking 块原地转型为 text 块 [0.52ms]
+(pass) processStream — 第二层兜底:只思考不答复原地转型 > 思考文本超过 500 字符 → 判定为真思考链,保持 thinking 块原样 [0.07ms]
+(pass) processStream — 第二层兜底:只思考不答复原地转型 > 有正文 text 时不触发兜底(thinking 块原样保留) [0.07ms]
+(pass) processStream — 第二层兜底:只思考不答复原地转型 > 有 tool_use 时不触发兜底(正文空属正常,thinking 块保留) [0.24ms]
+(pass) processStream — 第二层兜底:只思考不答复原地转型 > stop_reason 非 end_turn/stop 时不触发兜底 [0.11ms]
+
+tests/query/empty-param.test.ts:
+(pass) empty-param — isEmptyToolInput > 空对象 {} → 空（DeepSeek 退化精确特征） [0.02ms]
+(pass) empty-param — isEmptyToolInput > null / undefined → 空
+(pass) empty-param — isEmptyToolInput > 空数组 → 空
+(pass) empty-param — isEmptyToolInput > 含字段的对象 → 非空 [0.01ms]
+(pass) empty-param — isEmptyToolInput > 非对象（字符串/数字）→ 非空（不在兜底范围，交工具校验） [0.01ms]
+(pass) empty-param — detectEmptyParamToolUses > 识别空参数 tool_use，返回 id/name/index [0.03ms]
+(pass) empty-param — detectEmptyParamToolUses > 非空参数 tool_use 不命中 [0.01ms]
+(pass) empty-param — detectEmptyParamToolUses > 混合场景：只命中空参数那一个 [0.02ms]
+(pass) empty-param — detectEmptyParamToolUses > 纯文本（正常结束）→ 无命中
+(pass) empty-param — replaceEmptyParamToolUses > 空参数 tool_use 替换为 text（消除孤儿） [0.03ms]
+(pass) empty-param — replaceEmptyParamToolUses > 混合场景：非空 tool_use 原样保留，仅替换空参数 [0.02ms]
+(pass) empty-param — replaceEmptyParamToolUses > 不修改入参（返回新数组） [0.02ms]
+(pass) empty-param — replaceEmptyParamToolUses > text/thinking 块原样保留 [0.02ms]
+(pass) empty-param — buildEmptyParamRetryMessage > 含工具名 + 重试计数 + 完整参数要求 + system-reminder 包裹 [0.03ms]
+(pass) empty-param — buildEmptyParamRetryMessage > 已压缩时包含精简上下文措辞 [0.01ms]
+(pass) empty-param — buildEmptyParamRetryMessage > 未压缩时不含精简措辞
+(pass) empty-param — toolHasRequiredParams（误杀防护核心判据） > required 非空数组 → 有必填参数 [0.02ms]
+(pass) empty-param — toolHasRequiredParams（误杀防护核心判据） > 无 required（无参数工具如 enter_plan_mode）→ 无必填参数 [0.01ms]
+(pass) empty-param — toolHasRequiredParams（误杀防护核心判据） > required 是空数组 → 无必填参数 [0.02ms]
+(pass) empty-param — toolHasRequiredParams（误杀防护核心判据） > 拿不到 schema（undefined/null/非对象）→ 保守返回 true（维持旧兜底） [0.01ms]
+(pass) empty-param — detectEmptyParamToolUses + getSchema（区分真退化 vs 合法空参） > enter_plan_mode 合法 input={} → 不命中（修复 b168a817 死循环根因） [0.02ms]
+(pass) empty-param — detectEmptyParamToolUses + getSchema（区分真退化 vs 合法空参） > write 有必填参数却 input={} → 命中（真退化） [0.01ms]
+(pass) empty-param — detectEmptyParamToolUses + getSchema（区分真退化 vs 合法空参） > 混合：write 空参命中、enter_plan_mode 空参放行 [0.01ms]
+(pass) empty-param — detectEmptyParamToolUses + getSchema（区分真退化 vs 合法空参） > 不传 getSchema → 旧行为不变（任何空参数都命中） [0.02ms]
+(pass) empty-param — replaceEmptyParamToolUses + getSchema > 无必填参数工具的合法空 tool_use 原样保留（不被改成 text 作废） [0.02ms]
+(pass) empty-param — replaceEmptyParamToolUses + getSchema > 真退化工具的空 tool_use 替换为 text [0.01ms]
+(pass) empty-param — replaceEmptyParamToolUses + getSchema > 混合：enter_plan_mode 保留、write 替换 [0.01ms]
+(pass) empty-param — 常量 > MAX_EMPTY_PARAM_RETRIES = 3（防无限循环）
+
+tests/query/thinking-duration.test.ts:
+(pass) processStream — SP1 思考耗时 > 思考块带 delta → ThinkingBlock.durationMs 存在且非负 [0.13ms]
+(pass) processStream — SP1 思考耗时 > 普通文本块不附 durationMs [0.08ms]
+
+tests/query/sparse-content-index.test.ts:
+(pass) processStream — 9bc92c2c 稀疏 index 防御 > index 从 1 开始（跳过 0）的 tool_use 不崩溃且数组密集 [0.59ms]
+(pass) processStream — 9bc92c2c 稀疏 index 防御 > index 从 2 开始的多个 block（text + tool_use）正确累积 [0.08ms]
+(pass) processStream — 9bc92c2c 稀疏 index 防御 > 正常 index=0 开始的连续 stream 不受影响 [0.06ms]
+(pass) processStream — 9bc92c2c 稀疏 index 防御 > 未知 index 的 delta/stop 事件被安全忽略 [0.06ms]
+(pass) processStream — 9bc92c2c 稀疏 index 防御 > thinking 块 + 非连续 index 正确转型 [0.09ms]
+
+tests/llm/effort.test.ts:
+(pass) isEffortLevel / EFFORT_LEVELS > 4 档标度 [0.01ms]
+(pass) isEffortLevel / EFFORT_LEVELS > 合法/非法判定 [0.02ms]
+(pass) resolveEffortCapability — 协议分类 > 规则1 DeepSeek OpenAI 端点 [0.03ms]
+(pass) resolveEffortCapability — 协议分类 > 规则2 DeepSeek Anthropic 端点（baseURL 含 /anthropic） [0.04ms]
+(pass) resolveEffortCapability — 协议分类 > 规则3 Anthropic 原生 Claude [0.03ms]
+(pass) resolveEffortCapability — 协议分类 > 规则4 OpenAI o-series（无 max） [0.02ms]
+(pass) resolveEffortCapability — 协议分类 > 规则5 未知端点（兜底全不支持） [0.03ms]
+(pass) resolveEffortCapability — 协议分类 > 优先级1：modelConfig.supportsThinking=false 强制全不支持 [0.01ms]
+(pass) applyToSendParams — 线格式映射 > 规则1 DeepSeek OpenAI：effort→reasoningEffort 二值钳制 [0.03ms]
+(pass) applyToSendParams — 线格式映射 > 规则1 DeepSeek：思考关闭则不下发 effort [0.02ms]
+(pass) applyToSendParams — 线格式映射 > 规则3 Anthropic 原生：effort→budgetTokens 档位映射 [0.05ms]
+(pass) applyToSendParams — 线格式映射 > 规则3 Anthropic 原生：thinking off 不开思考 [0.03ms]
+(pass) applyToSendParams — 线格式映射 > 规则4 o-series：max→high，low/medium 原样 [0.02ms]
+(pass) applyToSendParams — 线格式映射 > 规则5 未知端点：全 no-op，不下发任何字段 [0.03ms]
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > env 未设(null)用 runtime [0.02ms]
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > env 强制档位覆盖 runtime
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > env 强制 auto(undefined) 覆盖 runtime
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > max→high：模型不支持 max 时降级
+(pass) resolveAppliedEffort — 优先级链 + max 钳制 > runtime auto 保持 undefined
+(pass) getDisplayedEffort / isEffortAuto > auto 态展示模型默认档 [0.02ms]
+(pass) getDisplayedEffort / isEffortAuto > 显式档位展示该档（基线，非服务端钳制后）
+(pass) getDisplayedEffort / isEffortAuto > env 强制 auto → isEffortAuto true
+(pass) resolveThinking — 优先级链 > env 覆盖最高 [0.01ms]
+(pass) resolveThinking — 优先级链 > runtime on/off
+(pass) resolveThinking — 优先级链 > auto 跟随 cap.thinkingDefaultOn
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > SID_CODE_EFFORT_LEVEL 优先于 CLAUDE_CODE_EFFORT_LEVEL [0.03ms]
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > 兼容别名 CLAUDE_CODE_EFFORT_LEVEL
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > unset / auto → 强制 auto(undefined) [0.01ms]
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > 未设 → null
+(pass) getEffortEnvOverride — env 读取 + 别名兼容 > 非法值 → null
+(pass) getThinkingEnvOverride > on/true/1 → true [0.02ms]
+(pass) getThinkingEnvOverride > off/false/0 → false [0.01ms]
+(pass) getThinkingEnvOverride > auto / 未设 / 非法 → null [0.01ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > DeepSeek OpenAI 端点：low/medium 实际下发 high（被钳制） [0.02ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > DeepSeek OpenAI 端点：high/max 原样下发（无钳制） [0.01ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > DeepSeek Anthropic 端点：low/medium→high（走 output_config.effort） [0.01ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > o-series：max 实际下发 high（被钳制），low/medium 原样
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > 原生 Claude：走 budget_tokens 无显式 effort 下发 → 返回原档（视为无钳制） [0.01ms]
+(pass) previewWireEffort — 预演实际下发档（钳制提示用） > unknown：no-op → 返回原档
+
+tests/llm/errors.test.ts:
+(pass) classifyError > Terminal 错误 > 401 认证失败 [0.15ms]
+(pass) classifyError > Terminal 错误 > invalid api key [0.02ms]
+(pass) classifyError > Terminal 错误 > authentication 失败 [0.02ms]
+(pass) classifyError > Terminal 错误 > 404 模型不存在 [0.02ms]
+(pass) classifyError > Terminal 错误 > not found [0.02ms]
+(pass) classifyError > Terminal 错误 > content_policy 拒绝 [0.02ms]
+(pass) classifyError > Terminal 错误 > safety 拒绝 [0.01ms]
+(pass) classifyError > Terminal 错误 > 400 无效请求 [0.01ms]
+(pass) classifyError > Retryable 错误 > 429 限流 [0.11ms]
+(pass) classifyError > Retryable 错误 > rate_limit 错误 [0.03ms]
+(pass) classifyError > Retryable 错误 > 429 带 retry-after 解析 [0.02ms]
+(pass) classifyError > Retryable 错误 > overloaded 过载 [0.01ms]
+(pass) classifyError > Retryable 错误 > 503 过载 [0.01ms]
+(pass) classifyError > Retryable 错误 > 502 服务端错误 [0.02ms]
+(pass) classifyError > Retryable 错误 > 500 服务端错误 [0.02ms]
+(pass) classifyError > Retryable 错误 > timeout 超时 [0.02ms]
+(pass) classifyError > Retryable 错误 > ETIMEDOUT 超时 [0.02ms]
+(pass) classifyError > 网络错误码 > ECONNRESET [0.04ms]
+(pass) classifyError > 网络错误码 > ECONNREFUSED [0.02ms]
+(pass) classifyError > 网络错误码 > ENOTFOUND [0.02ms]
+(pass) classifyError > 网络错误码 > EPIPE [0.01ms]
+(pass) classifyError > 网络错误码 > EAI_AGAIN [0.02ms]
+(pass) classifyError > 未知错误 > 无法分类的 Error 返回原始错误 [0.01ms]
+(pass) classifyError > 未知错误 > 非 Error 对象转为 Error [0.02ms]
+(pass) getNetworkErrorCode > 直接从 error.code 提取
+(pass) getNetworkErrorCode > 从 cause 链中提取（深度 2） [0.01ms]
+(pass) getNetworkErrorCode > 从 cause 链中提取（深度 3） [0.01ms]
+(pass) getNetworkErrorCode > 超过 5 层深度返回 undefined [0.02ms]
+(pass) getNetworkErrorCode > 无 code 返回 undefined [0.02ms]
+(pass) StreamValidationError > 创建 empty_response 错误 [0.02ms]
+(pass) StreamValidationError > 创建 no_finish_reason 错误 [0.01ms]
+(pass) StreamValidationError > 创建 malformed_tool_call 错误 [0.01ms]
+(pass) isAbortError > 识别 RequestAbortedError [0.04ms]
+(pass) isAbortError > 识别 DOM AbortError [0.01ms]
+(pass) isAbortError > 识别常见 abort 文本 [0.03ms]
+(pass) isAbortError > 识别 @anthropic-ai/sdk 的 APIUserAbortError 文案（回归：流超时 abort 必须被识别） [0.01ms]
+(pass) isAbortError > 通过 name=APIUserAbortError 识别 abort 对象
+(pass) isAbortError > 识别裸字符串 abort reason（回归：ESC 取消崩溃复发根因）
+(pass) isAbortError > 识别带 reason 的 AbortSignal / 对象 [0.02ms]
+(pass) isAbortError > ABORT_REASONS 覆盖所有 abort 调用点（防漂移哨兵） [0.02ms]
+(pass) isAbortError > 非 abort 错误返回 false [0.01ms]
+
+tests/llm/mock-provider.test.ts:
+(pass) MockProvider — 配置校验 > name 必填 [0.05ms]
+(pass) MockProvider — 配置校验 > 未知 failPattern 抛错 [0.03ms]
+(pass) MockProvider — 配置校验 > createMockProvider 工厂等价于 new [0.02ms]
+(pass) MockProvider — 配置校验 > capabilities() 返回流式 + tools 默认 true [0.02ms]
+(pass) MockProvider — failPattern: ok (永不失败) > 第 1 次调用成功 [0.16ms]
+(pass) MockProvider — failPattern: ok (永不失败) > 连续多次调用都成功 [0.08ms]
+(pass) MockProvider — failPattern: 503 > failAfterRequests=0: 第 1 次直接 503 [0.09ms]
+(pass) MockProvider — failPattern: 503 > failAfterRequests=3: 前 3 次成功, 第 4 次 503 [0.09ms]
+(pass) MockProvider — failPattern: 503 > failAfterRequests=999: 短回合内不进失败分支 [0.05ms]
+(pass) MockProvider — failPattern: rate_limit > 第 1 次直接 RateLimit + retryAfterMs 默认 1000 [0.04ms]
+(pass) MockProvider — failPattern: rate_limit > 自定义 retryAfterMs 透传 [0.04ms]
+(pass) MockProvider — failPattern: rate_limit > failAfterRequests=2: 前 2 次成功后才限流 [0.06ms]
+(pass) MockProvider — failPattern: timeout > 第 1 次直接 timeout [0.04ms]
+(pass) MockProvider — failPattern: timeout > failAfterRequests=1: 前 1 次成功后才 timeout [0.04ms]
+(pass) MockProvider — abort signal 优先级 > 已 aborted 的 signal 抛 AbortError 而非 RetryableError [0.10ms]
+(pass) MockProvider — abort signal 优先级 > ok 模式 + 已 aborted signal: 仍然成功流式 (不主动 abort 是 caller 责任) [0.04ms]
+(pass) MockProvider — reset / 复用契约 > reset 后 failAfterRequests 重新生效 [0.06ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=ok failAfterRequests=0 行为符合预期 [0.08ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=ok failAfterRequests=2 行为符合预期 [0.03ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=ok failAfterRequests=999 行为符合预期 [0.02ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=503 failAfterRequests=0 行为符合预期 [0.04ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=503 failAfterRequests=2 行为符合预期 [0.01ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=503 failAfterRequests=999 行为符合预期 [0.01ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=rate_limit failAfterRequests=0 行为符合预期
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=rate_limit failAfterRequests=2 行为符合预期 [0.02ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=rate_limit failAfterRequests=999 行为符合预期 [0.02ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=timeout failAfterRequests=0 行为符合预期 [0.01ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=timeout failAfterRequests=2 行为符合预期 [0.02ms]
+(pass) MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求) > pattern=timeout failAfterRequests=999 行为符合预期
+
+tests/llm/capabilities.test.ts:
+(pass) Provider capabilities > AnthropicProvider > 实现了 capabilities 方法 [0.01ms]
+(pass) Provider capabilities > AnthropicProvider > 支持 streaming [0.02ms]
+(pass) Provider capabilities > AnthropicProvider > 支持 tools [0.01ms]
+(pass) Provider capabilities > AnthropicProvider > 支持 thinking（Extended Thinking）
+(pass) Provider capabilities > AnthropicProvider > 支持 vision [0.01ms]
+(pass) Provider capabilities > AnthropicProvider > 支持 promptCaching
+(pass) Provider capabilities > AnthropicProvider > 支持 parallelToolCalls
+(pass) Provider capabilities > OpenAIProvider > 实现了 capabilities 方法
+(pass) Provider capabilities > OpenAIProvider > 支持 streaming [0.01ms]
+(pass) Provider capabilities > OpenAIProvider > 支持 tools
+(pass) Provider capabilities > OpenAIProvider > 不支持 thinking
+(pass) Provider capabilities > OpenAIProvider > vision 如实声明 false（无图片输入管线，不虚标）
+(pass) Provider capabilities > OpenAIProvider > 不支持 promptCaching
+(pass) Provider capabilities > OpenAIProvider > 支持 parallelToolCalls
+(pass) Provider capabilities > OllamaProvider > 实现了 capabilities 方法
+(pass) Provider capabilities > OllamaProvider > 支持 streaming [0.01ms]
+(pass) Provider capabilities > OllamaProvider > 不支持 thinking
+(pass) Provider capabilities > OllamaProvider > 不支持 vision
+(pass) Provider capabilities > OllamaProvider > 不支持 promptCaching
+(pass) Provider capabilities > OllamaProvider > 不支持 parallelToolCalls
+(pass) Provider capabilities > getCapabilities 辅助函数 > 有 capabilities 方法时返回实际能力 [0.03ms]
+(pass) Provider capabilities > getCapabilities 辅助函数 > 无 capabilities 方法时返回默认能力 [0.02ms]
+(pass) Provider capabilities > DEFAULT_CAPABILITIES > streaming 默认 true
+(pass) Provider capabilities > DEFAULT_CAPABILITIES > tools 默认 true
+(pass) Provider capabilities > DEFAULT_CAPABILITIES > thinking 默认 false
+(pass) Provider capabilities > DEFAULT_CAPABILITIES > vision 默认 false
+(pass) Provider capabilities > DEFAULT_CAPABILITIES > promptCaching 默认 false
+(pass) Provider capabilities > DEFAULT_CAPABILITIES > parallelToolCalls 默认 true
+
+tests/trace/builder.test.ts:
+(pass) buildTrajectory > 输出包含四个顶层字段 [0.32ms]
+(pass) buildTrajectory > 空 pairs 时输出空 trajectory [0.02ms]
+(pass) buildTrajectory > stop_reason=end_turn 且 thought 非空时生成 final_answer [0.04ms]
+(pass) buildTrajectory > stop_reason=end_turn 但 thought 为空时不生成 final_answer [0.03ms]
+(pass) buildTrajectory > stop_reason=tool_use 时不生成 final_answer [0.09ms]
+(pass) buildTrajectory > tool_use 生成 action 步骤 [0.05ms]
+(pass) buildTrajectory > tool_use 后在下一个 pair 中找到 tool_result 生成 observation [0.06ms]
+(pass) buildTrajectory > 找不到 tool_result 时生成 orphan observation [0.04ms]
+(pass) buildTrajectory > 同一 response 中多个 tool_use 分别生成 action + observation [0.08ms]
+(pass) buildTrajectory > history 包含 system 消息（来自 metadata.system_prompt） [0.03ms]
+(pass) buildTrajectory > history 包含 system 消息（来自 pair.request.system） [0.03ms]
+(pass) buildTrajectory > history 包含 assistant 消息，附带 usage 和 stop_reason [0.03ms]
+(pass) buildTrajectory > history 中 assistant 消息包含 tool_calls 信息 [0.03ms]
+(pass) buildTrajectory > thinking_blocks 正确记录到 history 的 assistant 消息 [0.03ms]
+(pass) buildTrajectory > thinking_blocks 优先作为 thought 内容 [0.03ms]
+(pass) buildTrajectory > 无 thinking_blocks 时 history 中 thinking_blocks 为 null [0.02ms]
+(pass) buildTrajectory > info 字段包含正确统计数据 [0.03ms]
+(pass) buildTrajectory > metadata 字段包含 tool_source=sid-code [0.02ms]
+(pass) buildTrajectory > metadata 字段包含正确的会话信息 [0.03ms]
+(pass) buildTrajectory > metadata 包含 total_tokens 统计 [0.02ms]
+(pass) buildTrajectory > metadata 包含 total_steps（trajectory 步骤数） [0.03ms]
+(pass) buildTrajectory > 最后一个 pair stop_reason=end_turn 时 exit_status 为 end_turn [0.02ms]
+(pass) buildTrajectory > metadata.exit_status 优先级高于自动推断 [0.02ms]
+(pass) buildTrajectory > system prompt 存在时计算 claude_md_hash [0.02ms]
+(pass) buildTrajectory > 无 system prompt 时 claude_md_hash 不存在 [0.01ms]
+(pass) buildTrajectory > maxLookahead=3 内找到 tool_result [0.05ms]
+(pass) buildTrajectory > metadata 统计为 0 时从 pairs 计算: tokens_sent 取最后一次，其它累加 [0.03ms]
+(pass) buildTrajectory > metadata.harness 有值时正确输出到 TrajectoryMetaOutput.harness [0.02ms]
+(pass) buildTrajectory > metadata.harness 为 undefined 时输出不含 harness 字段 [0.01ms]
+(pass) buildTrajectory > RequestResponsePair.harness_turn_context 有值时不影响 trajectory/history 生成 [0.04ms]
+
+tests/trace/collector.test.ts:
+(pass) TraceCollector > SessionStart 初始化 metadata [1.32ms]
+(pass) TraceCollector > SessionStart 前 getMetadata 返回 undefined [0.05ms]
+(pass) TraceCollector > SessionStart 创建 writer，后续事件写入 events.jsonl [0.19ms]
+(pass) TraceCollector > 一轮 BeforeModel + AfterModel 生成一个 pair [0.66ms]
+(pass) TraceCollector > 两轮 model 生成两个 pair [0.43ms]
+(pass) TraceCollector > AfterModel 后 raw.jsonl 追加一行 [0.30ms]
+(pass) TraceCollector > BeforeModel 后 raw_preview.jsonl 写入非零 total_tokens_est [0.28ms]
+(pass) TraceCollector > AfterModel 后 session.traj 被写入 [0.29ms]
+(pass) TraceCollector > 首次请求保存 system 和 tools 到 pair.request [0.64ms]
+(pass) TraceCollector > 后续请求不保存 system 和 tools [0.30ms]
+(pass) TraceCollector > 首次请求的 metadata.system_prompt 从 system 提取 [0.20ms]
+(pass) TraceCollector > 首次请求 new_messages = 全部 messages [0.24ms]
+(pass) TraceCollector > 第二次请求 new_messages 只含新增部分 [0.39ms]
+(pass) TraceCollector > 压缩后 messages 减少时视为全量（重置增量） [0.38ms]
+(pass) TraceCollector > PostToolUse 更新 tools_used [0.19ms]
+(pass) TraceCollector > write 工具 PostToolUse 更新 files_edited [0.12ms]
+(pass) TraceCollector > edit 工具 PostToolUse 更新 files_edited [0.12ms]
+(pass) TraceCollector > PostToolUseFailure 写入 events.jsonl，is_error=true [0.22ms]
+(pass) TraceCollector > UserPromptSubmit 追加到 user_prompts [0.14ms]
+(pass) TraceCollector > 空白 prompt 不追加 [0.12ms]
+(pass) TraceCollector > PreCompact 记录到 compactions 并重置 prevMessageCount [0.20ms]
+(pass) TraceCollector > SubagentStart 设置 has_sub_agent 并追加 span [0.16ms]
+(pass) TraceCollector > SubagentStop 填入 span.end 时间 [0.16ms]
+(pass) TraceCollector > thinking_blocks 更新 has_thinking [0.23ms]
+(pass) TraceCollector > 无 thinking_blocks 时 has_thinking 不变 [0.25ms]
+(pass) TraceCollector > 多轮 model 后 token: input 取最后一次（含全历史），output/cache 累加 [0.27ms]
+(pass) TraceCollector > SessionEnd stats 覆盖自己累积的统计 [0.59ms]
+(pass) TraceCollector > SessionEnd 推断 exit_status=end_turn [0.30ms]
+(pass) TraceCollector > SessionEnd 最终写入 session.traj [0.27ms]
+(pass) TraceCollector > D3-1：SessionEnd 落 messages.json，含完整消息历史 [0.27ms]
+(pass) TraceCollector > D3-3：异常退出(error) 写 exit_attribution 到 metadata，abnormal=true [0.26ms]
+(pass) TraceCollector > D3-3：孤儿 tool_use 场景 → has_orphan_tool_use=true + last_tool 命中 [0.26ms]
+(pass) TraceCollector > D3-3：正常 end_turn 退出 → 不写 exit_attribution（abnormal=false 不污染 metadata） [0.30ms]
+(pass) TraceCollector > AfterModel 前无 BeforeModel 时静默跳过 [0.16ms]
+(pass) TraceCollector > 写入失败不抛异常，采集继续 [0.20ms]
+(pass) TraceCollector > 首行 raw.jsonl 含 system 和 tools，不含 raw_messages [0.28ms]
+(pass) TraceCollector > 后续行 raw.jsonl 含 new_messages 不含 system [0.45ms]
+(pass) TraceCollector > SessionEnd 调用 uploader.uploadSession [0.41ms]
+(pass) TraceCollector > handleAfterModel 在 input.harness_context 有值时存入 currentPair.harness_turn_context [0.26ms]
+(pass) TraceCollector > handlePostToolUse 在 input.edit_meta 有值时累积编辑统计 [0.29ms]
+(pass) TraceCollector > handleSessionEnd 在 input.harness_summary 有值时写入 metadata.harness [0.35ms]
+(pass) TraceCollector > 所有 Harness 字段为空时行为与整合前完全一致（回归测试） [0.36ms]
+(pass) TraceCollector > 空白会话（无任何 LLM 调用）退出时删除整个 trajectory 目录 [0.24ms]
+(pass) TraceCollector > 有真实 LLM 轮次的会话退出时保留 trajectory 目录 [0.35ms]
+(pass) TraceCollector > resume 续接复用 resumed_from 目录，且 index 接续历史轮次 [0.53ms]
+(pass) TraceCollector > resume 复用已上传清理的目录：从 metadata.json 恢复 index 偏移 [0.38ms]
+(pass) TraceCollector — §3.4 审计日志覆盖 > BeforeModel + AfterModel 写入 AUDIT:MODEL 条目（含 index/stop/token） [23.25ms]
+(pass) TraceCollector — §3.4 审计日志覆盖 > 工具成功写 INFO AUDIT:TOOL，工具失败升 WARN [22.28ms]
+(pass) TraceCollector — §3.4 审计日志覆盖 > PostToolUseFailure 写 WARN AUDIT:TOOL [26.18ms]
+(pass) TraceCollector — maxSessionsRetained LRU 清理 > 会话数未超上限 → 不删除 [0.38ms]
+(pass) TraceCollector — maxSessionsRetained LRU 清理 > 超上限 → 删最旧的，保留最新的 [0.46ms]
+(pass) TraceCollector — maxSessionsRetained LRU 清理 > 优先删已上传的，未上传的尽量保留（即使更旧） [0.34ms]
+(pass) TraceCollector — maxSessionsRetained LRU 清理 > sessions 目录不存在 → 安全无操作 [0.08ms]
+
+tests/ui/history-adapter.test.ts:
+(pass) isPlaceholderMessage > 识别占位消息 [0.64ms]
+(pass) isPlaceholderMessage > 非占位消息返回 false [0.02ms]
+(pass) isPlaceholderMessage > 多内容块不是占位消息 [0.02ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 续接标记消息被识别并隐藏 [0.04ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > system-reminder 包裹的内部提示整条隐藏（todo gate / 空参数重试等） [0.05ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 压缩边界 / GC 释放标记整条隐藏 [0.03ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 压缩注入的摘要/skill/ack 消息对按 _meta.origin 整条隐藏 [0.03ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 恢复会话(有摘要)注入的 buildResumeMessage/ack 消息对按 _meta.origin 整条隐藏 [0.02ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 无 _meta.origin 的同款 ack 文案不被误隐藏(只认标记,不认文案) [0.03ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 真实用户/助手消息不被隐藏 [0.02ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 正文里偶然含 [压缩边界] 字样但非开头，不误判 [0.01ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > 混合内容消息（tool_result + 内部提示）不整条隐藏，仅剥离内部文本块 [0.41ms]
+(pass) 内部消息隐藏（仅供 LLM、不展示给用户） > messagesToHistoryItems 跳过纯内部消息 [0.04ms]
+(pass) buildToolNameMapFromMessages > 从消息中构建 toolNameMap [0.02ms]
+(pass) messagesToHistoryItemsWithMap - user 消息 > 纯文本用户消息 → HistoryItemUser [0.03ms]
+(pass) messagesToHistoryItemsWithMap - user 消息 > 占位消息被过滤 [0.02ms]
+(pass) messagesToHistoryItemsWithMap - user 消息 > tool_result 与 pending tool_use 合并 [0.05ms]
+(pass) messagesToHistoryItemsWithMap - user 消息 > 错误的 tool_result → status=Error [0.04ms]
+(pass) messagesToHistoryItemsWithMap - user 消息 > 文本 + tool_result 混合 → 两个 HistoryItem [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > 纯文本助手消息 → HistoryItemAssistant [0.02ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > tool_use 暂存为 pending（无 tool_result 时输出为 Executing） [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > 文本 + tool_use 混合 → 文本在前，工具 pending [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > 多个 tool_use 无 result → 合并到一个 pending ToolGroup [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > P2-1：多工具并行 pending → 全部渲染为 Executing 中间态（不卡 toolName 单值/spinner） [0.06ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > 文本 → tool_use → 文本（无 result）→ 产出 3 个 HistoryItem [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > thinking 块带 durationMs → thought.durationSeconds（向下取整秒） [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > thinking 块无 durationMs → thought.durationSeconds 缺省（旧数据兼容） [0.04ms]
+(pass) messagesToHistoryItemsWithMap - assistant 消息 > thinking durationMs 不足 1 秒 → durationSeconds 为 0 [0.03ms]
+(pass) messagesToHistoryItems - 完整对话（合并模式） > user → assistant(tool_use) → user(tool_result) → 合并为单条 [0.05ms]
+(pass) messagesToHistoryItems - 完整对话（合并模式） > 占位消息被过滤 [0.03ms]
+(pass) messagesToHistoryItems - 完整对话（合并模式） > 空消息数组 → 空结果 [0.01ms]
+(pass) messagesToHistoryItems - 完整对话（合并模式） > 增量同步时使用外部 toolNameMap 避免 unknown [0.04ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > completed 通知 → task_notification 项，解析 summary/status/result/outputFile [0.18ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 不再走 UserMessage 全量渲染（关键：解决折叠不统一） [0.05ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > failed 通知 → 取 <error> 作为 result，status=failed [0.05ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 缺省正文（killed 无 result/error）→ result 为 undefined，仅显示摘要 [0.04ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 批量后台任务同轮完成（多个连续通知块）→ 每块一个项 [0.12ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 含换行/表格的多行 result 被完整保留（不截断） [0.06ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 真实用户消息不被误判为通知 [0.03ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 混合消息 [tool_result, text(notification)] → 分离为 task_notification + tool_group [0.09ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > 混合消息中多个 notification block + tool_result 全部分离 [0.11ms]
+(pass) 后台任务通知（<task-notification>）→ task_notification 历史项 > _meta.origin='task-notification' 快速路径识别（即使前面有非通知文本块） [0.05ms]
+
+tests/api/errors.test.ts:
+(pass) classifyAPIError > 用户中止 [0.61ms]
+(pass) classifyAPIError > 超时 [0.06ms]
+(pass) classifyAPIError > max_tokens 溢出（input + max > context）优先于 prompt_too_long [0.09ms]
+(pass) classifyAPIError > prompt 过长（无加法表达式） [0.05ms]
+(pass) classifyAPIError > 429 限流 [0.06ms]
+(pass) classifyAPIError > 529 过载 [0.04ms]
+(pass) classifyAPIError > 401 认证 [0.05ms]
+(pass) classifyAPIError > 404 模型不存在 [0.04ms]
+(pass) classifyAPIError > 图片超限 [0.04ms]
+(pass) classifyAPIError > 余额不足 [0.02ms]
+(pass) classifyAPIError > SSL 证书错误 [0.06ms]
+(pass) classifyAPIError > 连接错误 [0.04ms]
+(pass) classifyAPIError > 5xx 服务端错误 [0.05ms]
+(pass) classifyAPIError > 未知错误兜底 [0.03ms]
+(pass) classifyAPIError > 覆盖 15+ 种错误类型 [0.13ms]
+(pass) getErrorMessageForUser > 每种错误都有可操作的 content + category [0.09ms]
+(pass) getErrorMessageForUser > invalid_model 提示 /model 切换 [0.03ms]
+(pass) getErrorMessageForUser > prompt_too_long 保留 errorDetails 供压缩解析 [0.02ms]
+(pass) getErrorMessageForUser > 429 带短 Retry-After 显示秒数 [0.05ms]
+(pass) getErrorMessageForUser > 交互式 / 非交互式图片消息不同 [0.03ms]
+(pass) getErrorMessageForUser > SSL 错误带诊断建议 [0.04ms]
+(pass) parseMaxTokensOverflowError > 加法表达式 [0.02ms]
+(pass) parseMaxTokensOverflowError > tokens > maximum 表达式 [0.02ms]
+(pass) parseMaxTokensOverflowError > 无匹配返回 undefined [0.01ms]
+(pass) extractRetryAfter > retry-after: 30 [0.02ms]
+(pass) extractRetryAfter > retry_after 30 [0.01ms]
+(pass) extractRetryAfter > 超出范围(>600)忽略 [0.01ms]
+(pass) 细粒度谓词 > is429/is529/is401/is404 [0.02ms]
+(pass) 细粒度谓词 > isPromptTooLong/isTimeout/isImageTooLarge/isConnection [0.02ms]
+
+tests/tool/omission-detector.test.ts:
+(pass) detectOmissionPlaceholders - JavaScript/TypeScript > 检测 // ... rest of 注释 [0.64ms]
+(pass) detectOmissionPlaceholders - JavaScript/TypeScript > 检测 /* ... */ 块注释 [0.03ms]
+(pass) detectOmissionPlaceholders - JavaScript/TypeScript > 检测 // existing code 注释 [0.02ms]
+(pass) detectOmissionPlaceholders - JavaScript/TypeScript > 检测 TODO 占位符 [0.02ms]
+(pass) detectOmissionPlaceholders - JavaScript/TypeScript > 正常注释不误报 [0.02ms]
+(pass) detectOmissionPlaceholders - Python > 检测 # ... rest of 注释 [0.02ms]
+(pass) detectOmissionPlaceholders - Python > 检测 # existing code 注释 [0.02ms]
+(pass) detectOmissionPlaceholders - HTML > 检测 <!-- ... --> 注释 [0.02ms]
+(pass) detectOmissionPlaceholders - HTML > 检测 <!-- existing markup --> 注释 [0.02ms]
+(pass) detectOmissionPlaceholders - 独立省略号 > 检测独立行的三连点 [0.02ms]
+(pass) detectOmissionPlaceholders - 独立省略号 > 检测带空白的三连点 [0.02ms]
+(pass) detectOmissionPlaceholders - 独立省略号 > 检测 [...] 括号省略号 [0.01ms]
+(pass) detectOmissionPlaceholders - 独立省略号 > 检测 (...) 括号省略号 [0.01ms]
+(pass) detectOmissionPlaceholders - 独立省略号 > 正常的展开运算符不误报 [0.02ms]
+(pass) hasOmissionPlaceholders > 有省略返回 true [0.02ms]
+(pass) hasOmissionPlaceholders > 无省略返回 false [0.02ms]
+(pass) detectOmissionPlaceholders - 边界情况 > 空字符串 [0.01ms]
+(pass) detectOmissionPlaceholders - 边界情况 > 多个省略标记 [0.01ms]
+(pass) detectOmissionPlaceholders - 边界情况 > 每行只记录第一个匹配 [0.01ms]
+(pass) isDocumentFile > 识别 .md 文件 [0.02ms]
+(pass) isDocumentFile > 识别 .mdx 文件
+(pass) isDocumentFile > 识别 .markdown 文件
+(pass) isDocumentFile > 识别 .txt 文件
+(pass) isDocumentFile > 识别 .rst 文件
+(pass) isDocumentFile > 识别 .adoc 文件 [0.01ms]
+(pass) isDocumentFile > 不识别 .ts 文件
+(pass) isDocumentFile > 不识别 .js 文件
+(pass) isDocumentFile > 大小写不敏感
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档跳过独立省略号（三连点独占一行） [0.07ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档跳过多点号独立省略号 [0.02ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档跳过方括号省略号 [0.01ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档跳过圆括号省略号
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档跳过块注释省略号
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档跳过 HTML 注释省略
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档仍检测 JS 注释省略 [0.02ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档仍检测 TODO 占位符 [0.01ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档仍检测 Python/Shell 注释省略 [0.02ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 文档仍检测 JS existing code
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 代码文件全量检测不变 — 独立省略号 [0.01ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 代码文件全量检测不变 — 方括号省略号 [0.01ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 代码文件全量检测不变 — 圆括号省略号 [0.01ms]
+(pass) detectOmissionPlaceholders - 文档文件分级检测 > 向后兼容（不传 isDoc，默认为代码文件） [0.01ms]
+(pass) detectOmissionPlaceholders - m 标志修复验证 > 正确报告三连点行的实际行号 [0.06ms]
+(pass) detectOmissionPlaceholders - m 标志修复验证 > 多行独立省略号各自报告正确行号 [0.02ms]
+(pass) hasOmissionPlaceholders - 文档文件兼容 > 有省略但 isDoc=true 时可能跳过 [0.01ms]
+(pass) hasOmissionPlaceholders - 文档文件兼容 > 有代码省略且 isDoc=true 时仍检测 [0.01ms]
+(pass) hasOmissionPlaceholders - 文档文件兼容 > 不传 isDoc 向后兼容
+
+tests/agent/loop-detection.test.ts:
+(pass) ToolCallLoopDetector > 不同工具调用不触发循环 [0.14ms]
+(pass) ToolCallLoopDetector > 连续相同工具调用达到阈值触发循环 [0.04ms]
+(pass) ToolCallLoopDetector > 中间插入不同调用会重置计数 [0.03ms]
+(pass) ToolCallLoopDetector > reset 清除所有状态 [0.03ms]
+(pass) ToolCallLoopDetector > 相同工具名但不同参数不触发循环 [0.03ms]
+(pass) ToolCallLoopDetector > 参数顺序变化视为相同调用（regression: case_005 grep 11 次未拦） [0.04ms]
+(pass) ToolCallLoopDetector > 嵌套对象参数顺序也不影响判定 [0.05ms]
+(pass) ToolCallLoopDetector > clearState 后 grace 缓冲生效，同 key 不会立即触发（方案 C-2） [0.05ms]
+(pass) ToolCallLoopDetector > clearState 后换其他工具不应误报 [0.04ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > 同 toolName + 同 path + 不同 pattern 反复探测,在窗口内达到阈值触发（hrn_006 仍被兜住） [0.17ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > 同 toolName 但不同 path 不应聚合为同 shape [0.06ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > 不同 toolName 不应聚合 [0.04ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > read 同 path 但不同 offset/limit 不应触发 shape 循环（方案 A: 分页读是正当行为） [0.04ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > 同文件 edit 不同 old_string 不应触发 shape 循环（方案 B: 多点编辑是正当行为） [0.03ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > 同文件 edit 相同 old_string 仍触发循环（真循环：反复用同一 old_string 失败） [0.04ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > clearState 后 grace 缓冲生效，同 shape 不会立即触发（方案 C-2） [0.08ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > reset 完全清除状态 [0.06ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > scalar 输入不抛异常,按 toolName:scalar 聚合 [0.02ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > 窗口外的旧 shape 不计入(window=8) [0.05ms]
+(pass) ToolShapeLoopDetector (ADR-020 §2.2 — hrn_006 grep 不同 pattern 探测循环) > f2124f85 真实轨迹回归：大文件分段读 + bash 验证不应触发 shape 循环（ADR-043） [0.08ms]
+(pass) ContentLoopDetector > 不同内容不触发循环 [0.10ms]
+(pass) ContentLoopDetector > 重复内容达到阈值触发循环 [0.03ms]
+(pass) ContentLoopDetector > reset 清除所有状态 [0.05ms]
+(pass) ContentLoopDetector > 短文本也能检测 [0.03ms]
+(pass) LoopDetector > 工具调用循环检测 [0.06ms]
+(pass) LoopDetector > 内容循环检测 [0.03ms]
+(pass) LoopDetector > 恢复机制：第一次恢复成功 [0.04ms]
+(pass) LoopDetector > 恢复机制：第二次恢复成功 [0.02ms]
+(pass) LoopDetector > 恢复机制：第三次恢复失败（超过最大次数） [0.02ms]
+(pass) LoopDetector > reset 重置恢复计数 [0.03ms]
+(pass) LoopDetector > getMaxRecoveryAttempts 返回配置值 [0.01ms]
+(pass) LoopDetector > LOOP_RECOVERY_PROMPT 非空且包含正当操作出口（方案 C-3） [0.02ms]
+(pass) resolveLoopConfig（env 配置化，保成功优先） > 未设置任何 env 时回退到 DEFAULT_LOOP_CONFIG [0.03ms]
+(pass) resolveLoopConfig（env 配置化，保成功优先） > 默认 recoveryExhaustedAction 为 continue（保成功优先） [0.02ms]
+(pass) resolveLoopConfig（env 配置化，保成功优先） > env 覆盖各阈值 [0.04ms]
+(pass) resolveLoopConfig（env 配置化，保成功优先） > 仅显式 terminate 才回退旧的耗尽即终止 [0.03ms]
+(pass) resolveLoopConfig（env 配置化，保成功优先） > 非法值（NaN / ≤0）静默忽略，不会让限制变得更严 [0.03ms]
+(pass) LoopDetector 耗尽处置（continue vs terminate） > 默认 continue：shouldContinueAfterExhausted 返回 true [0.02ms]
+(pass) LoopDetector 耗尽处置（continue vs terminate） > terminate：shouldContinueAfterExhausted 返回 false [0.01ms]
+(pass) LoopDetector 耗尽处置（continue vs terminate） > 循环检测禁用时 shouldContinueAfterExhausted 恒为 true（不误杀） [0.02ms]
+(pass) LoopDetector 耗尽处置（continue vs terminate） > softResetForContinue 归零恢复计数但保留 turnCount [0.03ms]
+(pass) LoopDetector 耗尽处置（continue vs terminate） > LOOP_RECOVERY_FINAL_PROMPT 非空且把停止决定权交给模型 [0.01ms]
+
+tests/skill/ci-self-heal.test.ts:
+(pass) ci-self-heal Skill - 文件结构契约 > SKILL.md 存在 [0.02ms]
+(pass) ci-self-heal Skill - 文件结构契约 > scripts/ references/ validations/ evals/ 四件套目录就位 [0.05ms]
+(pass) ci-self-heal Skill - 文件结构契约 > scripts/parse-ci-log.ts 存在 [0.01ms]
+(pass) ci-self-heal Skill - 文件结构契约 > scripts/classify-failure.ts 存在 [0.01ms]
+(pass) ci-self-heal Skill - 文件结构契约 > scripts/parse-diff.ts 复用 code-review/scripts/parse-diff.ts(symlink 或文件存在) [0.02ms]
+(pass) ci-self-heal Skill - 文件结构契约 > references/ci-failure-patterns.md 存在(分类启发式手册) [0.01ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > name = ci-self-heal
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > description 含 CI / 失败 / 诊断 关键字 [0.02ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > when-to-use 含触发条件描述(>= 20 字)
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > mode = delegate(子代理执行) [0.01ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > allowed-tools 含 read / grep / glob / bash, 不含 edit / write(RL-001 守护) [0.03ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > max-turns 在 20..35 范围(诊断类需足够步骤排查)
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > timeout-mins 与 SLA P95 一致 [0.01ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > sla 段含 4 个字段, 比 code-review 紧 ~10× [0.01ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > release_metadata 含 baseline_before / baseline_after / graduated_at(Step 8 填) [0.01ms]
+(pass) ci-self-heal Skill - SKILL.md frontmatter 契约 > release_metadata.status = released (Step 8 完成)
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 明确禁止调用 edit / write(RL-001 不删用户代码) [0.02ms]
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 含 RL-002 redact 守护(CI log 含 token / API key) [0.02ms]
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 含 RL-007 不编造问题(file:line / log line 引用要求) [0.02ms]
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 含 SLA / failure policy 段 [0.01ms]
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 含 Known Limitations 段 [0.02ms]
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 含中文一等公民约束(zh_001~005 联动) [0.01ms]
+(pass) ci-self-heal Skill - 红线 / 反例守护契约(SKILL.md body) > body 明确不阻断 PR(advisory only) [0.02ms]
+(pass) ci-self-heal Skill - SkillLoader 集成(无 LLM 调用) > SkillManager.discover 把 ci-self-heal 标为 builtin(ADR-025 修复后) [17.67ms]
+(pass) ci-self-heal Skill - SkillLoader 集成(无 LLM 调用) > ci-self-heal 与 code-review 共存, 不冲突 [3.93ms]
+(pass) ci-self-heal scripts/parse-ci-log.ts - 解析契约 > 解析 jest 失败 log: runner=jest + 抽取 stack trace + assertion [0.55ms]
+(pass) ci-self-heal scripts/parse-ci-log.ts - 解析契约 > 解析 tsc 失败 log: runner=tsc + 抽取 file:line [0.18ms]
+(pass) ci-self-heal scripts/parse-ci-log.ts - 解析契约 > 解析 pytest 失败 log: 抽取 File line 引用 [0.04ms]
+(pass) ci-self-heal scripts/parse-ci-log.ts - 解析契约 > 检测 retry markers(flaky 信号) [0.08ms]
+(pass) ci-self-heal scripts/parse-ci-log.ts - 解析契约 > 空 log 不报错, 返回 unknown runner [0.04ms]
+(pass) ci-self-heal scripts/classify-failure.ts - 分类契约 > jest 测试失败 → test_failure 主因 + type_error 次因 [0.25ms]
+(pass) ci-self-heal scripts/classify-failure.ts - 分类契约 > tsc 类型错误 → type_error [0.04ms]
+(pass) ci-self-heal scripts/classify-failure.ts - 分类契约 > retry + ECONNREFUSED → flaky [0.03ms]
+(pass) ci-self-heal scripts/classify-failure.ts - 分类契约 > Module not found → dependency_missing [0.03ms]
+(pass) ci-self-heal scripts/classify-failure.ts - 分类契约 > 空 log → unknown 兜底 [0.02ms]
+(pass) ci-self-heal scripts/classify-failure.ts - 分类契约 > confidence 上限 0.95(留 0.05 给 LLM 修正) [0.12ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > test_failure 模板返回 ≤ 3 条建议 + 第一条含'复现'关键词 [0.14ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > confidence 梯度衰减 (第 N 条比第 N-1 条低 0.08) [0.04ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > references 取自 parse-ci-log fileRefs 前 5 个 [0.05ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > flaky 模板含 'retry' 或 '重跑' 关键词 [0.04ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > unknown 类返回 escalation (建议人介入) [0.03ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > 所有 confidence < 0.5 时 escalation 非 null [0.02ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > candidate_alternatives 非空且 maxSuggestions 留有余地时, 备选建议被加入 [0.03ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > RL-001 / RL-006 守护: 模板永远不出现 edit/write 工具调用建议 [0.07ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > maxSuggestions=1 时只返回 1 条 [0.03ms]
+(pass) ci-self-heal scripts/fix-suggestion-templates.ts - 模板契约 (S6-T10) > maxSuggestions ≤ 0 也至少返回 1 条 (lower bound) [0.03ms]
+
+tests/skill/security-audit-scripts.test.ts:
+(pass) security-audit detect-vulnerabilities — injection > 识别 SQL string concat injection 为 blocker [0.40ms]
+(pass) security-audit detect-vulnerabilities — injection > 识别 SQL template literal injection [0.05ms]
+(pass) security-audit detect-vulnerabilities — injection > 识别 command injection (execSync 含模板变量) [0.03ms]
+(pass) security-audit detect-vulnerabilities — injection > 不误报 prepared statement (parameterized query 排除) [0.02ms]
+(pass) security-audit detect-vulnerabilities — secret_leak > 识别硬编码 AWS key 为 blocker [0.04ms]
+(pass) security-audit detect-vulnerabilities — secret_leak > 识别 GitHub PAT 为 blocker [0.06ms]
+(pass) security-audit detect-vulnerabilities — secret_leak > 识别硬编码密码 [0.03ms]
+(pass) security-audit detect-vulnerabilities — secret_leak > 不误报 process.env / 占位符 [0.03ms]
+(pass) security-audit detect-vulnerabilities — secret_leak > 不误报 example/sample/test 字面 [0.02ms]
+(pass) security-audit detect-vulnerabilities — xss > 识别 React dangerouslySetInnerHTML 为 high [0.03ms]
+(pass) security-audit detect-vulnerabilities — xss > 识别 .innerHTML = req.body [0.03ms]
+(pass) security-audit detect-vulnerabilities — xss > 识别 document.write 为 medium [0.03ms]
+(pass) security-audit detect-vulnerabilities — crypto_weak > 识别 createHash('md5') 为 high [0.03ms]
+(pass) security-audit detect-vulnerabilities — crypto_weak > 不误报 md5 用于 cache key (excludes 排除) [0.03ms]
+(pass) security-audit detect-vulnerabilities — crypto_weak > 识别 Math.random() 用于 token [0.03ms]
+(pass) security-audit detect-vulnerabilities — crypto_weak > 不误报 Math.random 用于 jitter / animation [0.02ms]
+(pass) security-audit detect-vulnerabilities — iac_misconfig > 识别 Dockerfile USER root 为 high [0.06ms]
+(pass) security-audit detect-vulnerabilities — iac_misconfig > 识别 :latest tag 为 medium [0.03ms]
+(pass) security-audit detect-vulnerabilities — iac_misconfig > 识别 K8s privileged: true [0.03ms]
+(pass) security-audit detect-vulnerabilities — iac_misconfig > 识别 K8s hostNetwork: true [0.02ms]
+(pass) security-audit detect-vulnerabilities — summary > 综合 diff 命中多类时 summary 正确聚合 [0.05ms]
+(pass) security-audit detect-vulnerabilities — summary > 空 diff 输出 total=0 [0.02ms]
+(pass) security-audit detect-vulnerabilities — summary > 仅删除行的 diff 不触发 finding (只看 + 行) [0.02ms]
+(pass) security-audit cve-lookup — ecosystem detection > 识别 npm package.json [0.04ms]
+(pass) security-audit cve-lookup — ecosystem detection > 识别 pypi requirements.txt [0.01ms]
+(pass) security-audit cve-lookup — ecosystem detection > 识别 go go.mod [0.01ms]
+(pass) security-audit cve-lookup — vulnerability matching > 命中 lodash 4.17.20 → CVE-2021-23337 [0.22ms]
+(pass) security-audit cve-lookup — vulnerability matching > 不命中 lodash 4.17.21 (已修复版本) [0.06ms]
+(pass) security-audit cve-lookup — vulnerability matching > 命中 minimist <1.2.6 (critical) [0.04ms]
+(pass) security-audit cve-lookup — vulnerability matching > 命中 pypi flask 2.0.0 → CVE-2023-30861 [0.10ms]
+(pass) security-audit cve-lookup — vulnerability matching > 命中 go gin v1.9.0 → CVE-2023-29401 [0.07ms]
+(pass) security-audit cve-lookup — vulnerability matching > 空 manifest 不抛错 [0.03ms]
+(pass) security-audit scripts/references 文件结构 > references/cve-snapshot.json 存在且是有效 JSON 数组 [0.10ms]
+(pass) security-audit scripts/references 文件结构 > references/vulnerability-patterns.md 存在 [0.05ms]
+(pass) security-audit scripts/references 文件结构 > validations/output-schema.json 存在且 schema 含必需字段 [0.06ms]
+
+tests/skill/code-review.test.ts:
+(pass) code-review Skill - 文件结构契约 > SKILL.md 存在 [0.02ms]
+(pass) code-review Skill - 文件结构契约 > scripts/ validations/ references/ evals/ 四件套目录就位 [0.04ms]
+(pass) code-review Skill - 文件结构契约 > evals/ 含至少 10 条 baseline case [0.05ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > name = code-review
+(pass) code-review Skill - SKILL.md frontmatter 契约 > description 非空且包含 PR / review [0.03ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > when-to-use 描述触发条件 [0.02ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > mode = delegate
+(pass) code-review Skill - SKILL.md frontmatter 契约 > allowed-tools 含 read / grep / glob / bash，不含 edit / write [0.04ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > max-turns 在 10..30 范围 [0.01ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > timeout-mins 与 SLA P95 一致（minutes 与 ms 一致） [0.09ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > sla 段含 4 个字段 [0.02ms]
+(pass) code-review Skill - SKILL.md frontmatter 契约 > release_metadata 含 baseline_before / baseline_after / graduated_at（Step 8 填） [0.02ms]
+(pass) code-review Skill - 红线 / 反例守护契约（SKILL.md body） > body 明确禁止调用 edit / write（不删用户代码 RL-001） [0.03ms]
+(pass) code-review Skill - 红线 / 反例守护契约（SKILL.md body） > body 含 RL-007 不编造问题守护（file:line 引用要求） [0.02ms]
+(pass) code-review Skill - 红线 / 反例守护契约（SKILL.md body） > body 含 SLA / failure policy 段 [0.01ms]
+(pass) code-review Skill - 红线 / 反例守护契约（SKILL.md body） > body 含 Known Limitations 段 [0.01ms]
+(pass) code-review Skill - 红线 / 反例守护契约（SKILL.md body） > body 含中文一等公民约束（zh_001~005 联动） [0.02ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > 命名规则：case_cr_NNN.yaml [0.01ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > 含 id 字段 [0.02ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > 含 category 字段（code-review 系列） [0.02ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > 含 input.user_query [0.01ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制） [0.02ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件） [0.01ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_010.yaml > 含 target_score 字段（baseline 阈值） [0.01ms]
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_006.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_015.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_008.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_007.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_001.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_005.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_011.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_003.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_002.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_013.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_014.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_012.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_004.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > 含 id 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > 含 category 字段（code-review 系列）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > 含 input.user_query
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > 含 expected 段 + must_not_include 反例字段（_template.yaml 强制）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > must_not_call_tools 含 edit / write（review 类 Skill 不修改文件）
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > 含 skill: code-review 字段
+(pass) code-review Skill - baseline case yaml 结构契约 > case_cr_009.yaml > 含 target_score 字段（baseline 阈值）
+(pass) code-review Skill - SkillLoader 集成（无 LLM 调用） > ADR-025: SkillManager.discover 把 code-review 标为 builtin（生产路径） [4.34ms]
+(pass) code-review Skill - SkillLoader 集成（无 LLM 调用） > SkillLoader 子目录模式可识别 SKILL.md（保留旧测试覆盖 project 来源加载路径） [1.04ms]
+(pass) code-review Skill - SkillLoader 集成（无 LLM 调用） > RFC-001 + SKILL.md frontmatter 含必备 sla / release_metadata 字段（基线契约） [0.35ms]
+(pass) code-review Skill - reference / scripts 文件契约 > references/output-template.md 存在 [0.02ms]
+(pass) code-review Skill - reference / scripts 文件契约 > references/severity-guide.md 存在 [0.02ms]
+(pass) code-review Skill - reference / scripts 文件契约 > references/ai-code-patterns.md 存在 [0.01ms]
+(pass) code-review Skill - reference / scripts 文件契约 > scripts/parse-diff.ts 存在 [0.01ms]
+(pass) code-review Skill - reference / scripts 文件契约 > validations/output-schema.json 存在 [0.01ms]
+
+tests/workflow/sandbox.test.ts:
+(pass) M0 sandbox — meta 解析与校验 > 能解析纯字面量 meta(name/description/phases) [0.59ms]
+(pass) M0 sandbox — meta 解析与校验 > 缺 meta → 报错 [0.02ms]
+(pass) M0 sandbox — meta 解析与校验 > meta.name 缺失 → 报错 [0.13ms]
+(pass) M0 sandbox — meta 解析与校验 > meta 引用变量(非纯字面量)→ 报错 [0.14ms]
+(pass) M0 sandbox — meta 解析与校验 > meta 含函数调用(非纯字面量)→ 报错 [0.14ms]
+(pass) M0 sandbox — meta 解析与校验 > meta 含模板插值(非纯字面量)→ 报错 [0.25ms]
+(pass) M0 sandbox — meta 解析与校验 > 字符串里出现 'const meta =' 不会误判 [0.12ms]
+(pass) M0 sandbox — log() 透传 > log() 写到注入的 logs 数组 [0.47ms]
+(pass) M0 sandbox — log() 透传 > agent() 返回值可被脚本使用并 return [0.24ms]
+(pass) M0 sandbox — log() 透传 > args 注入可见 [0.20ms]
+(pass) M0 sandbox — 危险全局被拦截 > require('fs') 被拦(静态扫描) [0.17ms]
+(pass) M0 sandbox — 危险全局被拦截 > process.exit() 被拦(process 在 context 里为 undefined) [0.27ms]
+(pass) M0 sandbox — 危险全局被拦截 > 动态 import() 被拦(静态扫描) [0.15ms]
+(pass) M0 sandbox — 危险全局被拦截 > eval 被拦(静态扫描) [0.16ms]
+(pass) M0 sandbox — 危险全局被拦截 > globalThis 在 context 里不可见(typeof undefined) [0.22ms]
+(pass) M0 sandbox — 危险全局被拦截 > 【关键回归】constructor 链逃逸被 vm 隔离(拿不到真 process) [0.24ms]
+(pass) M0 sandbox — 危险全局被拦截 > 【关键回归】constructor 链拿 globalThis 也碰不到宿主 process [0.24ms]
+(pass) M0 sandbox — 危险全局被拦截 > 宿主全局 setTimeout / queueMicrotask 在 context 里不可见 [0.24ms]
+(pass) M0 sandbox — 危险全局被拦截 > 宿主全局 crypto / performance 在 context 里不可见(堵确定性绕过) [0.25ms]
+(pass) M0 sandbox — 危险全局被拦截 > Bun 全局在 context 里不可见 [0.23ms]
+(pass) M0 sandbox — 危险全局被拦截 > 【CPU 兜底】同步死循环被 timeout 掐断 [505.47ms]
+(pass) M0 sandbox — 确定性守卫(运行时影子) > Date.now() 被禁 [0.66ms]
+(pass) M0 sandbox — 确定性守卫(运行时影子) > 无参 new Date() 被禁 [0.44ms]
+(pass) M0 sandbox — 确定性守卫(运行时影子) > 带参 new Date(ts) 放行(确定性) [0.30ms]
+(pass) M0 sandbox — 确定性守卫(运行时影子) > Math.random() 被禁 [0.31ms]
+(pass) M0 sandbox — 确定性守卫(运行时影子) > Math.max 等确定性方法放行 [0.24ms]
+(pass) M0 sandbox — 确定性守卫(运行时影子) > prompt 字符串里含 'Date.now' 不被误杀(避开 cc #63759) [0.31ms]
+(pass) M0 sandbox — 标准 JS 内置可用 > JSON / Array / Object / Promise 可用 [0.32ms]
+(pass) M0 sandbox — 标准 JS 内置可用 > TypeScript 类型标注 → 语法错误(纯 JS 约束) [0.34ms]
+(pass) M0 sandbox — stripStringsAndComments 工具 > 剥离行注释/块注释/字符串后保留结构与长度 [0.05ms]
+(pass) M0 sandbox — stripStringsAndComments 工具 > 转义引号不破坏字符串边界 [0.04ms]
+
+tests/permission/checker.test.ts:
+(pass) PermissionChecker > 危险命令被拦截 [1.31ms]
+(pass) PermissionChecker > 禁用工具被拦截 [0.86ms]
+(pass) PermissionChecker > 敏感文件被拦截 [0.32ms]
+(pass) PermissionChecker > 读操作自动放行 [0.16ms]
+(pass) PermissionChecker > grep 和 glob 自动放行 [0.10ms]
+(pass) PermissionChecker > 预授权工具放行 [0.11ms]
+(pass) PermissionChecker > skipPermissions 跳过所有检查 [0.06ms]
+(pass) PermissionChecker > yesMode 自动批准 [0.07ms]
+(pass) PermissionChecker > yesMode 下危险命令（critical）仍被拦截（迭代 III 集成点 #2） [0.08ms]
+(pass) PermissionChecker > yesMode 下危险命令（需确认级）不自动放行（交由确认流程） [0.15ms]
+(pass) PermissionChecker > deny-write 模式拦截写操作 [0.11ms]
+(pass) PermissionChecker > always-allow 模式放行写操作 [0.10ms]
+(pass) PermissionChecker > 默认模式下写操作需要确认 [0.08ms]
+(pass) PermissionChecker > base64 解码执行被拦截 (critical) [0.06ms]
+(pass) PermissionChecker > xxd 解码执行被拦截 (critical) [0.07ms]
+(pass) PermissionChecker > Python exec 被拦截 (critical) [0.07ms]
+(pass) PermissionChecker > Perl system 被拦截 (critical) [0.07ms]
+(pass) PermissionChecker > curl POST 数据外传需要确认 (high) [0.18ms]
+(pass) PermissionChecker > nc 管道外传需要确认 (high) [0.13ms]
+(pass) PermissionChecker > 读取 shell 历史需要确认 (high) [0.09ms]
+(pass) PermissionChecker > 读取 SSH 密钥需要确认 (high) [0.09ms]
+(pass) PermissionChecker > 清除命令历史需要确认 (medium) [0.07ms]
+(pass) PermissionChecker > 修改 crontab 需要确认 (medium) [0.08ms]
+(pass) PermissionChecker > 路径遍历被拦截 [0.09ms]
+(pass) PermissionChecker > 系统目录写入被拦截 [0.09ms]
+(pass) PermissionChecker > 系统目录 edit 被拦截 [0.06ms]
+(pass) PermissionChecker > /proc 读取被拦截 [0.08ms]
+(pass) PermissionChecker > /dev 读取被拦截 [0.05ms]
+(pass) PermissionChecker > 正常路径不被路径校验拦截 [0.08ms]
+
+tests/permission/shell-parser.test.ts:
+(pass) splitCompoundCommand > 单条命令不拆分 [0.03ms]
+(pass) splitCompoundCommand > && 拆分 [0.04ms]
+(pass) splitCompoundCommand > || 拆分 [0.02ms]
+(pass) splitCompoundCommand > ; 拆分 [0.01ms]
+(pass) splitCompoundCommand > | 管道拆分 [0.02ms]
+(pass) splitCompoundCommand > 混合分隔符 [0.02ms]
+(pass) splitCompoundCommand > 双引号内不拆分 [0.02ms]
+(pass) splitCompoundCommand > 单引号内不拆分 [0.03ms]
+(pass) splitCompoundCommand > 反引号内不拆分 [0.01ms]
+(pass) splitCompoundCommand > 转义字符处理 [0.02ms]
+(pass) splitCompoundCommand > $() 子 shell 内不拆分 [0.02ms]
+(pass) splitCompoundCommand > 嵌套子 shell [0.01ms]
+(pass) splitCompoundCommand > ${} 变量展开内不拆分 [0.02ms]
+(pass) splitCompoundCommand > 空命令和空白处理 [0.01ms]
+(pass) splitCompoundCommand > 安全关键场景：隐藏危险命令 [0.02ms]
+(pass) splitCompoundCommand > 尾部 & 后台执行不作为分隔符
+(pass) detectRedirections > 无重定向 [0.02ms]
+(pass) detectRedirections > 标准输出重定向 > [0.02ms]
+(pass) detectRedirections > 追加重定向 >> [0.02ms]
+(pass) detectRedirections > 错误输出重定向 2> [0.02ms]
+(pass) detectRedirections > 全部输出重定向 &> [0.01ms]
+(pass) detectRedirections > 多个重定向 [0.02ms]
+(pass) detectRedirections > 引号内的重定向不检测 [0.02ms]
+(pass) hasSensitiveRedirection > 重定向到 /etc/ 是敏感的 [0.04ms]
+(pass) hasSensitiveRedirection > 重定向到 .bashrc 是敏感的 [0.03ms]
+(pass) hasSensitiveRedirection > 重定向到 .ssh/ 是敏感的 [0.01ms]
+(pass) hasSensitiveRedirection > 重定向到 .env 是敏感的 [0.04ms]
+(pass) hasSensitiveRedirection > 重定向到普通文件不敏感 [0.04ms]
+(pass) hasSensitiveRedirection > 无重定向不敏感 [0.02ms]
+
+tests/permission/bash-security.test.ts:
+(pass) extractQuotedContent（引号上下文提取） > 剥离单引号内容 [0.02ms]
+(pass) extractQuotedContent（引号上下文提取） > 保留双引号内容到 withDoubleQuotes，从 fullyUnquoted 剥离 [0.02ms]
+(pass) extractQuotedContent（引号上下文提取） > unquotedKeepQuoteChars 保留引号定界符 [0.02ms]
+(pass) extractQuotedContent（引号上下文提取） > 单引号内的双引号是字面 [0.01ms]
+(pass) validateIFSInjection > $IFS / ${IFS} / ${IFS:0:1} → 命中 [0.02ms]
+(pass) validateIFSInjection > 普通命令 → 放行
+(pass) validateProcEnvironAccess > /proc/self/environ /proc/1/environ → 命中 [0.01ms]
+(pass) validateProcEnvironAccess > 普通 /proc 访问 → 放行
+(pass) validateCarriageReturn > 双引号外的 \r → 命中 [0.02ms]
+(pass) validateCarriageReturn > 单引号内的 \r 也命中（解析差异同样存在） [0.01ms]
+(pass) validateCarriageReturn > 双引号内的 \r → 放行（bash 与词法器一致当数据）
+(pass) validateCarriageReturn > 无 \r → 放行
+(pass) validateNewlines > 裸换行后跟命令 → 命中 [0.02ms]
+(pass) validateNewlines > 词中续接（tr\<NL>aceroute）→ 命中 [0.02ms]
+(pass) validateNewlines > 引号内换行 → 放行（合法数据） [0.01ms]
+(pass) validateNewlines > 无换行 → 放行
+(pass) validateUnicodeWhitespace > 不间断空格 / 全角空格 / 零宽 BOM → 命中 [0.02ms]
+(pass) validateUnicodeWhitespace > 普通 ASCII 空格 → 放行
+(pass) validateControlCharacters > 退格 / NUL / ESC 等控制字符 → 命中 [0.01ms]
+(pass) validateControlCharacters > 常规 \t \n \r 不算控制字符（由专门校验器处理） [0.01ms]
+(pass) validateControlCharacters > 普通命令 → 放行 [0.01ms]
+(pass) validateObfuscatedFlags > ANSI-C 引号 $'...' → 命中 [0.02ms]
+(pass) validateObfuscatedFlags > 空引号后跟 dash（''-exec）→ 命中 [0.01ms]
+(pass) validateObfuscatedFlags > 带引号的 flag（"-"exec）→ 命中 [0.02ms]
+(pass) validateObfuscatedFlags > 简单 echo + ANSI-C 引号 → 放行（echo 豁免）
+(pass) validateObfuscatedFlags > echo 带管道时不豁免
+(pass) validateObfuscatedFlags > 普通 flag → 放行 [0.02ms]
+(pass) validateBraceExpansion > 引号包大括号混淆（git diff {@'{'0,...}）→ 命中 [0.04ms]
+(pass) validateBraceExpansion > 普通 brace 扩展（{a,b}）→ 命中（需确认） [0.03ms]
+(pass) validateBraceExpansion > 无 brace 扩展 → 放行 [0.01ms]
+(pass) validateBraceExpansion > awk 单大括号块（引号内）→ 放行 [0.02ms]
+(pass) validateMidWordHash > 词中 #（foo#bar）→ 命中 [0.01ms]
+(pass) validateMidWordHash > 引号相邻 #（'x'#）→ 命中 [0.02ms]
+(pass) validateMidWordHash > ${#var} 字符串长度语法 → 放行
+(pass) validateMidWordHash > 无 # → 放行 [0.01ms]
+(pass) validateCommentQuoteDesync > # 注释内含引号 → 命中 [0.02ms]
+(pass) validateCommentQuoteDesync > 引号内的 # 不算注释 → 放行 [0.01ms]
+(pass) validateCommentQuoteDesync > # 注释不含引号 → 放行 [0.01ms]
+(pass) validateQuotedNewline > 引号内换行 + 下一行 #-前缀 → 命中 [0.01ms]
+(pass) validateQuotedNewline > 引号内换行但下一行非 # → 放行 [0.01ms]
+(pass) validateQuotedNewline > 无引号内换行 → 放行
+(pass) validateProcessSubstitution > 进程替换 <() >() → 命中 [0.02ms]
+(pass) validateProcessSubstitution > $[] 旧式算术 → 命中 [0.01ms]
+(pass) validateProcessSubstitution > 引号内的 <( → 放行（字面数据）
+(pass) validateProcessSubstitution > 普通命令 → 放行 [0.02ms]
+(pass) validateZshDangerousCommands > zmodload / sysopen / ztcp → 命中 [0.02ms]
+(pass) validateZshDangerousCommands > 跳过环境赋值前缀后命中
+(pass) validateZshDangerousCommands > 跳过 precommand 修饰符后命中（command zmodload）
+(pass) validateZshDangerousCommands > fc -e → 命中 [0.02ms]
+(pass) validateZshDangerousCommands > 普通命令 → 放行
+(pass) validateBackslashEscapedOperators > 复合命令中的转义操作符 → 命中 [0.01ms]
+(pass) validateBackslashEscapedOperators > find -exec \;（非复合命令）→ 放行
+(pass) validateBackslashEscapedOperators > 普通单命令 → 放行
+(pass) validateHeredocInSubstitution > $() 内嵌 heredoc → 命中
+(pass) validateHeredocInSubstitution > heredoc 不在 $() 内 / $() 不含 heredoc → 放行 [0.01ms]
+(pass) validateHeredocInSubstitution > 无 $() 也无 heredoc → 放行
+(pass) checkInjectionPatterns（总入口集成） > 合法常见命令全部放行（防误伤回归） [0.25ms]
+(pass) checkInjectionPatterns（总入口集成） > 攻击向量全部命中（拦截回归） [0.14ms]
+(pass) checkInjectionPatterns（总入口集成） > 空命令 / 空白命令 → 放行 [0.01ms]
+
+tests/permission/path-validator.test.ts:
+(pass) PathValidator - 工作区边界 > 工作区内写入允许 [0.08ms]
+(pass) PathValidator - 工作区边界 > 工作区内子目录写入允许 [0.07ms]
+(pass) PathValidator - 工作区边界 > 工作区外写入需确认 [0.03ms]
+(pass) PathValidator - 工作区边界 > 工作区外读取允许（读取通常安全） [0.05ms]
+(pass) PathValidator - 系统目录保护 > 写入 /etc/ 需确认 [0.03ms]
+(pass) PathValidator - 系统目录保护 > 写入 /usr/ 需确认 [0.06ms]
+(pass) PathValidator - 系统目录保护 > 读取 /proc/ 需确认 [0.04ms]
+(pass) PathValidator - 系统目录保护 > 读取 /etc/ 允许（不在读取保护列表中） [0.04ms]
+(pass) PathValidator - 敏感文件检测 > .env 文件需确认 [0.04ms]
+(pass) PathValidator - 敏感文件检测 > .env.local 文件需确认 [0.04ms]
+(pass) PathValidator - 敏感文件检测 > credentials 文件需确认 [0.04ms]
+(pass) PathValidator - 敏感文件检测 > .pem 文件需确认 [0.03ms]
+(pass) PathValidator - 敏感文件检测 > 普通 .ts 文件允许 [0.03ms]
+(pass) PathValidator - symlink 解析 > symlink 指向工作区外被检测 [0.18ms]
+(pass) PathValidator - symlink 解析 > symlink 指向工作区内允许 [0.09ms]
+(pass) PathValidator - 目录黑白名单 > 黑名单目录被拒绝 [0.12ms]
+(pass) PathValidator - 目录黑白名单 > 白名单外目录被拒绝 [0.06ms]
+(pass) PathValidator - 目录黑白名单 > 白名单内目录允许 [0.05ms]
+(pass) PathValidator - resolveRealPath > 存在的文件返回真实路径 [0.03ms]
+(pass) PathValidator - resolveRealPath > 不存在的文件返回基于父目录的路径 [0.03ms]
+(pass) PathValidator - 大小写归一化（P0-3 迭代 I Step 1） > normalizeCaseForComparison 全小写
+(pass) PathValidator - 大小写归一化（P0-3 迭代 I Step 1） > 大小写混淆的 .ENV 仍被识别为敏感文件 [0.04ms]
+(pass) PathValidator - 大小写归一化（P0-3 迭代 I Step 1） > 大小写混淆的 Server.PEM 仍被识别为敏感文件 [0.03ms]
+(pass) PathValidator - 大小写归一化（P0-3 迭代 I Step 1） > 大小写混淆的黑名单目录仍被拦截 [0.09ms]
+(pass) PathValidator - UNC 路径拦截（P0-3 迭代 I Step 2） > Windows UNC 共享路径被拦截 [0.05ms]
+(pass) PathValidator - UNC 路径拦截（P0-3 迭代 I Step 2） > POSIX 变体 UNC 路径被拦截 [0.04ms]
+(pass) PathValidator - UNC 路径拦截（P0-3 迭代 I Step 2） > UNC IP 共享路径被拦截 [0.03ms]
+(pass) PathValidator - 三点路径混淆拦截（P0-3 迭代 I Step 4） > 三点段路径被拦截 [0.03ms]
+(pass) PathValidator - 三点路径混淆拦截（P0-3 迭代 I Step 4） > 四点段路径被拦截 [0.04ms]
+(pass) PathValidator - 三点路径混淆拦截（P0-3 迭代 I Step 4） > 正常的两点 .. 不被三点规则误伤 [0.03ms]
+(pass) PathValidator - 扩展 Windows 绕过模式（P0-3 迭代 I Step 4） > DOS 设备名带扩展名变体（NUL.txt）被拦截 [0.03ms]
+(pass) PathValidator - 扩展 Windows 绕过模式（P0-3 迭代 I Step 4） > 设备路径前缀 \\.\ 被拦截 [0.02ms]
+(pass) PathValidator - Symlink 多路径链逃逸（P0-3 迭代 I Step 3） > getAllResolvedPaths 至少包含原始路径与 realpath [0.04ms]
+(pass) PathValidator - Symlink 多路径链逃逸（P0-3 迭代 I Step 3） > 中间目录 symlink 逃逸到工作区外被捕获 [0.14ms]
+
+6 tests failed:
+(fail) A2 — queryLoop abort 优雅收尾 > 路径①：流式响应后 signal 已 abort → 补 cancel result + yield done，不抛 [3.92ms]
+(fail) A2 — queryLoop abort 优雅收尾 > 路径②：executeTools 抛 AbortError → 补 cancel result + yield done，不抛 [0.22ms]
+(fail) A2 — queryLoop abort 优雅收尾 > 非 abort 错误仍正常抛出（不被 abort 分支吞掉） [0.24ms]
+(fail) L1 — queryLoop 单轮硬超时 > processStream 永久 hang → race 超时后让出控制权并重试（不挂死） [0.29ms]
+(fail) L1 — queryLoop 单轮硬超时 > 超时重试耗尽（2 次）后向上抛超时错误 [0.18ms]
+(fail) L1 — queryLoop 单轮硬超时 > processStream 正常返回时 race 不误伤（清掉定时器，正常走完） [0.19ms]
+
+ 855 pass
+ 6 fail
+ 1860 expect() calls
+Ran 861 tests across 30 files. [933.00ms]

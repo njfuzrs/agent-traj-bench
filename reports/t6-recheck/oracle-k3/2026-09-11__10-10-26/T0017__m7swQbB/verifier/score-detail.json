@@ -1,0 +1,19 @@
+{
+  "f2p": {
+    "n_required": 5,
+    "n_seen": 5,
+    "missing": [],
+    "no_tests": [],
+    "failed": []
+  },
+  "p2p": {
+    "n_required": 30,
+    "n_seen": 30,
+    "missing": [],
+    "no_tests": [],
+    "failed": [
+      "tests/llm/stream-interrupt-recovery.test.ts",
+      "tests/llm/stream-level-error.test.ts"
+    ]
+  }
+}

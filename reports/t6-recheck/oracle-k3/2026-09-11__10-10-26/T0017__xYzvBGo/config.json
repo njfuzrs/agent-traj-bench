@@ -1,0 +1,10 @@
+{
+    "task": {
+        "path": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-recheck/tasks/T0017",
+        "source": "tasks"
+    },
+    "trial_name": "T0017__xYzvBGo",
+    "trials_dir": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-recheck/oracle-k3/2026-09-11__10-10-26",
+    "verifier_timeout_multiplier": 6.0,
+    "job_id": "19d48817-7273-4c89-ba16-e67a50e5e53f"
+}

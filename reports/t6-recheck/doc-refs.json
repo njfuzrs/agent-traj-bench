@@ -1,0 +1,306 @@
+{
+ "T0002": {
+  "refs": [
+   "docs/bugfixes/todo/20260807-遥测落盘恒空-配置undefined覆盖默认值.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/20260807-遥测落盘恒空-配置undefined覆盖默认值.md"
+  ]
+ },
+ "T0003": {
+  "refs": [
+   "docs/bugfixes/todo/上下文注入作用域审计-发现清单.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/上下文注入作用域审计-发现清单.md"
+  ]
+ },
+ "T0005": {
+  "refs": [],
+  "missing": []
+ },
+ "T0007": {
+  "refs": [
+   "docs/_template/gpt参数校验失败.txt"
+  ],
+  "missing": [
+   "docs/_template/gpt参数校验失败.txt"
+  ]
+ },
+ "T0008": {
+  "refs": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/08-Hook系统-对齐claude-code-缺口修复方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/08-Hook系统-对齐claude-code-缺口修复方案.md"
+  ]
+ },
+ "T0009": {
+  "refs": [
+   "docs/bugfixes/todo/上下文注入作用域审计-发现清单.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/上下文注入作用域审计-发现清单.md"
+  ]
+ },
+ "T0010": {
+  "refs": [
+   "docs/bugfixes/todo/20260803-单测污染用户遥测数据-隔离缺口根治方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/20260803-单测污染用户遥测数据-隔离缺口根治方案.md"
+  ]
+ },
+ "T0011": {
+  "refs": [],
+  "missing": []
+ },
+ "T0012": {
+  "refs": [],
+  "missing": []
+ },
+ "T0013": {
+  "refs": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ]
+ },
+ "T0014": {
+  "refs": [
+   "docs/bugfixes/todo/约束型误伤机制排查清单.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/约束型误伤机制排查清单.md"
+  ]
+ },
+ "T0018": {
+  "refs": [],
+  "missing": []
+ },
+ "T0020": {
+  "refs": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ]
+ },
+ "T0022": {
+  "refs": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/07-权限系统-对齐claude-code-缺口修复方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/07-权限系统-对齐claude-code-缺口修复方案.md"
+  ]
+ },
+ "T0024": {
+  "refs": [
+   "docs/bugfixes/todo/20260805-可观测性缺陷清单-埋点接线与OTLP出口.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/20260805-可观测性缺陷清单-埋点接线与OTLP出口.md"
+  ]
+ },
+ "T0026": {
+  "refs": [
+   "docs/bugfixes/todo/可选优化/G7-G9-G10单元测试补全.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/可选优化/G7-G9-G10单元测试补全.md"
+  ]
+ },
+ "T0028": {
+  "refs": [],
+  "missing": []
+ },
+ "T0029": {
+  "refs": [
+   "docs/bugfixes/todo/Token与费用统计-客观性审计与修复方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/Token与费用统计-客观性审计与修复方案.md"
+  ]
+ },
+ "T0031": {
+  "refs": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ]
+ },
+ "T0033": {
+  "refs": [
+   "docs/bugfixes/todo/provider-optimization-roadmap.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/provider-optimization-roadmap.md"
+  ]
+ },
+ "T0034": {
+  "refs": [
+   "docs/bugfixes/todo/Dynamic"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/Dynamic"
+  ]
+ },
+ "T0036": {
+  "refs": [
+   "docs/_template/tui.txt"
+  ],
+  "missing": [
+   "docs/_template/tui.txt"
+  ]
+ },
+ "T0038": {
+  "refs": [
+   "docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md"
+  ]
+ },
+ "T0039": {
+  "refs": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/11-子代理系统-对齐claude-code-缺口修复方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/11-子代理系统-对齐claude-code-缺口修复方案.md"
+  ]
+ },
+ "T0040": {
+  "refs": [
+   "docs/bugfixes/todo/Anthropic代理流式挂死-三层超时失效根因分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/Anthropic代理流式挂死-三层超时失效根因分析.md"
+  ]
+ },
+ "T0042": {
+  "refs": [
+   "docs/_template/评估hypothesis_challenge的真实的作用到底有多大到底有没有用.txt"
+  ],
+  "missing": [
+   "docs/_template/评估hypothesis_challenge的真实的作用到底有多大到底有没有用.txt"
+  ]
+ },
+ "T0045": {
+  "refs": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md"
+  ]
+ },
+ "T0047": {
+  "refs": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md"
+  ]
+ },
+ "T0049": {
+  "refs": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md"
+  ]
+ },
+ "T0050": {
+  "refs": [
+   "docs/bugfixes/todo/子代理委托机制-现状对照与缺口修复方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/子代理委托机制-现状对照与缺口修复方案.md"
+  ]
+ },
+ "T0051": {
+  "refs": [
+   "docs/bugfixes/系统级查漏补缺方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/系统级查漏补缺方案.md"
+  ]
+ },
+ "T0052": {
+  "refs": [
+   "docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md"
+  ]
+ },
+ "T0054": {
+  "refs": [
+   "docs/_template/language命令缺少选项.txt"
+  ],
+  "missing": [
+   "docs/_template/language命令缺少选项.txt"
+  ]
+ },
+ "T0055": {
+  "refs": [
+   "docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md"
+  ]
+ },
+ "T0056": {
+  "refs": [
+   "docs/bugfixes/todo/20260808-Prompt-Cache-闭环-实测提升命中率与度量根治.md",
+   "docs/bugfixes/todo/cache-bench-20260808.md",
+   "docs/bugfixes/todo/prefix-break-分布-20260808.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/20260808-Prompt-Cache-闭环-实测提升命中率与度量根治.md",
+   "docs/bugfixes/todo/cache-bench-20260808.md",
+   "docs/bugfixes/todo/prefix-break-分布-20260808.md"
+  ]
+ },
+ "T0059": {
+  "refs": [
+   "docs/bugfixes/todo/harness-llm-可见性缺口-6项缺口改造方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/harness-llm-可见性缺口-6项缺口改造方案.md"
+  ]
+ },
+ "T0062": {
+  "refs": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/05-CLI命令与参数-对齐claude-code-缺口实施方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/05-CLI命令与参数-对齐claude-code-缺口实施方案.md"
+  ]
+ },
+ "T0063": {
+  "refs": [
+   "docs/_template/好端端执行任务报错弹窗不显示.txt"
+  ],
+  "missing": [
+   "docs/_template/好端端执行任务报错弹窗不显示.txt"
+  ]
+ },
+ "T0064": {
+  "refs": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/18-Skills系统-对齐claude-code-缺口修复方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/对齐claude-code-缺口修复方案/18-Skills系统-对齐claude-code-缺口修复方案.md"
+  ]
+ },
+ "T0065": {
+  "refs": [
+   "docs/bugfixes/todo/builtin-skill附属文件不释放+delegate读不到references-排查与方案.md"
+  ],
+  "missing": [
+   "docs/bugfixes/todo/builtin-skill附属文件不释放+delegate读不到references-排查与方案.md"
+  ]
+ }
+}

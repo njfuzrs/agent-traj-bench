@@ -1,0 +1,12 @@
+Applied patch to 'src/app.ts' cleanly.
+Applied patch to 'src/config/network-profile.ts' cleanly.
+Applied patch to 'src/llm/anthropic.ts' cleanly.
+Applied patch to 'src/llm/fallback.ts' cleanly.
+Applied patch to 'src/llm/openai.ts' cleanly.
+Applied patch to 'src/llm/stream-lifecycle.ts' cleanly.
+Applied patch to 'src/query/auto-compact.ts' cleanly.
+Applied patch to 'src/query/loop.ts' cleanly.
+Applied patch to 'src/query/tool-executor.ts' cleanly.
+Falling back to direct application...
+Applied patch to 'src/sdk/index.ts' cleanly.
+Applied patch to 'src/sdk/message-converter.ts' cleanly.

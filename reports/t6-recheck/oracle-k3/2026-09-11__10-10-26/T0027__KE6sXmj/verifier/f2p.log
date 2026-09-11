@@ -1,0 +1,18 @@
+bun test v1.3.14 (0d9b296a)
+
+tests/query/hypothesis-guide.test.ts:
+(pass) detectInvestigationContext — AND 条件触发 > 路径 + 调查性动词同时出现 → 触发 [0.11ms]
+(pass) detectInvestigationContext — AND 条件触发 > 形如 a/b.ext 的裸路径 + 动词 → 触发 [0.07ms]
+(pass) detectInvestigationContext — 不误伤反例（单条件不触发） > 只有路径、无调查性动词 → 不触发（可能只是想读代码） [0.11ms]
+(pass) detectInvestigationContext — 不误伤反例（单条件不触发） > 只有调查性动词、无路径 → 不触发（可能随口一说） [0.04ms]
+(pass) detectInvestigationContext — 不误伤反例（单条件不触发） > 日常任务（翻译/修 typo/加功能/读函数）→ 不触发 [0.03ms]
+(pass) detectInvestigationContext — 不误伤反例（单条件不触发） > 空串 / 无意义输入 → 不触发 [0.02ms]
+(pass) detectInvestigationContext — 已知盲区（方案 Q2 正视，非 bug） > 无路径锚点的纯自然语言核查 → 不触发（由 system-prompt 常驻引导兜底） [0.01ms]
+(pass) buildHypothesisGuideReminder — 文本约束 > 含 hypothesis_register 工具引导与证伪条件提示 [0.03ms]
+(pass) buildHypothesisGuideReminder — 文本约束 > 是建议而非强制（保留模型裁量权）
+(pass) buildHypothesisGuideReminder — 文本约束 > 含 system-reminder 包裹与'请勿向用户复述'约束 [0.01ms]
+
+ 10 pass
+ 0 fail
+ 20 expect() calls
+Ran 10 tests across 1 file. [8.00ms]

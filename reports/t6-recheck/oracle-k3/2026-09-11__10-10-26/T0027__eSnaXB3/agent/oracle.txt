@@ -1,0 +1,5 @@
+Applied patch to 'src/config/system-prompt.ts' cleanly.
+Falling back to direct application...
+Applied patch to 'src/query/loop.ts' cleanly.
+Applied patch to 'src/query/types.ts' cleanly.
+Applied patch to 'src/tool/hypothesis.ts' cleanly.

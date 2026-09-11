@@ -1,0 +1,22 @@
+{
+  "任务": "T5 交接 #4：T0017 / T0027 复跑定性（仍红=gold patch 真引入回归→淘汰；转绿=flaky→无罪回到存活集）",
+  "方法": "oracle -k 3，每条 3 个独立 trial，比对失败集合是否一致",
+  "命令": "harbor run -p reports/t6-recheck/tasks -a oracle -n 1 -k 3 -o reports/t6-recheck/oracle-k3 --verifier-timeout-multiplier 6",
+  "结果": "6/6 trial 全红，且每条的失败 P2P 集合三次完全一致 → 确定性缺陷，非 flaky",
+  "T0017": {
+    "判定": "淘汰",
+    "失败P2P": ["tests/llm/stream-interrupt-recovery.test.ts", "tests/llm/stream-level-error.test.ts"],
+    "根因": "gold patch 引入性能/时序回归。4 个用例 timeout after 5000ms",
+    "决定性对照": "同一批 P2P 在 nop 下 524 pass / 0 fail；在 oracle 下这 4 个 timeout。红只出现在打了 gold patch 之后 → 归因明确",
+    "归类": "gold_patch_regression"
+  },
+  "T0027": {
+    "判定": "淘汰",
+    "失败P2P": ["tests/query/abort-graceful.test.ts", "tests/query/turn-hard-timeout.test.ts"],
+    "根因": "gold patch 自身缺 import —— 硬缺陷，非时序问题",
+    "证据": "ReferenceError: detectInvestigationContext is not defined at /repo/src/query/loop.ts:476。该函数由补丁定义在 src/query/hypothesis-guide.ts，但补丁未给 loop.ts 添加任何 import 行",
+    "归类": "gold_patch_broken"
+  },
+  "对存活数的影响": "两条本就不在 T5 的存活 40 条内（属「待复查」）。两条均淘汰 → 存活仍为 40 条，未跌破 ≥40 底线，也未增加",
+  "纠正T5交接的一处措辞": "T5 报告把这两条列在「oracle 基础设施问题（修环境，不要动 task）」下。复跑证明二者都是 task/参考解自身缺陷，与环境无关 —— 尤其 T0027 是缺 import 的确定性错误，不该归入 infra"
+}

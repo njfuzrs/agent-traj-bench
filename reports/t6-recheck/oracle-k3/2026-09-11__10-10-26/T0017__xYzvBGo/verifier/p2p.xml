@@ -1,0 +1,857 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="524" assertions="1264" failures="4" skipped="0" time="33.138050198">
+  <testsuite name="tests/llm/token-estimator.test.ts" file="tests/llm/token-estimator.test.ts" tests="26" assertions="38" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="TokenEstimator" file="tests/llm/token-estimator.test.ts" line="11" tests="26" assertions="38" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testsuite name="estimateText" file="tests/llm/token-estimator.test.ts" line="13" tests="7" assertions="9" failures="0" skipped="0" time="0.001" hostname="718b8ab21c28">
+        <testcase name="空字符串返回 0" classname="estimateText &amp;gt; TokenEstimator" time="0.00017" file="tests/llm/token-estimator.test.ts" line="14" assertions="1" />
+        <testcase name="纯 ASCII 文本：约 0.20 token/char" classname="estimateText &amp;gt; TokenEstimator" time="0.000068" file="tests/llm/token-estimator.test.ts" line="18" assertions="1" />
+        <testcase name="纯中文文本：约 0.65 token/char" classname="estimateText &amp;gt; TokenEstimator" time="0.000028" file="tests/llm/token-estimator.test.ts" line="25" assertions="1" />
+        <testcase name="中英文混合文本" classname="estimateText &amp;gt; TokenEstimator" time="0.000055" file="tests/llm/token-estimator.test.ts" line="32" assertions="2" />
+        <testcase name="超长文本使用快速近似（按抽样语言占比加权）" classname="estimateText &amp;gt; TokenEstimator" time="0.000461" file="tests/llm/token-estimator.test.ts" line="42" assertions="1" />
+        <testcase name="超长纯中文文本按非 ASCII 系数估算" classname="estimateText &amp;gt; TokenEstimator" time="0.000272" file="tests/llm/token-estimator.test.ts" line="49" assertions="2" />
+        <testcase name="刚好在阈值内使用精确计算" classname="estimateText &amp;gt; TokenEstimator" time="0.001048" file="tests/llm/token-estimator.test.ts" line="57" assertions="1" />
+      </testsuite>
+      <testsuite name="estimateMessages" file="tests/llm/token-estimator.test.ts" line="66" tests="5" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="空消息列表返回 0" classname="estimateMessages &amp;gt; TokenEstimator" time="0.000108" file="tests/llm/token-estimator.test.ts" line="67" assertions="1" />
+        <testcase name="单条文本消息" classname="estimateMessages &amp;gt; TokenEstimator" time="0.000058" file="tests/llm/token-estimator.test.ts" line="71" assertions="1" />
+        <testcase name="包含 tool_use 块" classname="estimateMessages &amp;gt; TokenEstimator" time="0.000047" file="tests/llm/token-estimator.test.ts" line="79" assertions="1" />
+        <testcase name="包含 tool_result 块" classname="estimateMessages &amp;gt; TokenEstimator" time="0.000051" file="tests/llm/token-estimator.test.ts" line="97" assertions="1" />
+        <testcase name="多条消息累加" classname="estimateMessages &amp;gt; TokenEstimator" time="0.000047" file="tests/llm/token-estimator.test.ts" line="113" assertions="1" />
+      </testsuite>
+      <testsuite name="estimateTools" file="tests/llm/token-estimator.test.ts" line="124" tests="3" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="空工具列表返回 0" classname="estimateTools &amp;gt; TokenEstimator" time="0.00006" file="tests/llm/token-estimator.test.ts" line="125" assertions="1" />
+        <testcase name="单个工具定义" classname="estimateTools &amp;gt; TokenEstimator" time="0.000048" file="tests/llm/token-estimator.test.ts" line="129" assertions="1" />
+        <testcase name="多个工具定义累加" classname="estimateTools &amp;gt; TokenEstimator" time="0.000029" file="tests/llm/token-estimator.test.ts" line="146" assertions="1" />
+      </testsuite>
+      <testsuite name="getContextLimit" file="tests/llm/token-estimator.test.ts" line="159" tests="7" assertions="16" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="精确匹配已知模型" classname="getContextLimit &amp;gt; TokenEstimator" time="0.00024" file="tests/llm/token-estimator.test.ts" line="160" assertions="4" />
+        <testcase name="前缀匹配" classname="getContextLimit &amp;gt; TokenEstimator" time="0.000225" file="tests/llm/token-estimator.test.ts" line="167" assertions="1" />
+        <testcase name="EST-3：1M 窗口 deepseek 变体不回退到 128K" classname="getContextLimit &amp;gt; TokenEstimator" time="0.000243" file="tests/llm/token-estimator.test.ts" line="172" assertions="3" />
+        <testcase name="未知模型返回默认值 128000" classname="getContextLimit &amp;gt; TokenEstimator" time="0.000177" file="tests/llm/token-estimator.test.ts" line="180" assertions="1" />
+        <testcase name="#10：availableModels 声明的 contextWindow 是权威源，覆盖静态表" classname="getContextLimit &amp;gt; TokenEstimator" time="0.000102" file="tests/llm/token-estimator.test.ts" line="184" assertions="1" />
+        <testcase name="#10：SID_FALLBACK_CONTEXT_WINDOW 放宽未知模型兜底窗口" classname="getContextLimit &amp;gt; TokenEstimator" time="0.000131" file="tests/llm/token-estimator.test.ts" line="191" assertions="2" />
+        <testcase name="#10：SID_FALLBACK_CONTEXT_WINDOW 非法值静默回退默认 128000" classname="getContextLimit &amp;gt; TokenEstimator" time="0.00019" file="tests/llm/token-estimator.test.ts" line="205" assertions="4" />
+      </testsuite>
+      <testsuite name="checkContextFit" file="tests/llm/token-estimator.test.ts" line="220" tests="4" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="小请求 fits: true" classname="checkContextFit &amp;gt; TokenEstimator" time="0.000063" file="tests/llm/token-estimator.test.ts" line="221" assertions="1" />
+        <testcase name="超大请求 fits: false" classname="checkContextFit &amp;gt; TokenEstimator" time="0.000496" file="tests/llm/token-estimator.test.ts" line="232" assertions="2" />
+        <testcase name="包含 system prompt 和 tools 的估算" classname="checkContextFit &amp;gt; TokenEstimator" time="0.000055" file="tests/llm/token-estimator.test.ts" line="248" assertions="1" />
+        <testcase name="留 5% 安全余量" classname="checkContextFit &amp;gt; TokenEstimator" time="0.000366" file="tests/llm/token-estimator.test.ts" line="263" assertions="1" />
+      </testsuite>
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/openai-protocol-edge.test.ts" file="tests/llm/openai-protocol-edge.test.ts" tests="33" assertions="64" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="§2.2 tool_use.input 兜底为合法 JSON" file="tests/llm/openai-protocol-edge.test.ts" line="43" tests="2" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="input 为 undefined → arguments = &apos;{}&apos;" classname="§2.2 tool_use.input 兜底为合法 JSON" time="0.000179" file="tests/llm/openai-protocol-edge.test.ts" line="44" assertions="2" />
+      <testcase name="input 为正常对象 → arguments 为对应 JSON" classname="§2.2 tool_use.input 兜底为合法 JSON" time="0.000055" file="tests/llm/openai-protocol-edge.test.ts" line="56" assertions="1" />
+    </testsuite>
+    <testsuite name="thinking-only assistant 消息兜底（reasoning 模型整轮走 reasoning_content）" file="tests/llm/openai-protocol-edge.test.ts" line="67" tests="3" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="仅 thinking 块 → content 用思考文本兜底，非 null" classname="thinking-only assistant 消息兜底（reasoning 模型整轮走 reasoning_content）" time="0.000038" file="tests/llm/openai-protocol-edge.test.ts" line="68" assertions="4" />
+      <testcase name="有 text 时 thinking 不参与兜底（text 优先）" classname="thinking-only assistant 消息兜底（reasoning 模型整轮走 reasoning_content）" time="0.000022" file="tests/llm/openai-protocol-edge.test.ts" line="82" assertions="1" />
+      <testcase name="thinking + tool_use → content 为 null，走 tool_calls（不触发兜底）" classname="thinking-only assistant 消息兜底（reasoning 模型整轮走 reasoning_content）" time="0.000025" file="tests/llm/openai-protocol-edge.test.ts" line="95" assertions="2" />
+    </testsuite>
+    <testsuite name="§2.3 空 id fail-fast" file="tests/llm/openai-protocol-edge.test.ts" line="110" tests="2" assertions="2" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="tool_use 缺 id → 抛错" classname="§2.3 空 id fail-fast" time="0.000253" file="tests/llm/openai-protocol-edge.test.ts" line="111" assertions="1" />
+      <testcase name="tool_result 缺 tool_use_id → 抛错" classname="§2.3 空 id fail-fast" time="0.000045" file="tests/llm/openai-protocol-edge.test.ts" line="119" assertions="1" />
+    </testsuite>
+    <testsuite name="§2.1 tool message content 空串兜底" file="tests/llm/openai-protocol-edge.test.ts" line="128" tests="2" assertions="2" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="空串 content → (empty)" classname="§2.1 tool message content 空串兜底" time="0.000032" file="tests/llm/openai-protocol-edge.test.ts" line="136" assertions="1" />
+      <testcase name="非空 content → 原样" classname="§2.1 tool message content 空串兜底" time="0.000022" file="tests/llm/openai-protocol-edge.test.ts" line="144" assertions="1" />
+    </testsuite>
+    <testsuite name="§3.1 / §3.2 o-series 协议差异" file="tests/llm/openai-protocol-edge.test.ts" line="153" tests="4" assertions="11" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="isReasoningModel 识别 o1/o3/o4，不误伤 gpt-4o/deepseek" classname="§3.1 / §3.2 o-series 协议差异" time="0.000049" file="tests/llm/openai-protocol-edge.test.ts" line="154" assertions="5" />
+      <testcase name="o-series → developer role；非 o-series → system" classname="§3.1 / §3.2 o-series 协议差异" time="0.000138" file="tests/llm/openai-protocol-edge.test.ts" line="162" assertions="2" />
+      <testcase name="首条已是 system/developer → 不重复注入（§4.1）" classname="§3.1 / §3.2 o-series 协议差异" time="0.000031" file="tests/llm/openai-protocol-edge.test.ts" line="167" assertions="2" />
+      <testcase name="o-series → max_completion_tokens；非 o-series → max_tokens" classname="§3.1 / §3.2 o-series 协议差异" time="0.000038" file="tests/llm/openai-protocol-edge.test.ts" line="174" assertions="2" />
+    </testsuite>
+    <testsuite name="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" file="tests/llm/openai-protocol-edge.test.ts" line="180" tests="6" assertions="15" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="含 DYNAMIC_BOUNDARY → messages[0] 只含静态内容，不含边界标记字面量" classname="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" time="0.00005" file="tests/llm/openai-protocol-edge.test.ts" line="181" assertions="2" />
+      <testcase name="动态区被追加为末尾新增的 role:user 消息，用 &lt;system-reminder&gt; 包裹" classname="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" time="0.000036" file="tests/llm/openai-protocol-edge.test.ts" line="188" assertions="2" />
+      <testcase name="不含 DYNAMIC_BOUNDARY → 向后兼容，整段进 messages[0]，不追加任何消息" classname="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" time="0.000032" file="tests/llm/openai-protocol-edge.test.ts" line="203" assertions="2" />
+      <testcase name="原 messages 为空数组 → 动态区仍正确追加在最后" classname="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" time="0.000026" file="tests/llm/openai-protocol-edge.test.ts" line="209" assertions="3" />
+      <testcase name="原 messages 以 role:tool 结尾（并行工具结果轮）→ 动态区仍新增而非改写" classname="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" time="0.000042" file="tests/llm/openai-protocol-edge.test.ts" line="220" assertions="4" />
+      <testcase name="o-series（developer role）静态区同样正确拆分，动态区仍以 role:user 追加" classname="缓存命中率修复：prependSystemMessage 按 DYNAMIC_BOUNDARY 拆分静态/动态区" time="0.000018" file="tests/llm/openai-protocol-edge.test.ts" line="234" assertions="2" />
+    </testsuite>
+    <testsuite name="§4.4 finish_reason 五值映射" file="tests/llm/openai-protocol-edge.test.ts" line="242" tests="4" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="tool_calls / function_call → tool_use" classname="§4.4 finish_reason 五值映射" time="0.000034" file="tests/llm/openai-protocol-edge.test.ts" line="243" assertions="2" />
+      <testcase name="length → max_tokens" classname="§4.4 finish_reason 五值映射" time="0.000015" file="tests/llm/openai-protocol-edge.test.ts" line="247" assertions="1" />
+      <testcase name="content_filter → content_filter（不再误并入 end_turn）" classname="§4.4 finish_reason 五值映射" time="0.000011" file="tests/llm/openai-protocol-edge.test.ts" line="250" assertions="1" />
+      <testcase name="stop / null / 未知 → end_turn" classname="§4.4 finish_reason 五值映射" time="0.000015" file="tests/llm/openai-protocol-edge.test.ts" line="253" assertions="3" />
+    </testsuite>
+    <testsuite name="§4.2 tool_choice 映射" file="tests/llm/openai-protocol-edge.test.ts" line="260" tests="3" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="不传 → undefined（不下发，沿用服务端默认）" classname="§4.2 tool_choice 映射" time="0.000039" file="tests/llm/openai-protocol-edge.test.ts" line="261" assertions="2" />
+      <testcase name="字符串策略 → 原样" classname="§4.2 tool_choice 映射" time="0.000022" file="tests/llm/openai-protocol-edge.test.ts" line="265" assertions="3" />
+      <testcase name="具名工具 → { type: function, function: { name } }" classname="§4.2 tool_choice 映射" time="0.000024" file="tests/llm/openai-protocol-edge.test.ts" line="270" assertions="1" />
+    </testsuite>
+    <testsuite name="§3.4 vision 能力如实声明" file="tests/llm/openai-protocol-edge.test.ts" line="278" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="capabilities.vision = false（无图片输入管线时不虚标）" classname="§3.4 vision 能力如实声明" time="0.000017" file="tests/llm/openai-protocol-edge.test.ts" line="279" assertions="1" />
+    </testsuite>
+    <testsuite name="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" file="tests/llm/openai-protocol-edge.test.ts" line="284" tests="6" assertions="10" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="① DeepSeek 官方直连：顶层 prompt_cache_hit_tokens 优先" classname="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" time="0.000026" file="tests/llm/openai-protocol-edge.test.ts" line="285" assertions="1" />
+      <testcase name="② OpenAI 标准 / 公司网关归一化：prompt_tokens_details.cached_tokens" classname="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" time="0.00001" file="tests/llm/openai-protocol-edge.test.ts" line="293" assertions="1" />
+      <testcase name="③ Kimi 官方直连：顶层 cached_tokens 兜底命中" classname="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" time="0.000011" file="tests/llm/openai-protocol-edge.test.ts" line="301" assertions="1" />
+      <testcase name="优先级：prompt_cache_hit_tokens &gt; prompt_tokens_details.cached_tokens &gt; cached_tokens" classname="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" time="0.000015" file="tests/llm/openai-protocol-edge.test.ts" line="310" assertions="2" />
+      <testcase name="无任何缓存字段 → 0（无缓存模型 / ollama 不误报）" classname="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" time="0.000013" file="tests/llm/openai-protocol-edge.test.ts" line="322" assertions="3" />
+      <testcase name="命中为 0 显式返回 0（不因 ?? 短路误判 falsy）" classname="extractOpenAICacheHit：各家缓存命中字段兜底链（依据 api-reference 各家文档）" time="0.000016" file="tests/llm/openai-protocol-edge.test.ts" line="328" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/availability.test.ts" file="tests/llm/availability.test.ts" tests="15" assertions="26" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="ModelAvailabilityService" file="tests/llm/availability.test.ts" line="9" tests="15" assertions="26" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="默认状态为 healthy（可用）" classname="ModelAvailabilityService" time="0.000057" file="tests/llm/availability.test.ts" line="11" assertions="1" />
+      <testsuite name="terminal 状态" file="tests/llm/availability.test.ts" line="17" tests="4" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="markTerminal 后不可用" classname="terminal 状态 &amp;gt; ModelAvailabilityService" time="0.000033" file="tests/llm/availability.test.ts" line="18" assertions="2" />
+        <testcase name="terminal 状态不可被 markHealthy 恢复" classname="terminal 状态 &amp;gt; ModelAvailabilityService" time="0.000026" file="tests/llm/availability.test.ts" line="26" assertions="1" />
+        <testcase name="terminal 状态不可被 markRetryOnce 降级覆盖" classname="terminal 状态 &amp;gt; ModelAvailabilityService" time="0.00003" file="tests/llm/availability.test.ts" line="33" assertions="2" />
+        <testcase name="terminal 不受 resetTurn 影响" classname="terminal 状态 &amp;gt; ModelAvailabilityService" time="0.000043" file="tests/llm/availability.test.ts" line="42" assertions="1" />
+      </testsuite>
+      <testsuite name="retry_once 状态" file="tests/llm/availability.test.ts" line="51" tests="4" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="第一次检查可用（消耗机会）" classname="retry_once 状态 &amp;gt; ModelAvailabilityService" time="0.000017" file="tests/llm/availability.test.ts" line="52" assertions="1" />
+        <testcase name="第二次检查不可用（机会已消耗）" classname="retry_once 状态 &amp;gt; ModelAvailabilityService" time="0.000016" file="tests/llm/availability.test.ts" line="58" assertions="2" />
+        <testcase name="resetTurn 重置 consumed 标记" classname="retry_once 状态 &amp;gt; ModelAvailabilityService" time="0.000017" file="tests/llm/availability.test.ts" line="67" assertions="2" />
+        <testcase name="markHealthy 可恢复 retry_once 状态" classname="retry_once 状态 &amp;gt; ModelAvailabilityService" time="0.000015" file="tests/llm/availability.test.ts" line="77" assertions="1" />
+      </testsuite>
+      <testcase name="不同模型状态互不影响" classname="ModelAvailabilityService" time="0.000018" file="tests/llm/availability.test.ts" line="87" assertions="3" />
+      <testsuite name="selectFirstAvailable" file="tests/llm/availability.test.ts" line="98" tests="4" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="返回第一个可用模型" classname="selectFirstAvailable &amp;gt; ModelAvailabilityService" time="0.000038" file="tests/llm/availability.test.ts" line="99" assertions="2" />
+        <testcase name="所有模型不可用时返回 unavailable" classname="selectFirstAvailable &amp;gt; ModelAvailabilityService" time="0.000034" file="tests/llm/availability.test.ts" line="107" assertions="2" />
+        <testcase name="空列表返回 unavailable" classname="selectFirstAvailable &amp;gt; ModelAvailabilityService" time="0.000013" file="tests/llm/availability.test.ts" line="116" assertions="1" />
+        <testcase name="retry_once 模型在第一次选择时可用" classname="selectFirstAvailable &amp;gt; ModelAvailabilityService" time="0.000013" file="tests/llm/availability.test.ts" line="122" assertions="1" />
+      </testsuite>
+      <testcase name="resetTurn 重置所有 retry_once 模型" classname="ModelAvailabilityService" time="0.000023" file="tests/llm/availability.test.ts" line="131" assertions="4" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/provider-anthropic-conformance.test.ts" file="tests/llm/provider-anthropic-conformance.test.ts" tests="12" assertions="29" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="Anthropic conformance — 纯文本响应" file="tests/llm/provider-anthropic-conformance.test.ts" line="74" tests="1" assertions="3" failures="0" skipped="0" time="0.002" hostname="718b8ab21c28">
+      <testcase name="纯文本流正确解析为 text_delta 序列" classname="Anthropic conformance — 纯文本响应" time="0.002671" file="tests/llm/provider-anthropic-conformance.test.ts" line="75" assertions="3" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — tool_use 解析" file="tests/llm/provider-anthropic-conformance.test.ts" line="101" tests="2" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="tool_use 的 partial_json 自管拼接 + 一次性 parse" classname="Anthropic conformance — tool_use 解析" time="0.000436" file="tests/llm/provider-anthropic-conformance.test.ts" line="102" assertions="3" />
+      <testcase name="index 不连续（跳过 0 直接给 1）不崩溃，delta 引用缺失 index 被 fail-safe 跳过" classname="Anthropic conformance — tool_use 解析" time="0.000233" file="tests/llm/provider-anthropic-conformance.test.ts" line="127" assertions="2" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — 多工具并行" file="tests/llm/provider-anthropic-conformance.test.ts" line="153" tests="1" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="两个并行 tool_use 块各自管理 input 拼接" classname="Anthropic conformance — 多工具并行" time="0.000204" file="tests/llm/provider-anthropic-conformance.test.ts" line="154" assertions="5" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — 边界场景" file="tests/llm/provider-anthropic-conformance.test.ts" line="180" tests="2" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="空文本 + 纯 tool_use（无 text 块）不崩溃" classname="Anthropic conformance — 边界场景" time="0.000191" file="tests/llm/provider-anthropic-conformance.test.ts" line="181" assertions="2" />
+      <testcase name="tool input 非法 JSON 不崩溃（兜底空对象）" classname="Anthropic conformance — 边界场景" time="0.000433" file="tests/llm/provider-anthropic-conformance.test.ts" line="195" assertions="1" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — abort 中断" file="tests/llm/provider-anthropic-conformance.test.ts" line="212" tests="1" assertions="2" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="已 aborted 的 signal 让流式提前结束（抛 error 事件而非崩溃）" classname="Anthropic conformance — abort 中断" time="0.000145" file="tests/llm/provider-anthropic-conformance.test.ts" line="213" assertions="2" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — thinking 透传" file="tests/llm/provider-anthropic-conformance.test.ts" line="232" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="thinking_delta 作为 text_delta 透传" classname="Anthropic conformance — thinking 透传" time="0.000098" file="tests/llm/provider-anthropic-conformance.test.ts" line="233" assertions="1" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — usage 统计" file="tests/llm/provider-anthropic-conformance.test.ts" line="252" tests="1" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="message_start 给全量 input，message_delta 给 output 增量" classname="Anthropic conformance — usage 统计" time="0.000104" file="tests/llm/provider-anthropic-conformance.test.ts" line="253" assertions="4" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — 流内遥测转发" file="tests/llm/provider-anthropic-conformance.test.ts" line="278" tests="1" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="stream_completed 信号通过 params.onStreamTelemetry 转发出来" classname="Anthropic conformance — 流内遥测转发" time="0.000109" file="tests/llm/provider-anthropic-conformance.test.ts" line="279" assertions="3" />
+    </testsuite>
+    <testsuite name="Anthropic conformance — guardOutgoingMessages" file="tests/llm/provider-anthropic-conformance.test.ts" line="303" tests="2" assertions="3" failures="0" skipped="0" time="0.001" hostname="718b8ab21c28">
+      <testcase name="strict 模式下 orphan tool_result（无匹配 tool_use）在发送前被拦截抛错" classname="Anthropic conformance — guardOutgoingMessages" time="0.001149" file="tests/llm/provider-anthropic-conformance.test.ts" line="304" assertions="1" />
+      <testcase name="非 strict 模式下 orphan tool_result 不阻断流（仅告警，向后兼容）" classname="Anthropic conformance — guardOutgoingMessages" time="0.000346" file="tests/llm/provider-anthropic-conformance.test.ts" line="331" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/registry.test.ts" file="tests/llm/registry.test.ts" tests="18" assertions="39" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="ProviderRegistry" file="tests/llm/registry.test.ts" line="28" tests="18" assertions="39" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="getCurrentModel 返回 config.model" classname="ProviderRegistry" time="0.000097" file="tests/llm/registry.test.ts" line="29" assertions="1" />
+      <testcase name="#9：getContextWindow 优先用 availableModels 声明的 contextWindow" classname="ProviderRegistry" time="0.000052" file="tests/llm/registry.test.ts" line="35" assertions="1" />
+      <testcase name="#9：getContextWindow 未声明时回退到内置/启发式（deepseek 系 1M）" classname="ProviderRegistry" time="0.000038" file="tests/llm/registry.test.ts" line="45" assertions="1" />
+      <testcase name="getModelForSubAgent 无映射时返回主模型" classname="ProviderRegistry" time="0.00004" file="tests/llm/registry.test.ts" line="51" assertions="4" />
+      <testcase name="getModelForSubAgent 有映射时返回映射模型" classname="ProviderRegistry" time="0.000024" file="tests/llm/registry.test.ts" line="60" assertions="4" />
+      <testcase name="getSpawnConfigForSubAgent：未映射类型沿用主模型 + 主 spawn 配置（P1-1）" classname="ProviderRegistry" time="0.000068" file="tests/llm/registry.test.ts" line="73" assertions="3" />
+      <testcase name="getSpawnConfigForSubAgent：映射类型返回子模型及其 availableModels 中的 provider 配置（P1-1）" classname="ProviderRegistry" time="0.000039" file="tests/llm/registry.test.ts" line="82" assertions="3" />
+      <testcase name="getSpawnConfigForSubAgent：映射到 anthropic 模型时切换 provider（P1-1）" classname="ProviderRegistry" time="0.000021" file="tests/llm/registry.test.ts" line="94" assertions="2" />
+      <testcase name="clearCache 清除缓存" classname="ProviderRegistry" time="0.000191" file="tests/llm/registry.test.ts" line="104" assertions="4" />
+      <testcase name="getProvider 缓存同配置的 Provider" classname="ProviderRegistry" time="0.00003" file="tests/llm/registry.test.ts" line="122" assertions="1" />
+      <testcase name="getProviderForSubAgent 模型跟主模型相同时返回主 Provider" classname="ProviderRegistry" time="0.000039" file="tests/llm/registry.test.ts" line="133" assertions="1" />
+      <testcase name="getProviderForSubAgent 模型不同时查找 availableModels" classname="ProviderRegistry" time="0.000049" file="tests/llm/registry.test.ts" line="143" assertions="2" />
+      <testcase name="未知 provider 类型抛出错误" classname="ProviderRegistry" time="0.000051" file="tests/llm/registry.test.ts" line="155" assertions="1" />
+      <testcase name="mock-503 provider 名返回 503 失败模式的 MockProvider" classname="ProviderRegistry" time="0.000745" file="tests/llm/registry.test.ts" line="163" assertions="1" />
+      <testcase name="mock-rate-limit provider 名走 rate_limit 失败模式" classname="ProviderRegistry" time="0.000034" file="tests/llm/registry.test.ts" line="170" assertions="1" />
+      <testcase name="mock-timeout provider 名走 timeout 失败模式" classname="ProviderRegistry" time="0.000028" file="tests/llm/registry.test.ts" line="177" assertions="1" />
+      <testcase name="mock-ok provider 名走 ok (永不失败)" classname="ProviderRegistry" time="0.000024" file="tests/llm/registry.test.ts" line="183" assertions="1" />
+      <testcase name="mock-503-after-3 provider 名: 前 3 次成功后才 503" classname="ProviderRegistry" time="0.000365" file="tests/llm/registry.test.ts" line="189" assertions="7" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/provider-protocol-contract.test.ts" file="tests/llm/provider-protocol-contract.test.ts" tests="9" assertions="12" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" file="tests/llm/provider-protocol-contract.test.ts" line="56" tests="9" assertions="12" failures="0" skipped="0" time="0.002" hostname="718b8ab21c28">
+      <testcase name="[openai] strict 模式：脏历史在 sendMessageStream 入口被拦截（不打网络）" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.001109" file="tests/llm/provider-protocol-contract.test.ts" line="58" assertions="2" />
+      <testcase name="[openai] strict 模式：脏历史在 sendMessageNonStreaming 入口被拦截" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.00043" file="tests/llm/provider-protocol-contract.test.ts" line="76" assertions="1" />
+      <testcase name="[openai] 非 strict：脏历史不抛 MessageHistoryViolationError（降级告警+落盘）" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.001826" file="tests/llm/provider-protocol-contract.test.ts" line="89" assertions="1" />
+      <testcase name="[deepseek（自定义 baseURL 的 OpenAIProvider）] strict 模式：脏历史在 sendMessageStream 入口被拦截（不打网络）" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.000108" file="tests/llm/provider-protocol-contract.test.ts" line="58" assertions="2" />
+      <testcase name="[deepseek（自定义 baseURL 的 OpenAIProvider）] strict 模式：脏历史在 sendMessageNonStreaming 入口被拦截" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.000049" file="tests/llm/provider-protocol-contract.test.ts" line="76" assertions="1" />
+      <testcase name="[deepseek（自定义 baseURL 的 OpenAIProvider）] 非 strict：脏历史不抛 MessageHistoryViolationError（降级告警+落盘）" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.000222" file="tests/llm/provider-protocol-contract.test.ts" line="89" assertions="1" />
+      <testcase name="[ollama] strict 模式：脏历史在 sendMessageStream 入口被拦截（不打网络）" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.000089" file="tests/llm/provider-protocol-contract.test.ts" line="58" assertions="2" />
+      <testcase name="[ollama] strict 模式：脏历史在 sendMessageNonStreaming 入口被拦截" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.000048" file="tests/llm/provider-protocol-contract.test.ts" line="76" assertions="1" />
+      <testcase name="[ollama] 非 strict：脏历史不抛 MessageHistoryViolationError（降级告警+落盘）" classname="D2-1 — Provider 协议契约（孤儿历史发送前拦截）" time="0.000253" file="tests/llm/provider-protocol-contract.test.ts" line="89" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/secret-redact.test.ts" file="tests/llm/secret-redact.test.ts" tests="24" assertions="50" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="SecretRedactHook — 7 类 pattern 命中 (§3.1)" file="tests/llm/secret-redact.test.ts" line="14" tests="10" assertions="29" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="GitHub Token (ghp_*) 被替换" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000703" file="tests/llm/secret-redact.test.ts" line="15" assertions="4" />
+      <testcase name="GitHub Token 其他前缀 (gho_/ghu_/ghs_/ghr_) 也命中" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000156" file="tests/llm/secret-redact.test.ts" line="27" assertions="6" />
+      <testcase name="OpenAI sk-* / sk-proj-* / sk-ant-* 被替换" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.00004" file="tests/llm/secret-redact.test.ts" line="42" assertions="3" />
+      <testcase name="AWS Access Key (AKIA*) 被替换" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000031" file="tests/llm/secret-redact.test.ts" line="53" assertions="2" />
+      <testcase name="AWS 官方占位 AKIAIOSFODNN7EXAMPLE 被守护跳过 (fixture)" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000026" file="tests/llm/secret-redact.test.ts" line="63" assertions="2" />
+      <testcase name="Generic API Key 形式 (api_key=...) 保留 key 名仅 redact value" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000089" file="tests/llm/secret-redact.test.ts" line="74" assertions="3" />
+      <testcase name="Bearer Token 被替换" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000043" file="tests/llm/secret-redact.test.ts" line="85" assertions="2" />
+      <testcase name="Private Key 整段 (BEGIN..END) 被替换" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000041" file="tests/llm/secret-redact.test.ts" line="95" assertions="4" />
+      <testcase name="DB Connection String 保留 schema/host, redact password" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000064" file="tests/llm/secret-redact.test.ts" line="110" assertions="2" />
+      <testcase name="MongoDB SRV 也命中" classname="SecretRedactHook — 7 类 pattern 命中 (§3.1)" time="0.000028" file="tests/llm/secret-redact.test.ts" line="120" assertions="1" />
+    </testsuite>
+    <testsuite name="SecretRedactHook — 白名单守护 (§3.3)" file="tests/llm/secret-redact.test.ts" line="130" tests="4" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="代码标识符 (process.env) 不被 redact" classname="SecretRedactHook — 白名单守护 (§3.3)" time="0.000019" file="tests/llm/secret-redact.test.ts" line="131" assertions="1" />
+      <testcase name="测试 fixture 标记 (含 EXAMPLE / FAKE) 不被 redact" classname="SecretRedactHook — 白名单守护 (§3.3)" time="0.000019" file="tests/llm/secret-redact.test.ts" line="141" assertions="1" />
+      <testcase name="markdown 代码块旁含&apos;示例&apos;锚点时跳过" classname="SecretRedactHook — 白名单守护 (§3.3)" time="0.000016" file="tests/llm/secret-redact.test.ts" line="150" assertions="1" />
+      <testcase name="&apos;placeholder&apos; 英文锚点也跳过" classname="SecretRedactHook — 白名单守护 (§3.3)" time="0.000019" file="tests/llm/secret-redact.test.ts" line="159" assertions="1" />
+    </testsuite>
+    <testsuite name="SecretRedactHook — detect / 多重命中 / 边界" file="tests/llm/secret-redact.test.ts" line="169" tests="6" assertions="13" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="空文本: hasSecrets=false, text 不变" classname="SecretRedactHook — detect / 多重命中 / 边界" time="0.000015" file="tests/llm/secret-redact.test.ts" line="170" assertions="2" />
+      <testcase name="无 secret 文本: hasSecrets=false" classname="SecretRedactHook — detect / 多重命中 / 边界" time="0.000024" file="tests/llm/secret-redact.test.ts" line="177" assertions="2" />
+      <testcase name="多类 secret 同时出现: 各 category 独立计数" classname="SecretRedactHook — detect / 多重命中 / 边界" time="0.000047" file="tests/llm/secret-redact.test.ts" line="187" assertions="2" />
+      <testcase name="detect 模式只检测不替换, 返回原始 match" classname="SecretRedactHook — detect / 多重命中 / 边界" time="0.000077" file="tests/llm/secret-redact.test.ts" line="201" assertions="4" />
+      <testcase name="registerPattern 自定义企业 SDK key" classname="SecretRedactHook — detect / 多重命中 / 边界" time="0.000065" file="tests/llm/secret-redact.test.ts" line="210" assertions="2" />
+      <testcase name="getSharedSecretRedactHook 返回单例" classname="SecretRedactHook — detect / 多重命中 / 边界" time="0.000017" file="tests/llm/secret-redact.test.ts" line="225" assertions="1" />
+    </testsuite>
+    <testsuite name="SecretRedactHook — 误报率反例 (§3.3 验收)" file="tests/llm/secret-redact.test.ts" line="232" tests="4" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="正常代码: 16+ 字符变量名不应被 generic api_key 误命中" classname="SecretRedactHook — 误报率反例 (§3.3 验收)" time="0.000022" file="tests/llm/secret-redact.test.ts" line="233" assertions="1" />
+      <testcase name="commit hash 不被 GitHub Token 误命中 (40 hex)" classname="SecretRedactHook — 误报率反例 (§3.3 验收)" time="0.000017" file="tests/llm/secret-redact.test.ts" line="242" assertions="1" />
+      <testcase name="URL path 不被 DB conn string 误命中 (无 user:pwd@)" classname="SecretRedactHook — 误报率反例 (§3.3 验收)" time="0.00003" file="tests/llm/secret-redact.test.ts" line="252" assertions="1" />
+      <testcase name="仅出现 &apos;Bearer&apos; 单词无 token 不命中" classname="SecretRedactHook — 误报率反例 (§3.3 验收)" time="0.000023" file="tests/llm/secret-redact.test.ts" line="261" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/provider-conformance.test.ts" file="tests/llm/provider-conformance.test.ts" tests="24" assertions="71" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="stream-guard" file="tests/llm/provider-conformance.test.ts" line="19" tests="4" assertions="15" failures="0" skipped="0" time="0.226" hostname="718b8ab21c28">
+      <testcase name="正常流：所有事件透传且统计正确" classname="stream-guard" time="0.000288" file="tests/llm/provider-conformance.test.ts" line="28" assertions="4" />
+      <testcase name="空流：zero events，stream_completed 正确触发" classname="stream-guard" time="0.000112" file="tests/llm/provider-conformance.test.ts" line="52" assertions="4" />
+      <testcase name="idle timeout 触发 onTimeout 回调" classname="stream-guard" time="0.104161" file="tests/llm/provider-conformance.test.ts" line="74" assertions="4" />
+      <testcase name="stall 告警触发 onTelemetry stream_stall 事件" classname="stream-guard" time="0.122419" file="tests/llm/provider-conformance.test.ts" line="114" assertions="3" />
+    </testsuite>
+    <testsuite name="model-capability-filter" file="tests/llm/provider-conformance.test.ts" line="145" tests="8" assertions="22" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="o3: system → developer role" classname="model-capability-filter" time="0.000119" file="tests/llm/provider-conformance.test.ts" line="146" assertions="2" />
+      <testcase name="o3: max_tokens → max_completion_tokens" classname="model-capability-filter" time="0.000057" file="tests/llm/provider-conformance.test.ts" line="162" assertions="2" />
+      <testcase name="o3: temperature/top_p 被删除" classname="model-capability-filter" time="0.000019" file="tests/llm/provider-conformance.test.ts" line="174" assertions="2" />
+      <testcase name="o3-mini: reasoning_effort max → high（钳制）" classname="model-capability-filter" time="0.000024" file="tests/llm/provider-conformance.test.ts" line="188" assertions="1" />
+      <testcase name="o4-mini: 与 o3 同协议族" classname="model-capability-filter" time="0.000032" file="tests/llm/provider-conformance.test.ts" line="200" assertions="5" />
+      <testcase name="gpt-4o: 无特殊处理（标准参数透传）" classname="model-capability-filter" time="0.000028" file="tests/llm/provider-conformance.test.ts" line="217" assertions="3" />
+      <testcase name="未注册模型: 完全透传" classname="model-capability-filter" time="0.00005" file="tests/llm/provider-conformance.test.ts" line="231" assertions="4" />
+      <testcase name="DeepSeek 模型: 不声明 protocolKind，透传（由 runtime 处理）" classname="model-capability-filter" time="0.000018" file="tests/llm/provider-conformance.test.ts" line="247" assertions="3" />
+    </testsuite>
+    <testsuite name="model-params-catalog — 协议能力字段" file="tests/llm/provider-conformance.test.ts" line="265" tests="6" assertions="18" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="o3 声明了完整的协议能力" classname="model-params-catalog — 协议能力字段" time="0.000027" file="tests/llm/provider-conformance.test.ts" line="266" assertions="6" />
+      <testcase name="o1 声明了 o-series 协议" classname="model-params-catalog — 协议能力字段" time="0.000018" file="tests/llm/provider-conformance.test.ts" line="276" assertions="2" />
+      <testcase name="o4-mini 声明了 o-series 协议" classname="model-params-catalog — 协议能力字段" time="0.000015" file="tests/llm/provider-conformance.test.ts" line="282" assertions="3" />
+      <testcase name="claude-opus-4-8 声明了 anthropic-native 协议" classname="model-params-catalog — 协议能力字段" time="0.000014" file="tests/llm/provider-conformance.test.ts" line="289" assertions="3" />
+      <testcase name="deepseek-v4-pro 不声明 protocolKind（由 runtime 推断）" classname="model-params-catalog — 协议能力字段" time="0.000014" file="tests/llm/provider-conformance.test.ts" line="297" assertions="2" />
+      <testcase name="gpt-4o 不声明 protocolKind（标准模型无特殊处理）" classname="model-params-catalog — 协议能力字段" time="0.000012" file="tests/llm/provider-conformance.test.ts" line="303" assertions="2" />
+    </testsuite>
+    <testsuite name="effort.ts — catalog protocolKind 优先于 runtime 推断" file="tests/llm/provider-conformance.test.ts" line="312" tests="6" assertions="16" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="o3 通过 catalog.protocolKind 识别为 o-series" classname="effort.ts — catalog protocolKind 优先于 runtime 推断" time="0.000065" file="tests/llm/provider-conformance.test.ts" line="313" assertions="3" />
+      <testcase name="o4-mini 通过 catalog.protocolKind 识别为 o-series" classname="effort.ts — catalog protocolKind 优先于 runtime 推断" time="0.000018" file="tests/llm/provider-conformance.test.ts" line="324" assertions="2" />
+      <testcase name="claude-opus-4-8 通过 catalog.protocolKind 识别为 anthropic-native" classname="effort.ts — catalog protocolKind 优先于 runtime 推断" time="0.000014" file="tests/llm/provider-conformance.test.ts" line="334" assertions="4" />
+      <testcase name="deepseek-v4-pro 无 catalog.protocolKind，走 runtime 推断 → deepseek-openai" classname="effort.ts — catalog protocolKind 优先于 runtime 推断" time="0.000033" file="tests/llm/provider-conformance.test.ts" line="345" assertions="3" />
+      <testcase name="deepseek-v4-pro + Anthropic 端点 → deepseek-anthropic" classname="effort.ts — catalog protocolKind 优先于 runtime 推断" time="0.000013" file="tests/llm/provider-conformance.test.ts" line="356" assertions="2" />
+      <testcase name="未知模型走 unknown 兜底" classname="effort.ts — catalog protocolKind 优先于 runtime 推断" time="0.000041" file="tests/llm/provider-conformance.test.ts" line="366" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/router-mock-integration.test.ts" file="tests/llm/router-mock-integration.test.ts" tests="9" assertions="27" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="rtr_009 — mock-503 触发 RetryableError" file="tests/llm/router-mock-integration.test.ts" line="40" tests="1" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="第 1 次调用即抛 RetryableError(overloaded), requestCount=1" classname="rtr_009 — mock-503 触发 RetryableError" time="0.000231" file="tests/llm/router-mock-integration.test.ts" line="41" assertions="4" />
+    </testsuite>
+    <testsuite name="rtr_010 — mock-rate-limit 携带 retryAfterMs" file="tests/llm/router-mock-integration.test.ts" line="58" tests="1" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="RetryableError.reason=rate_limit + retryAfterMs 默认 1000" classname="rtr_010 — mock-rate-limit 携带 retryAfterMs" time="0.000128" file="tests/llm/router-mock-integration.test.ts" line="59" assertions="4" />
+    </testsuite>
+    <testsuite name="rtr_011 — mock-503-after-2 半路故障" file="tests/llm/router-mock-integration.test.ts" line="76" tests="2" assertions="11" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="前 2 次成功 message_stop, 第 3 次抛 overloaded, requestCount 单调" classname="rtr_011 — mock-503-after-2 半路故障" time="0.000138" file="tests/llm/router-mock-integration.test.ts" line="77" assertions="7" />
+      <testcase name="ProviderRegistry 缓存同 provider 名为同一实例 (跨 getProvider() 计数累加)" classname="rtr_011 — mock-503-after-2 半路故障" time="0.000104" file="tests/llm/router-mock-integration.test.ts" line="99" assertions="4" />
+    </testsuite>
+    <testsuite name="rtr_012 — mock-503 失败前不发任何 stream event" file="tests/llm/router-mock-integration.test.ts" line="118" tests="2" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="503 抛错前 events_before_throw_length === 0 (流式协议干净)" classname="rtr_012 — mock-503 失败前不发任何 stream event" time="0.000108" file="tests/llm/router-mock-integration.test.ts" line="119" assertions="3" />
+      <testcase name="rate_limit / timeout 同样不污染流" classname="rtr_012 — mock-503 失败前不发任何 stream event" time="0.000196" file="tests/llm/router-mock-integration.test.ts" line="137" assertions="2" />
+    </testsuite>
+    <testsuite name="rtr_013 — 未知 provider 抛错" file="tests/llm/router-mock-integration.test.ts" line="150" tests="3" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="Config.provider=&quot;weird_provider_xyz&quot; 时 getProvider() 同步抛&quot;未知的 Provider&quot;" classname="rtr_013 — 未知 provider 抛错" time="0.000054" file="tests/llm/router-mock-integration.test.ts" line="151" assertions="1" />
+      <testcase name="空字符串 provider 也抛错" classname="rtr_013 — 未知 provider 抛错" time="0.000026" file="tests/llm/router-mock-integration.test.ts" line="156" assertions="1" />
+      <testcase name="mock-* 前缀但奇怪后缀不抛错 (走 ok 默认), 因为 mock-* 路由优先于 anthropic/openai/ollama 严格枚举" classname="rtr_013 — 未知 provider 抛错" time="0.00002" file="tests/llm/router-mock-integration.test.ts" line="161" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/sanitize-unicode.test.ts" file="tests/llm/sanitize-unicode.test.ts" tests="9" assertions="17" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="sanitizeStrings" file="tests/llm/sanitize-unicode.test.ts" line="4" tests="9" assertions="17" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="空字符串不变" classname="sanitizeStrings" time="0.000008" file="tests/llm/sanitize-unicode.test.ts" line="5" assertions="1" />
+      <testcase name="纯 ASCII 字符串不变" classname="sanitizeStrings" time="0.000012" file="tests/llm/sanitize-unicode.test.ts" line="9" assertions="1" />
+      <testcase name="合法 emoji（完整 surrogate pair）保留" classname="sanitizeStrings" time="0.00001" file="tests/llm/sanitize-unicode.test.ts" line="13" assertions="1" />
+      <testcase name="孤立高位 surrogate → U+FFFD" classname="sanitizeStrings" time="0.000667" file="tests/llm/sanitize-unicode.test.ts" line="18" assertions="1" />
+      <testcase name="孤立低位 surrogate → U+FFFD" classname="sanitizeStrings" time="0.000022" file="tests/llm/sanitize-unicode.test.ts" line="22" assertions="1" />
+      <testcase name="混合：正常字符 + 孤立 + 完整 pair" classname="sanitizeStrings" time="0.000013" file="tests/llm/sanitize-unicode.test.ts" line="26" assertions="1" />
+      <testcase name="嵌套对象中所有字符串递归清理" classname="sanitizeStrings" time="0.000057" file="tests/llm/sanitize-unicode.test.ts" line="32" assertions="8" />
+      <testcase name="JSON.stringify 输出可被解析" classname="sanitizeStrings" time="0.000026" file="tests/llm/sanitize-unicode.test.ts" line="52" assertions="1" />
+      <testcase name="原始对象不被修改（不可变）" classname="sanitizeStrings" time="0.000032" file="tests/llm/sanitize-unicode.test.ts" line="60" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/stream-level-error.test.ts" file="tests/llm/stream-level-error.test.ts" tests="10" assertions="29" failures="2" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="T6 — classifyStreamError 结构化归类" file="tests/llm/stream-level-error.test.ts" line="52" tests="5" assertions="14" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="overloaded_error（消息无关键词）→ StreamLevelError overloaded 可重试" classname="T6 — classifyStreamError 结构化归类" time="0.000071" file="tests/llm/stream-level-error.test.ts" line="53" assertions="6" />
+      <testcase name="rate_limit_error → StreamLevelError rate_limit 可重试" classname="T6 — classifyStreamError 结构化归类" time="0.000093" file="tests/llm/stream-level-error.test.ts" line="63" assertions="2" />
+      <testcase name="authentication_error → TerminalError（不重试）" classname="T6 — classifyStreamError 结构化归类" time="0.000031" file="tests/llm/stream-level-error.test.ts" line="69" assertions="2" />
+      <testcase name="无 type 但消息含 overloaded 关键词 → 回退文本匹配为 overloaded" classname="T6 — classifyStreamError 结构化归类" time="0.000117" file="tests/llm/stream-level-error.test.ts" line="75" assertions="2" />
+      <testcase name="无 type 且消息无关键词 → 兜底 server_error 可重试" classname="T6 — classifyStreamError 结构化归类" time="0.000027" file="tests/llm/stream-level-error.test.ts" line="81" assertions="2" />
+    </testsuite>
+    <testsuite name="T6 — StreamEvent error 携带结构化字段" file="tests/llm/stream-level-error.test.ts" line="88" tests="1" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="StreamLevelError 保留 provider/statusCode 供归因" classname="T6 — StreamEvent error 携带结构化字段" time="0.000014" file="tests/llm/stream-level-error.test.ts" line="89" assertions="5" />
+    </testsuite>
+    <testsuite name="T6 — 首事件即 error 的端到端重试/降级路径" file="tests/llm/stream-level-error.test.ts" line="109" tests="4" assertions="10" failures="2" skipped="0" time="10.007" hostname="718b8ab21c28">
+      <testcase name="Anthropic 200 + overloaded_error 作为首个事件 → 重试耗尽后降级到备用 provider" classname="T6 — 首事件即 error 的端到端重试/降级路径" time="5.003994" file="tests/llm/stream-level-error.test.ts" line="110" assertions="0">
+        <failure type="TimeoutError" />
+      </testcase>
+      <testcase name="OpenAI 200 + error chunk 作为首个事件 → 可重试错误驱动流式重试" classname="T6 — 首事件即 error 的端到端重试/降级路径" time="5.002773" file="tests/llm/stream-level-error.test.ts" line="135" assertions="3">
+        <failure type="TimeoutError" />
+      </testcase>
+      <testcase name="首事件即 authentication_error → 判定 Terminal，直接降级不重试" classname="T6 — 首事件即 error 的端到端重试/降级路径" time="0.001441" file="tests/llm/stream-level-error.test.ts" line="159" assertions="3" />
+      <testcase name="正常首事件（content_block_delta）→ 正常消费，不误触发重试" classname="T6 — 首事件即 error 的端到端重试/降级路径" time="0.001018" file="tests/llm/stream-level-error.test.ts" line="183" assertions="4" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/quota.test.ts" file="tests/llm/quota.test.ts" tests="21" assertions="43" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="QuotaManager" file="tests/llm/quota.test.ts" line="8" tests="21" assertions="43" failures="0" skipped="0" time="0.001" hostname="718b8ab21c28">
+      <testcase name="低于 50% 不触发告警" classname="QuotaManager" time="0.001654" file="tests/llm/quota.test.ts" line="10" assertions="1" />
+      <testcase name="50% 触发 info 告警" classname="QuotaManager" time="0.000123" file="tests/llm/quota.test.ts" line="15" assertions="3" />
+      <testcase name="80% 触发 warning 告警" classname="QuotaManager" time="0.000102" file="tests/llm/quota.test.ts" line="23" assertions="2" />
+      <testcase name="95% 触发 critical 告警" classname="QuotaManager" time="0.000047" file="tests/llm/quota.test.ts" line="30" assertions="2" />
+      <testcase name="100% 触发 exceeded 告警" classname="QuotaManager" time="0.000074" file="tests/llm/quota.test.ts" line="37" assertions="3" />
+      <testcase name="超过 100% 也触发 exceeded" classname="QuotaManager" time="0.000038" file="tests/llm/quota.test.ts" line="45" assertions="2" />
+      <testcase name="同级别不重复告警" classname="QuotaManager" time="0.000091" file="tests/llm/quota.test.ts" line="52" assertions="3" />
+      <testcase name="级别升级时触发新告警" classname="QuotaManager" time="0.000074" file="tests/llm/quota.test.ts" line="64" assertions="5" />
+      <testcase name="isExceeded 正确判断" classname="QuotaManager" time="0.000081" file="tests/llm/quota.test.ts" line="81" assertions="3" />
+      <testcase name="costLimit 为 0 时不触发" classname="QuotaManager" time="0.000044" file="tests/llm/quota.test.ts" line="88" assertions="2" />
+      <testcase name="告警消息包含金额信息" classname="QuotaManager" time="0.000065" file="tests/llm/quota.test.ts" line="94" assertions="2" />
+      <testcase name="数字参数向后兼容" classname="QuotaManager" time="0.000054" file="tests/llm/quota.test.ts" line="102" assertions="2" />
+      <testcase name="QuotaConfig 对象参数" classname="QuotaManager" time="0.000048" file="tests/llm/quota.test.ts" line="108" assertions="2" />
+      <testcase name="QuotaConfig 无 costLimit 时不触发成本告警" classname="QuotaManager" time="0.000059" file="tests/llm/quota.test.ts" line="114" assertions="2" />
+      <testsuite name="速率限制" file="tests/llm/quota.test.ts" line="121" tests="7" assertions="9" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="未配置 RPM/TPM 时 checkRateLimit 返回 0" classname="速率限制 &amp;gt; QuotaManager" time="0.000182" file="tests/llm/quota.test.ts" line="122" assertions="1" />
+        <testcase name="RPM 未达上限时返回 0" classname="速率限制 &amp;gt; QuotaManager" time="0.000261" file="tests/llm/quota.test.ts" line="127" assertions="1" />
+        <testcase name="RPM 达到上限时返回等待时间" classname="速率限制 &amp;gt; QuotaManager" time="0.00005" file="tests/llm/quota.test.ts" line="134" assertions="2" />
+        <testcase name="TPM 未达上限时返回 0" classname="速率限制 &amp;gt; QuotaManager" time="0.000136" file="tests/llm/quota.test.ts" line="145" assertions="1" />
+        <testcase name="TPM 达到上限时返回等待时间" classname="速率限制 &amp;gt; QuotaManager" time="0.000057" file="tests/llm/quota.test.ts" line="152" assertions="2" />
+        <testcase name="recordRequest 清理过期记录" classname="速率限制 &amp;gt; QuotaManager" time="0.000069" file="tests/llm/quota.test.ts" line="161" assertions="1" />
+        <testcase name="RPM 和 TPM 同时配置，任一达限即等待" classname="速率限制 &amp;gt; QuotaManager" time="0.000081" file="tests/llm/quota.test.ts" line="174" assertions="1" />
+      </testsuite>
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/errors.test.ts" file="tests/llm/errors.test.ts" tests="42" assertions="90" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="classifyError" file="tests/llm/errors.test.ts" line="18" tests="24" assertions="50" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testsuite name="Terminal 错误" file="tests/llm/errors.test.ts" line="20" tests="8" assertions="16" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="401 认证失败" classname="Terminal 错误 &amp;gt; classifyError" time="0.000098" file="tests/llm/errors.test.ts" line="21" assertions="2" />
+        <testcase name="invalid api key" classname="Terminal 错误 &amp;gt; classifyError" time="0.00007" file="tests/llm/errors.test.ts" line="27" assertions="2" />
+        <testcase name="authentication 失败" classname="Terminal 错误 &amp;gt; classifyError" time="0.000049" file="tests/llm/errors.test.ts" line="33" assertions="2" />
+        <testcase name="404 模型不存在" classname="Terminal 错误 &amp;gt; classifyError" time="0.000074" file="tests/llm/errors.test.ts" line="39" assertions="2" />
+        <testcase name="not found" classname="Terminal 错误 &amp;gt; classifyError" time="0.000051" file="tests/llm/errors.test.ts" line="45" assertions="2" />
+        <testcase name="content_policy 拒绝" classname="Terminal 错误 &amp;gt; classifyError" time="0.000034" file="tests/llm/errors.test.ts" line="51" assertions="2" />
+        <testcase name="safety 拒绝" classname="Terminal 错误 &amp;gt; classifyError" time="0.000023" file="tests/llm/errors.test.ts" line="57" assertions="2" />
+        <testcase name="400 无效请求" classname="Terminal 错误 &amp;gt; classifyError" time="0.000167" file="tests/llm/errors.test.ts" line="63" assertions="2" />
+      </testsuite>
+      <testsuite name="Retryable 错误" file="tests/llm/errors.test.ts" line="71" tests="9" assertions="19" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="429 限流" classname="Retryable 错误 &amp;gt; classifyError" time="0.000137" file="tests/llm/errors.test.ts" line="72" assertions="2" />
+        <testcase name="rate_limit 错误" classname="Retryable 错误 &amp;gt; classifyError" time="0.000035" file="tests/llm/errors.test.ts" line="78" assertions="2" />
+        <testcase name="429 带 retry-after 解析" classname="Retryable 错误 &amp;gt; classifyError" time="0.000051" file="tests/llm/errors.test.ts" line="84" assertions="3" />
+        <testcase name="overloaded 过载" classname="Retryable 错误 &amp;gt; classifyError" time="0.000026" file="tests/llm/errors.test.ts" line="91" assertions="2" />
+        <testcase name="503 过载" classname="Retryable 错误 &amp;gt; classifyError" time="0.00003" file="tests/llm/errors.test.ts" line="97" assertions="2" />
+        <testcase name="502 服务端错误" classname="Retryable 错误 &amp;gt; classifyError" time="0.000056" file="tests/llm/errors.test.ts" line="103" assertions="2" />
+        <testcase name="500 服务端错误" classname="Retryable 错误 &amp;gt; classifyError" time="0.000031" file="tests/llm/errors.test.ts" line="109" assertions="2" />
+        <testcase name="timeout 超时" classname="Retryable 错误 &amp;gt; classifyError" time="0.000055" file="tests/llm/errors.test.ts" line="115" assertions="2" />
+        <testcase name="ETIMEDOUT 超时" classname="Retryable 错误 &amp;gt; classifyError" time="0.000236" file="tests/llm/errors.test.ts" line="121" assertions="2" />
+      </testsuite>
+      <testsuite name="网络错误码" file="tests/llm/errors.test.ts" line="129" tests="5" assertions="10" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="ECONNRESET" classname="网络错误码 &amp;gt; classifyError" time="0.000101" file="tests/llm/errors.test.ts" line="130" assertions="2" />
+        <testcase name="ECONNREFUSED" classname="网络错误码 &amp;gt; classifyError" time="0.000058" file="tests/llm/errors.test.ts" line="138" assertions="2" />
+        <testcase name="ENOTFOUND" classname="网络错误码 &amp;gt; classifyError" time="0.000049" file="tests/llm/errors.test.ts" line="146" assertions="2" />
+        <testcase name="EPIPE" classname="网络错误码 &amp;gt; classifyError" time="0.000027" file="tests/llm/errors.test.ts" line="154" assertions="2" />
+        <testcase name="EAI_AGAIN" classname="网络错误码 &amp;gt; classifyError" time="0.000045" file="tests/llm/errors.test.ts" line="162" assertions="2" />
+      </testsuite>
+      <testsuite name="未知错误" file="tests/llm/errors.test.ts" line="172" tests="2" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="无法分类的 Error 返回原始错误" classname="未知错误 &amp;gt; classifyError" time="0.000043" file="tests/llm/errors.test.ts" line="173" assertions="3" />
+        <testcase name="非 Error 对象转为 Error" classname="未知错误 &amp;gt; classifyError" time="0.000037" file="tests/llm/errors.test.ts" line="181" assertions="2" />
+      </testsuite>
+    </testsuite>
+    <testsuite name="getNetworkErrorCode" file="tests/llm/errors.test.ts" line="189" tests="5" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="直接从 error.code 提取" classname="getNetworkErrorCode" time="0.000042" file="tests/llm/errors.test.ts" line="190" assertions="1" />
+      <testcase name="从 cause 链中提取（深度 2）" classname="getNetworkErrorCode" time="0.000039" file="tests/llm/errors.test.ts" line="196" assertions="1" />
+      <testcase name="从 cause 链中提取（深度 3）" classname="getNetworkErrorCode" time="0.000032" file="tests/llm/errors.test.ts" line="203" assertions="1" />
+      <testcase name="超过 5 层深度返回 undefined" classname="getNetworkErrorCode" time="0.000054" file="tests/llm/errors.test.ts" line="211" assertions="1" />
+      <testcase name="无 code 返回 undefined" classname="getNetworkErrorCode" time="0.00003" file="tests/llm/errors.test.ts" line="221" assertions="3" />
+    </testsuite>
+    <testsuite name="StreamValidationError" file="tests/llm/errors.test.ts" line="228" tests="3" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="创建 empty_response 错误" classname="StreamValidationError" time="0.000099" file="tests/llm/errors.test.ts" line="229" assertions="3" />
+      <testcase name="创建 no_finish_reason 错误" classname="StreamValidationError" time="0.000026" file="tests/llm/errors.test.ts" line="236" assertions="1" />
+      <testcase name="创建 malformed_tool_call 错误" classname="StreamValidationError" time="0.000019" file="tests/llm/errors.test.ts" line="241" assertions="1" />
+    </testsuite>
+    <testsuite name="isAbortError" file="tests/llm/errors.test.ts" line="247" tests="10" assertions="28" failures="0" skipped="0" time="0.024" hostname="718b8ab21c28">
+      <testcase name="识别 RequestAbortedError" classname="isAbortError" time="0.000044" file="tests/llm/errors.test.ts" line="248" assertions="1" />
+      <testcase name="识别 DOM AbortError" classname="isAbortError" time="0.000033" file="tests/llm/errors.test.ts" line="252" assertions="1" />
+      <testcase name="识别常见 abort 文本" classname="isAbortError" time="0.000061" file="tests/llm/errors.test.ts" line="256" assertions="2" />
+      <testcase name="识别 @anthropic-ai/sdk 的 APIUserAbortError 文案（回归：流超时 abort 必须被识别）" classname="isAbortError" time="0.000053" file="tests/llm/errors.test.ts" line="261" assertions="1" />
+      <testcase name="通过 name=APIUserAbortError 识别 abort 对象" classname="isAbortError" time="0.000037" file="tests/llm/errors.test.ts" line="268" assertions="1" />
+      <testcase name="识别裸字符串 abort reason（回归：ESC 取消崩溃复发根因）" classname="isAbortError" time="0.000048" file="tests/llm/errors.test.ts" line="272" assertions="4" />
+      <testcase name="识别带 reason 的 AbortSignal / 对象" classname="isAbortError" time="0.000122" file="tests/llm/errors.test.ts" line="283" assertions="2" />
+      <testcase name="ABORT_REASONS 覆盖所有 abort 调用点（防漂移哨兵）" classname="isAbortError" time="0.00019" file="tests/llm/errors.test.ts" line="290" assertions="12" />
+      <testcase name="机械防漂移：src/ 中所有 .abort(&quot;字面量&quot;) 的 reason 必须已登记 ABORT_REASONS" classname="isAbortError" time="0.024811" file="tests/llm/errors.test.ts" line="318" assertions="1" />
+      <testcase name="非 abort 错误返回 false" classname="isAbortError" time="0.000138" file="tests/llm/errors.test.ts" line="373" assertions="3" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/stream-lifecycle.test.ts" file="tests/llm/stream-lifecycle.test.ts" tests="10" assertions="236" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="T7 — StreamLifecycle Layer 3 overall timeout（新增层）" file="tests/llm/stream-lifecycle.test.ts" line="60" tests="2" assertions="9" failures="0" skipped="0" time="0.285" hostname="718b8ab21c28">
+      <testcase name="持续吐有效内容但永不结束的流：content progress 不触发（一直被 reset），overall 触发中断" classname="T7 — StreamLifecycle Layer 3 overall timeout（新增层）" time="0.163157" file="tests/llm/stream-lifecycle.test.ts" line="61" assertions="5" />
+      <testcase name="正常流：三层都不触发，正常走完 + stream_completed" classname="T7 — StreamLifecycle Layer 3 overall timeout（新增层）" time="0.12204" file="tests/llm/stream-lifecycle.test.ts" line="95" assertions="4" />
+    </testsuite>
+    <testsuite name="T7 — 三层超时优先级" file="tests/llm/stream-lifecycle.test.ts" line="119" tests="2" assertions="6" failures="0" skipped="0" time="5.119" hostname="718b8ab21c28">
+      <testcase name="只发 ping：content progress 先于 overall 触发（阈值更小）" classname="T7 — 三层超时优先级" time="0.115602" file="tests/llm/stream-lifecycle.test.ts" line="120" assertions="2" />
+      <testcase name="彻底静默的流：idle 先触发" classname="T7 — 三层超时优先级" time="5.004425" file="tests/llm/stream-lifecycle.test.ts" line="142" assertions="4" />
+    </testsuite>
+    <testsuite name="T7 — getSnapshot 实时状态" file="tests/llm/stream-lifecycle.test.ts" line="171" tests="1" assertions="8" failures="0" skipped="0" time="0.096" hostname="718b8ab21c28">
+      <testcase name="快照反映事件计数 / 首事件 / 超时层" classname="T7 — getSnapshot 实时状态" time="0.096023" file="tests/llm/stream-lifecycle.test.ts" line="172" assertions="8" />
+    </testsuite>
+    <testsuite name="T7 — LIFECYCLE_PRESETS 阈值分级" file="tests/llm/stream-lifecycle.test.ts" line="201" tests="1" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="mainLoop &gt; subAgent &gt; sideCall（idle / content / overall 单调递减）" classname="T7 — LIFECYCLE_PRESETS 阈值分级" time="0.000097" file="tests/llm/stream-lifecycle.test.ts" line="202" assertions="6" />
+    </testsuite>
+    <testsuite name="T7 — signal 穿透" file="tests/llm/stream-lifecycle.test.ts" line="213" tests="1" assertions="2" failures="0" skipped="0" time="0.065" hostname="718b8ab21c28">
+      <testcase name="外部 signal abort 后流提前结束（不再 yield 新事件）" classname="T7 — signal 穿透" time="0.06546" file="tests/llm/stream-lifecycle.test.ts" line="214" assertions="2" />
+    </testsuite>
+    <testsuite name="T7 — streamLifecycle 便捷函数（无 getSnapshot）" file="tests/llm/stream-lifecycle.test.ts" line="242" tests="1" assertions="2" failures="0" skipped="0" time="0.052" hostname="718b8ab21c28">
+      <testcase name="与 createStreamLifecycle().guard 行为一致：正常流走完" classname="T7 — streamLifecycle 便捷函数（无 getSnapshot）" time="0.052434" file="tests/llm/stream-lifecycle.test.ts" line="243" assertions="2" />
+    </testsuite>
+    <testsuite name="T7.11 — StreamLifecycle 性能基准（passthrough 开销 + 定时器不泄漏）" file="tests/llm/stream-lifecycle.test.ts" line="261" tests="2" assertions="203" failures="0" skipped="0" time="0.025" hostname="718b8ab21c28">
+      <testcase name="包装 10k 事件的额外开销可忽略（相对裸迭代 &lt; 50ms 且 &lt; 3x）" classname="T7.11 — StreamLifecycle 性能基准（passthrough 开销 + 定时器不泄漏）" time="0.023675" file="tests/llm/stream-lifecycle.test.ts" line="269" assertions="3" />
+      <testcase name="大量短流反复创建/销毁不泄漏定时器（100 个流全部正常完成且无 open handle 累积）" classname="T7.11 — StreamLifecycle 性能基准（passthrough 开销 + 定时器不泄漏）" time="0.002224" file="tests/llm/stream-lifecycle.test.ts" line="304" assertions="200" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/mock-provider.test.ts" file="tests/llm/mock-provider.test.ts" tests="29" assertions="57" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="MockProvider — 配置校验" file="tests/llm/mock-provider.test.ts" line="51" tests="4" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="name 必填" classname="MockProvider — 配置校验" time="0.000099" file="tests/llm/mock-provider.test.ts" line="52" assertions="1" />
+      <testcase name="未知 failPattern 抛错" classname="MockProvider — 配置校验" time="0.000065" file="tests/llm/mock-provider.test.ts" line="56" assertions="1" />
+      <testcase name="createMockProvider 工厂等价于 new" classname="MockProvider — 配置校验" time="0.000036" file="tests/llm/mock-provider.test.ts" line="62" assertions="1" />
+      <testcase name="capabilities() 返回流式 + tools 默认 true" classname="MockProvider — 配置校验" time="0.000042" file="tests/llm/mock-provider.test.ts" line="67" assertions="2" />
+    </testsuite>
+    <testsuite name="MockProvider — failPattern: ok (永不失败)" file="tests/llm/mock-provider.test.ts" line="75" tests="2" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="第 1 次调用成功" classname="MockProvider — failPattern: ok (永不失败)" time="0.000243" file="tests/llm/mock-provider.test.ts" line="76" assertions="3" />
+      <testcase name="连续多次调用都成功" classname="MockProvider — failPattern: ok (永不失败)" time="0.000136" file="tests/llm/mock-provider.test.ts" line="93" assertions="1" />
+    </testsuite>
+    <testsuite name="MockProvider — failPattern: 503" file="tests/llm/mock-provider.test.ts" line="102" tests="3" assertions="11" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="failAfterRequests=0: 第 1 次直接 503" classname="MockProvider — failPattern: 503" time="0.000197" file="tests/llm/mock-provider.test.ts" line="103" assertions="3" />
+      <testcase name="failAfterRequests=3: 前 3 次成功, 第 4 次 503" classname="MockProvider — failPattern: 503" time="0.000182" file="tests/llm/mock-provider.test.ts" line="109" assertions="7" />
+      <testcase name="failAfterRequests=999: 短回合内不进失败分支" classname="MockProvider — failPattern: 503" time="0.000066" file="tests/llm/mock-provider.test.ts" line="124" assertions="1" />
+    </testsuite>
+    <testsuite name="MockProvider — failPattern: rate_limit" file="tests/llm/mock-provider.test.ts" line="137" tests="3" assertions="8" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="第 1 次直接 RateLimit + retryAfterMs 默认 1000" classname="MockProvider — failPattern: rate_limit" time="0.000083" file="tests/llm/mock-provider.test.ts" line="138" assertions="3" />
+      <testcase name="自定义 retryAfterMs 透传" classname="MockProvider — failPattern: rate_limit" time="0.000059" file="tests/llm/mock-provider.test.ts" line="147" assertions="3" />
+      <testcase name="failAfterRequests=2: 前 2 次成功后才限流" classname="MockProvider — failPattern: rate_limit" time="0.000163" file="tests/llm/mock-provider.test.ts" line="160" assertions="2" />
+    </testsuite>
+    <testsuite name="MockProvider — failPattern: timeout" file="tests/llm/mock-provider.test.ts" line="172" tests="2" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="第 1 次直接 timeout" classname="MockProvider — failPattern: timeout" time="0.000067" file="tests/llm/mock-provider.test.ts" line="173" assertions="2" />
+      <testcase name="failAfterRequests=1: 前 1 次成功后才 timeout" classname="MockProvider — failPattern: timeout" time="0.000082" file="tests/llm/mock-provider.test.ts" line="178" assertions="2" />
+    </testsuite>
+    <testsuite name="MockProvider — abort signal 优先级" file="tests/llm/mock-provider.test.ts" line="189" tests="2" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="已 aborted 的 signal 抛 AbortError 而非 RetryableError" classname="MockProvider — abort signal 优先级" time="0.000126" file="tests/llm/mock-provider.test.ts" line="190" assertions="3" />
+      <testcase name="ok 模式 + 已 aborted signal: 仍然成功流式 (不主动 abort 是 caller 责任)" classname="MockProvider — abort signal 优先级" time="0.00007" file="tests/llm/mock-provider.test.ts" line="208" assertions="1" />
+    </testsuite>
+    <testsuite name="MockProvider — reset / 复用契约" file="tests/llm/mock-provider.test.ts" line="218" tests="1" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="reset 后 failAfterRequests 重新生效" classname="MockProvider — reset / 复用契约" time="0.000061" file="tests/llm/mock-provider.test.ts" line="219" assertions="3" />
+    </testsuite>
+    <testsuite name="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" file="tests/llm/mock-provider.test.ts" line="236" tests="12" assertions="18" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="pattern=ok failAfterRequests=0 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000092" file="tests/llm/mock-provider.test.ts" line="243" assertions="1" />
+      <testcase name="pattern=ok failAfterRequests=2 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000014" file="tests/llm/mock-provider.test.ts" line="243" assertions="1" />
+      <testcase name="pattern=ok failAfterRequests=999 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000008" file="tests/llm/mock-provider.test.ts" line="243" assertions="1" />
+      <testcase name="pattern=503 failAfterRequests=0 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000046" file="tests/llm/mock-provider.test.ts" line="243" assertions="2" />
+      <testcase name="pattern=503 failAfterRequests=2 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000021" file="tests/llm/mock-provider.test.ts" line="243" assertions="2" />
+      <testcase name="pattern=503 failAfterRequests=999 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000022" file="tests/llm/mock-provider.test.ts" line="243" assertions="1" />
+      <testcase name="pattern=rate_limit failAfterRequests=0 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000017" file="tests/llm/mock-provider.test.ts" line="243" assertions="2" />
+      <testcase name="pattern=rate_limit failAfterRequests=2 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000015" file="tests/llm/mock-provider.test.ts" line="243" assertions="2" />
+      <testcase name="pattern=rate_limit failAfterRequests=999 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.00001" file="tests/llm/mock-provider.test.ts" line="243" assertions="1" />
+      <testcase name="pattern=timeout failAfterRequests=0 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000009" file="tests/llm/mock-provider.test.ts" line="243" assertions="2" />
+      <testcase name="pattern=timeout failAfterRequests=2 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000012" file="tests/llm/mock-provider.test.ts" line="243" assertions="2" />
+      <testcase name="pattern=timeout failAfterRequests=999 行为符合预期" classname="MockProvider — 4 × 3 调用次序矩阵 (ADR-021 §2.1 单测要求)" time="0.000009" file="tests/llm/mock-provider.test.ts" line="243" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/capabilities.test.ts" file="tests/llm/capabilities.test.ts" tests="28" assertions="32" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="Provider capabilities" file="tests/llm/capabilities.test.ts" line="14" tests="28" assertions="32" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testsuite name="AnthropicProvider" file="tests/llm/capabilities.test.ts" line="15" tests="7" assertions="8" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="实现了 capabilities 方法" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.000013" file="tests/llm/capabilities.test.ts" line="18" assertions="2" />
+        <testcase name="支持 streaming" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.000024" file="tests/llm/capabilities.test.ts" line="23" assertions="1" />
+        <testcase name="支持 tools" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.00001" file="tests/llm/capabilities.test.ts" line="27" assertions="1" />
+        <testcase name="支持 thinking（Extended Thinking）" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.000007" file="tests/llm/capabilities.test.ts" line="31" assertions="1" />
+        <testcase name="支持 vision" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.000006" file="tests/llm/capabilities.test.ts" line="35" assertions="1" />
+        <testcase name="支持 promptCaching" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.000005" file="tests/llm/capabilities.test.ts" line="39" assertions="1" />
+        <testcase name="支持 parallelToolCalls" classname="AnthropicProvider &amp;gt; Provider capabilities" time="0.000007" file="tests/llm/capabilities.test.ts" line="43" assertions="1" />
+      </testsuite>
+      <testsuite name="OpenAIProvider" file="tests/llm/capabilities.test.ts" line="48" tests="7" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="实现了 capabilities 方法" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000007" file="tests/llm/capabilities.test.ts" line="51" assertions="1" />
+        <testcase name="支持 streaming" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000005" file="tests/llm/capabilities.test.ts" line="55" assertions="1" />
+        <testcase name="支持 tools" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000005" file="tests/llm/capabilities.test.ts" line="59" assertions="1" />
+        <testcase name="不支持 thinking" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000005" file="tests/llm/capabilities.test.ts" line="63" assertions="1" />
+        <testcase name="vision 如实声明 false（无图片输入管线，不虚标）" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000004" file="tests/llm/capabilities.test.ts" line="67" assertions="1" />
+        <testcase name="不支持 promptCaching" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000004" file="tests/llm/capabilities.test.ts" line="71" assertions="1" />
+        <testcase name="支持 parallelToolCalls" classname="OpenAIProvider &amp;gt; Provider capabilities" time="0.000004" file="tests/llm/capabilities.test.ts" line="75" assertions="1" />
+      </testsuite>
+      <testsuite name="OllamaProvider" file="tests/llm/capabilities.test.ts" line="80" tests="6" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="实现了 capabilities 方法" classname="OllamaProvider &amp;gt; Provider capabilities" time="0.000017" file="tests/llm/capabilities.test.ts" line="83" assertions="1" />
+        <testcase name="支持 streaming" classname="OllamaProvider &amp;gt; Provider capabilities" time="0.000017" file="tests/llm/capabilities.test.ts" line="87" assertions="1" />
+        <testcase name="不支持 thinking" classname="OllamaProvider &amp;gt; Provider capabilities" time="0.000013" file="tests/llm/capabilities.test.ts" line="91" assertions="1" />
+        <testcase name="不支持 vision" classname="OllamaProvider &amp;gt; Provider capabilities" time="0.00001" file="tests/llm/capabilities.test.ts" line="95" assertions="1" />
+        <testcase name="不支持 promptCaching" classname="OllamaProvider &amp;gt; Provider capabilities" time="0.000006" file="tests/llm/capabilities.test.ts" line="99" assertions="1" />
+        <testcase name="不支持 parallelToolCalls" classname="OllamaProvider &amp;gt; Provider capabilities" time="0.000008" file="tests/llm/capabilities.test.ts" line="103" assertions="1" />
+      </testsuite>
+      <testsuite name="getCapabilities 辅助函数" file="tests/llm/capabilities.test.ts" line="108" tests="2" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="有 capabilities 方法时返回实际能力" classname="getCapabilities 辅助函数 &amp;gt; Provider capabilities" time="0.000045" file="tests/llm/capabilities.test.ts" line="109" assertions="2" />
+        <testcase name="无 capabilities 方法时返回默认能力" classname="getCapabilities 辅助函数 &amp;gt; Provider capabilities" time="0.000022" file="tests/llm/capabilities.test.ts" line="116" assertions="3" />
+      </testsuite>
+      <testsuite name="DEFAULT_CAPABILITIES" file="tests/llm/capabilities.test.ts" line="131" tests="6" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="streaming 默认 true" classname="DEFAULT_CAPABILITIES &amp;gt; Provider capabilities" time="0.000007" file="tests/llm/capabilities.test.ts" line="132" assertions="1" />
+        <testcase name="tools 默认 true" classname="DEFAULT_CAPABILITIES &amp;gt; Provider capabilities" time="0.000006" file="tests/llm/capabilities.test.ts" line="136" assertions="1" />
+        <testcase name="thinking 默认 false" classname="DEFAULT_CAPABILITIES &amp;gt; Provider capabilities" time="0.000005" file="tests/llm/capabilities.test.ts" line="140" assertions="1" />
+        <testcase name="vision 默认 false" classname="DEFAULT_CAPABILITIES &amp;gt; Provider capabilities" time="0.000006" file="tests/llm/capabilities.test.ts" line="144" assertions="1" />
+        <testcase name="promptCaching 默认 false" classname="DEFAULT_CAPABILITIES &amp;gt; Provider capabilities" time="0.000007" file="tests/llm/capabilities.test.ts" line="148" assertions="1" />
+        <testcase name="parallelToolCalls 默认 true" classname="DEFAULT_CAPABILITIES &amp;gt; Provider capabilities" time="0.000005" file="tests/llm/capabilities.test.ts" line="152" assertions="1" />
+      </testsuite>
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/stream-interrupt-recovery.test.ts" file="tests/llm/stream-interrupt-recovery.test.ts" tests="14" assertions="27" failures="2" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="T9.1 流式中断 &amp; 恢复" file="tests/llm/stream-interrupt-recovery.test.ts" line="114" tests="14" assertions="27" failures="2" skipped="0" time="0" hostname="718b8ab21c28">
+      <testsuite name="场景 1: mid-stream 网络断开 → 连接阶段重试恢复" file="tests/llm/stream-interrupt-recovery.test.ts" line="115" tests="3" assertions="5" failures="2" skipped="0" time="11.98" hostname="718b8ab21c28">
+        <testcase name="ECONNRESET 连接失败 → 重试后成功" classname="场景 1: mid-stream 网络断开 → 连接阶段重试恢复 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="5.006925" file="tests/llm/stream-interrupt-recovery.test.ts" line="116" assertions="0">
+          <failure type="TimeoutError" />
+        </testcase>
+        <testcase name="EPIPE 连接失败 → 禁用 keep-alive 后重试成功" classname="场景 1: mid-stream 网络断开 → 连接阶段重试恢复 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="1.97481" file="tests/llm/stream-interrupt-recovery.test.ts" line="143" assertions="5" />
+        <testcase name="超过最大重试次数 → 尝试 fallback provider" classname="场景 1: mid-stream 网络断开 → 连接阶段重试恢复 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="5.000907" file="tests/llm/stream-interrupt-recovery.test.ts" line="166" assertions="0">
+          <failure type="TimeoutError" />
+        </testcase>
+      </testsuite>
+      <testsuite name="场景 2: mid-stream abort → 资源清理完整" file="tests/llm/stream-interrupt-recovery.test.ts" line="197" tests="2" assertions="3" failures="0" skipped="0" time="0.062" hostname="718b8ab21c28">
+        <testcase name="外部 abort 信号 → 流消费立即终止" classname="场景 2: mid-stream abort → 资源清理完整 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.062065" file="tests/llm/stream-interrupt-recovery.test.ts" line="198" assertions="2" />
+        <testcase name="已 aborted 的 signal 传入 → 立即抛出 RequestAbortedError" classname="场景 2: mid-stream abort → 资源清理完整 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.00066" file="tests/llm/stream-interrupt-recovery.test.ts" line="246" assertions="1" />
+      </testsuite>
+      <testsuite name="场景 3: mid-stream 超时 → timeout 正确分类" file="tests/llm/stream-interrupt-recovery.test.ts" line="273" tests="3" assertions="6" failures="0" skipped="0" time="3.911" hostname="718b8ab21c28">
+        <testcase name="流式整体超时 → 触发 stream timeout abort" classname="场景 3: mid-stream 超时 → timeout 正确分类 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.103222" file="tests/llm/stream-interrupt-recovery.test.ts" line="274" assertions="1" />
+        <testcase name="mid-stream 错误（非 abort）→ 流阶段重试后恢复" classname="场景 3: mid-stream 超时 → timeout 正确分类 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="1.984902" file="tests/llm/stream-interrupt-recovery.test.ts" line="308" assertions="3" />
+        <testcase name="mid-stream stall → stream timeout 后重试从头开始" classname="场景 3: mid-stream 超时 → timeout 正确分类 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="1.824405" file="tests/llm/stream-interrupt-recovery.test.ts" line="336" assertions="2" />
+      </testsuite>
+      <testsuite name="资源清理验证" file="tests/llm/stream-interrupt-recovery.test.ts" line="379" tests="2" assertions="0" failures="0" skipped="0" time="0.189" hostname="718b8ab21c28">
+        <testcase name="正常完成后无定时器泄漏" classname="资源清理验证 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.05295" file="tests/llm/stream-interrupt-recovery.test.ts" line="380" assertions="0" />
+        <testcase name="abort 后无泄漏的 promise rejection" classname="资源清理验证 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.137957" file="tests/llm/stream-interrupt-recovery.test.ts" line="397" assertions="0" />
+      </testsuite>
+      <testsuite name="StreamLifecycle 三层超时中断行为" file="tests/llm/stream-interrupt-recovery.test.ts" line="435" tests="4" assertions="13" failures="0" skipped="0" time="0.63" hostname="718b8ab21c28">
+        <testcase name="idle 超时后流消费停止且 snapshot 标记 timedOut" classname="StreamLifecycle 三层超时中断行为 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.207857" file="tests/llm/stream-interrupt-recovery.test.ts" line="436" assertions="4" />
+        <testcase name="content_progress 超时：ping 续命 idle 但不续命 content" classname="StreamLifecycle 三层超时中断行为 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.105368" file="tests/llm/stream-interrupt-recovery.test.ts" line="465" assertions="3" />
+        <testcase name="overall 超时：持续有内容但超过硬上限" classname="StreamLifecycle 三层超时中断行为 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.113142" file="tests/llm/stream-interrupt-recovery.test.ts" line="496" assertions="3" />
+        <testcase name="signal abort → 立即退出，不触发任何超时" classname="StreamLifecycle 三层超时中断行为 &amp;gt; T9.1 流式中断 &amp;amp; 恢复" time="0.205183" file="tests/llm/stream-interrupt-recovery.test.ts" line="527" assertions="3" />
+      </testsuite>
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/llm/openai.test.ts" file="tests/llm/openai.test.ts" tests="14" assertions="37" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="OpenAI convertMessages" file="tests/llm/openai.test.ts" line="15" tests="7" assertions="19" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="纯文本 user 消息转为字符串 content" classname="OpenAI convertMessages" time="0.000154" file="tests/llm/openai.test.ts" line="18" assertions="1" />
+      <testcase name="纯文本 assistant 消息转为字符串 content" classname="OpenAI convertMessages" time="0.000099" file="tests/llm/openai.test.ts" line="31" assertions="1" />
+      <testcase name="assistant 消息中的 tool_use 提取到顶层 tool_calls" classname="OpenAI convertMessages" time="0.000195" file="tests/llm/openai.test.ts" line="44" assertions="4" />
+      <testcase name="assistant 消息中多个 tool_use 都提取到 tool_calls" classname="OpenAI convertMessages" time="0.000105" file="tests/llm/openai.test.ts" line="75" assertions="2" />
+      <testcase name="user 消息中的 tool_result 拆分为独立 role:tool 消息" classname="OpenAI convertMessages" time="0.000077" file="tests/llm/openai.test.ts" line="100" assertions="1" />
+      <testcase name="user 消息中混合 tool_result 和文本" classname="OpenAI convertMessages" time="0.000133" file="tests/llm/openai.test.ts" line="127" assertions="4" />
+      <testcase name="完整对话流程转换" classname="OpenAI convertMessages" time="0.00017" file="tests/llm/openai.test.ts" line="162" assertions="6" />
+    </testsuite>
+    <testsuite name="OpenAI convertMessages — reasoning_content 回传分叉 (方案⓪)" file="tests/llm/openai.test.ts" line="199" tests="4" assertions="12" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="DeepSeek V4：含 tool_calls 仍回传 reasoning_content（真因修复核心）" classname="OpenAI convertMessages — reasoning_content 回传分叉 (方案⓪)" time="0.000274" file="tests/llm/openai.test.ts" line="209" assertions="2" />
+      <testcase name="旧 deepseek-reasoner：含 tool_calls 剥离 reasoning_content（旧协议 400 规避）" classname="OpenAI convertMessages — reasoning_content 回传分叉 (方案⓪)" time="0.000102" file="tests/llm/openai.test.ts" line="216" assertions="2" />
+      <testcase name="非 DeepSeek 模型（gpt-4o-mini）：含 tool_calls 剥离（保守默认）" classname="OpenAI convertMessages — reasoning_content 回传分叉 (方案⓪)" time="0.000096" file="tests/llm/openai.test.ts" line="223" assertions="2" />
+      <testcase name="无 tool_calls：所有模型都保留 reasoning_content" classname="OpenAI convertMessages — reasoning_content 回传分叉 (方案⓪)" time="0.000152" file="tests/llm/openai.test.ts" line="230" assertions="6" />
+    </testsuite>
+    <testsuite name="OpenAI convertMessages — 其它兜底" file="tests/llm/openai.test.ts" line="245" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="空 tool_result 兜底为有语义占位而非空串" classname="OpenAI convertMessages — 其它兜底" time="0.000071" file="tests/llm/openai.test.ts" line="248" assertions="1" />
+    </testsuite>
+    <testsuite name="OpenAI 响应头超时（§3.1 hang 纵深防御）" file="tests/llm/openai.test.ts" line="269" tests="2" assertions="5" failures="0" skipped="0" time="0.14" hostname="718b8ab21c28">
+      <testcase name="fetch 迟迟不返回响应头 → 抛出含&apos;超时&apos;的可重试错误" classname="OpenAI 响应头超时（§3.1 hang 纵深防御）" time="0.085645" file="tests/llm/openai.test.ts" line="270" assertions="3" />
+      <testcase name="用户主动 abort（非超时）→ 不被误标为超时" classname="OpenAI 响应头超时（§3.1 hang 纵深防御）" time="0.05505" file="tests/llm/openai.test.ts" line="322" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/config.test.ts" file="tests/config/config.test.ts" tests="9" assertions="19" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="config" file="tests/config/config.test.ts" line="8" tests="9" assertions="19" failures="0" skipped="0" time="0.007" hostname="718b8ab21c28">
+      <testcase name="defaultConfig 返回合理的默认值（不绑定特定 Provider/模型）" classname="config" time="0.000144" file="tests/config/config.test.ts" line="9" assertions="7" />
+      <testcase name="loadConfig 使用 CLI 参数覆盖默认值" classname="config" time="0.007031" file="tests/config/config.test.ts" line="20" assertions="3" />
+      <testcase name="loadConfig CLI 参数优先级最高" classname="config" time="0.000308" file="tests/config/config.test.ts" line="31" assertions="2" />
+      <testcase name="loadConfig 未指定时自动生成非空 sessionId" classname="config" time="0.000128" file="tests/config/config.test.ts" line="40" assertions="2" />
+      <testcase name="loadConfig 显式传入 sessionId 时保留不覆盖" classname="config" time="0.000165" file="tests/config/config.test.ts" line="46" assertions="1" />
+      <testsuite name="SID_CODE_TEAM_MEMORY env 覆盖" file="tests/config/config.test.ts" line="52" tests="4" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+        <testcase name="合法 JSON 对象被解析进 config.teamMemory" classname="SID_CODE_TEAM_MEMORY env 覆盖 &amp;gt; config" time="0.000612" file="tests/config/config.test.ts" line="60" assertions="1" />
+        <testcase name="非法 JSON 静默忽略，不污染 config" classname="SID_CODE_TEAM_MEMORY env 覆盖 &amp;gt; config" time="0.000408" file="tests/config/config.test.ts" line="70" assertions="1" />
+        <testcase name="数组等非对象 JSON 被拒绝" classname="SID_CODE_TEAM_MEMORY env 覆盖 &amp;gt; config" time="0.000436" file="tests/config/config.test.ts" line="80" assertions="1" />
+        <testcase name="只收形状正确的字段，丢弃错误类型" classname="SID_CODE_TEAM_MEMORY env 覆盖 &amp;gt; config" time="0.000222" file="tests/config/config.test.ts" line="90" assertions="1" />
+      </testsuite>
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/settings.test.ts" file="tests/config/settings.test.ts" tests="22" assertions="41" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="Settings 合并：读取语义（数组拼接去重）" file="tests/config/settings.test.ts" line="25" tests="6" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="字符串数组拼接 + 去重" classname="Settings 合并：读取语义（数组拼接去重）" time="0.000164" file="tests/config/settings.test.ts" line="26" assertions="1" />
+      <testcase name="多来源 deny 规则叠加而非替换" classname="Settings 合并：读取语义（数组拼接去重）" time="0.000054" file="tests/config/settings.test.ts" line="36" assertions="1" />
+      <testcase name="对象数组（budgetRules）直接拼接，不去重" classname="Settings 合并：读取语义（数组拼接去重）" time="0.000034" file="tests/config/settings.test.ts" line="46" assertions="1" />
+      <testcase name="标量后者覆盖前者" classname="Settings 合并：读取语义（数组拼接去重）" time="0.000019" file="tests/config/settings.test.ts" line="53" assertions="1" />
+      <testcase name="嵌套对象深度合并" classname="Settings 合并：读取语义（数组拼接去重）" time="0.000024" file="tests/config/settings.test.ts" line="58" assertions="1" />
+      <testcase name="不修改入参" classname="Settings 合并：读取语义（数组拼接去重）" time="0.000022" file="tests/config/settings.test.ts" line="69" assertions="2" />
+    </testsuite>
+    <testsuite name="Settings 合并：写入语义（数组替换/undefined 删除）" file="tests/config/settings.test.ts" line="78" tests="3" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="数组直接替换，不拼接" classname="Settings 合并：写入语义（数组替换/undefined 删除）" time="0.00007" file="tests/config/settings.test.ts" line="79" assertions="1" />
+      <testcase name="undefined 表示删除字段" classname="Settings 合并：写入语义（数组替换/undefined 删除）" time="0.000023" file="tests/config/settings.test.ts" line="86" assertions="2" />
+      <testcase name="标量覆盖 + 对象深度合并" classname="Settings 合并：写入语义（数组替换/undefined 删除）" time="0.00002" file="tests/config/settings.test.ts" line="93" assertions="1" />
+    </testsuite>
+    <testsuite name="Zod 验证与错误格式化" file="tests/config/settings.test.ts" line="101" tests="5" assertions="10" failures="0" skipped="0" time="0.003" hostname="718b8ab21c28">
+      <testcase name="合法 settings 通过验证" classname="Zod 验证与错误格式化" time="0.003901" file="tests/config/settings.test.ts" line="102" assertions="1" />
+      <testcase name="未知字段被保留（passthrough 向前兼容）" classname="Zod 验证与错误格式化" time="0.0001" file="tests/config/settings.test.ts" line="111" assertions="2" />
+      <testcase name="maxTokens 越界被拒绝" classname="Zod 验证与错误格式化" time="0.000218" file="tests/config/settings.test.ts" line="122" assertions="1" />
+      <testcase name="formatZodErrors 产出结构化错误 + 文件路径" classname="Zod 验证与错误格式化" time="0.000116" file="tests/config/settings.test.ts" line="127" assertions="5" />
+      <testcase name="非法 MCP transport 被拒绝" classname="Zod 验证与错误格式化" time="0.000153" file="tests/config/settings.test.ts" line="139" assertions="1" />
+    </testsuite>
+    <testsuite name="权限规则预过滤" file="tests/config/settings.test.ts" line="147" tests="3" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="剔除非字符串规则并产出警告" classname="权限规则预过滤" time="0.000081" file="tests/config/settings.test.ts" line="148" assertions="3" />
+      <testcase name="无 permissions 字段时安全返回空" classname="权限规则预过滤" time="0.00002" file="tests/config/settings.test.ts" line="158" assertions="2" />
+      <testcase name="一条坏规则不毒化整个文件（过滤后可通过 Zod）" classname="权限规则预过滤" time="0.000161" file="tests/config/settings.test.ts" line="163" assertions="1" />
+    </testsuite>
+    <testsuite name="安全边界：项目级配置字段过滤" file="tests/config/settings.test.ts" line="171" tests="2" assertions="10" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="projectSettings 不能设置安全敏感字段" classname="安全边界：项目级配置字段过滤" time="0.000043" file="tests/config/settings.test.ts" line="172" assertions="9" />
+      <testcase name="不修改入参" classname="安全边界：项目级配置字段过滤" time="0.00002" file="tests/config/settings.test.ts" line="188" assertions="1" />
+    </testsuite>
+    <testsuite name="内部写入抑制" file="tests/config/settings.test.ts" line="195" tests="3" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="窗口内标记被识别为内部写入（消费一次）" classname="内部写入抑制" time="0.000039" file="tests/config/settings.test.ts" line="198" assertions="2" />
+      <testcase name="无标记时返回 false（外部变更）" classname="内部写入抑制" time="0.00001" file="tests/config/settings.test.ts" line="205" assertions="1" />
+      <testcase name="过期窗口不命中" classname="内部写入抑制" time="0.000009" file="tests/config/settings.test.ts" line="209" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/attachments.test.ts" file="tests/config/attachments.test.ts" tests="12" assertions="37" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="PRIORITY" file="tests/config/attachments.test.ts" line="16" tests="1" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="优先级数值正确排序" classname="PRIORITY" time="0.000027" file="tests/config/attachments.test.ts" line="17" assertions="7" />
+    </testsuite>
+    <testsuite name="generateClaudeMdAttachment" file="tests/config/attachments.test.ts" line="28" tests="3" assertions="8" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="生成正确的附件结构" classname="generateClaudeMdAttachment" time="0.000045" file="tests/config/attachments.test.ts" line="29" assertions="6" />
+      <testcase name="包含来源路径标注" classname="generateClaudeMdAttachment" time="0.000013" file="tests/config/attachments.test.ts" line="39" assertions="1" />
+      <testcase name="无来源路径时使用默认标注" classname="generateClaudeMdAttachment" time="0.000009" file="tests/config/attachments.test.ts" line="44" assertions="1" />
+    </testsuite>
+    <testsuite name="generateGitStatusAttachment" file="tests/config/attachments.test.ts" line="50" tests="2" assertions="6" failures="0" skipped="0" time="0.016" hostname="718b8ab21c28">
+      <testcase name="在 Git 仓库中返回附件" classname="generateGitStatusAttachment" time="0.016197" file="tests/config/attachments.test.ts" line="51" assertions="5" />
+      <testcase name="非 Git 仓库返回 null" classname="generateGitStatusAttachment" time="0.000808" file="tests/config/attachments.test.ts" line="61" assertions="1" />
+    </testsuite>
+    <testsuite name="generatePermissionModeAttachment" file="tests/config/attachments.test.ts" line="69" tests="3" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="默认模式" classname="generatePermissionModeAttachment" time="0.000053" file="tests/config/attachments.test.ts" line="70" assertions="3" />
+      <testcase name="plan 模式" classname="generatePermissionModeAttachment" time="0.000014" file="tests/config/attachments.test.ts" line="77" assertions="2" />
+      <testcase name="未知模式回退到默认" classname="generatePermissionModeAttachment" time="0.000012" file="tests/config/attachments.test.ts" line="83" assertions="1" />
+    </testsuite>
+    <testsuite name="generateDiagnosticsAttachment" file="tests/config/attachments.test.ts" line="89" tests="1" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="生成正确的附件" classname="generateDiagnosticsAttachment" time="0.000032" file="tests/config/attachments.test.ts" line="90" assertions="4" />
+    </testsuite>
+    <testsuite name="generateIDESelectionAttachment" file="tests/config/attachments.test.ts" line="99" tests="1" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="生成正确的附件" classname="generateIDESelectionAttachment" time="0.000022" file="tests/config/attachments.test.ts" line="100" assertions="3" />
+    </testsuite>
+    <testsuite name="generateTodoListAttachment" file="tests/config/attachments.test.ts" line="108" tests="1" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="生成正确的附件" classname="generateTodoListAttachment" time="0.000022" file="tests/config/attachments.test.ts" line="109" assertions="3" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/system-prompt.test.ts" file="tests/config/system-prompt.test.ts" tests="26" assertions="48" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="buildSystemPrompt" file="tests/config/system-prompt.test.ts" line="21" tests="22" assertions="43" failures="0" skipped="0" time="0.005" hostname="718b8ab21c28">
+      <testcase name="包含身份指令" classname="buildSystemPrompt" time="0.000526" file="tests/config/system-prompt.test.ts" line="27" assertions="2" />
+      <testcase name="包含环境信息" classname="buildSystemPrompt" time="0.000124" file="tests/config/system-prompt.test.ts" line="33" assertions="5" />
+      <testcase name="包含行为约束" classname="buildSystemPrompt" time="0.000084" file="tests/config/system-prompt.test.ts" line="42" assertions="3" />
+      <testcase name="无工具时不包含工具指南" classname="buildSystemPrompt" time="0.000055" file="tests/config/system-prompt.test.ts" line="49" assertions="1" />
+      <testcase name="有工具时包含工具列表" classname="buildSystemPrompt" time="0.000309" file="tests/config/system-prompt.test.ts" line="54" assertions="4" />
+      <testcase name="工具自带 usageGuide 会被包含" classname="buildSystemPrompt" time="0.0001" file="tests/config/system-prompt.test.ts" line="66" assertions="2" />
+      <testcase name="没有 usageGuide 的工具不会生成额外指南" classname="buildSystemPrompt" time="0.000075" file="tests/config/system-prompt.test.ts" line="75" assertions="1" />
+      <testcase name="包含项目规则" classname="buildSystemPrompt" time="0.000102" file="tests/config/system-prompt.test.ts" line="83" assertions="3" />
+      <testcase name="包含项目规则来源路径" classname="buildSystemPrompt" time="0.000054" file="tests/config/system-prompt.test.ts" line="93" assertions="1" />
+      <testcase name="包含追加提示词" classname="buildSystemPrompt" time="0.000071" file="tests/config/system-prompt.test.ts" line="102" assertions="1" />
+      <testcase name="包含文件提示词" classname="buildSystemPrompt" time="0.000088" file="tests/config/system-prompt.test.ts" line="110" assertions="1" />
+      <testcase name="包含 Git 状态附件" classname="buildSystemPrompt" time="0.005551" file="tests/config/system-prompt.test.ts" line="120" assertions="2" />
+      <testcase name="不请求 Git 状态时不包含" classname="buildSystemPrompt" time="0.000095" file="tests/config/system-prompt.test.ts" line="130" assertions="1" />
+      <testcase name="包含权限模式附件（非默认模式）" classname="buildSystemPrompt" time="0.000077" file="tests/config/system-prompt.test.ts" line="138" assertions="1" />
+      <testcase name="默认权限模式不注入附件" classname="buildSystemPrompt" time="0.000057" file="tests/config/system-prompt.test.ts" line="146" assertions="2" />
+      <testcase name="包含诊断信息附件" classname="buildSystemPrompt" time="0.000057" file="tests/config/system-prompt.test.ts" line="154" assertions="2" />
+      <testcase name="包含 IDE 选中代码附件" classname="buildSystemPrompt" time="0.000045" file="tests/config/system-prompt.test.ts" line="163" assertions="2" />
+      <testcase name="包含 Todo 列表附件" classname="buildSystemPrompt" time="0.000061" file="tests/config/system-prompt.test.ts" line="172" assertions="2" />
+      <testcase name="附件按优先级排序" classname="buildSystemPrompt" time="0.000066" file="tests/config/system-prompt.test.ts" line="181" assertions="2" />
+      <testcase name="相同上下文使用缓存" classname="buildSystemPrompt" time="0.000049" file="tests/config/system-prompt.test.ts" line="198" assertions="1" />
+      <testcase name="不同上下文不使用缓存" classname="buildSystemPrompt" time="0.000082" file="tests/config/system-prompt.test.ts" line="206" assertions="3" />
+      <testcase name="clearPromptCache 清除缓存" classname="buildSystemPrompt" time="0.0001" file="tests/config/system-prompt.test.ts" line="214" assertions="1" />
+    </testsuite>
+    <testsuite name="#11 resolvePromptMaxTokens（系统提示词预算动态化）" file="tests/config/system-prompt.test.ts" line="224" tests="4" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="显式 ctx.maxTokens 优先" classname="#11 resolvePromptMaxTokens（系统提示词预算动态化）" time="0.000016" file="tests/config/system-prompt.test.ts" line="225" assertions="1" />
+      <testcase name="无显式值时按模型 contextWindow 的 90% 推导（1M 窗口不再卡 180K）" classname="#11 resolvePromptMaxTokens（系统提示词预算动态化）" time="0.000029" file="tests/config/system-prompt.test.ts" line="229" assertions="2" />
+      <testcase name="availableModels 声明的 contextWindow 是权威源" classname="#11 resolvePromptMaxTokens（系统提示词预算动态化）" time="0.000019" file="tests/config/system-prompt.test.ts" line="236" assertions="1" />
+      <testcase name="无 model 时回退历史安全值 180000" classname="#11 resolvePromptMaxTokens（系统提示词预算动态化）" time="0.000008" file="tests/config/system-prompt.test.ts" line="246" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/token-utils.test.ts" file="tests/config/token-utils.test.ts" tests="9" assertions="25" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="estimateTokens" file="tests/config/token-utils.test.ts" line="10" tests="5" assertions="11" failures="0" skipped="0" time="0.001" hostname="718b8ab21c28">
+      <testcase name="空字符串返回 0" classname="estimateTokens" time="0.001146" file="tests/config/token-utils.test.ts" line="11" assertions="1" />
+      <testcase name="英文文本：ASCII ~0.20 tok/char" classname="estimateTokens" time="0.000042" file="tests/config/token-utils.test.ts" line="19" assertions="2" />
+      <testcase name="中文文本：非 ASCII ~0.65 tok/char" classname="estimateTokens" time="0.000014" file="tests/config/token-utils.test.ts" line="27" assertions="2" />
+      <testcase name="代码文本：ASCII ~0.20 tok/char" classname="estimateTokens" time="0.00001" file="tests/config/token-utils.test.ts" line="35" assertions="2" />
+      <testcase name="EST-1：与权威估算器 estimateTextTokens 完全一致" classname="estimateTokens" time="0.000033" file="tests/config/token-utils.test.ts" line="43" assertions="4" />
+    </testsuite>
+    <testsuite name="truncateToLimit" file="tests/config/token-utils.test.ts" line="56" tests="4" assertions="14" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="所有内容在限制内时全部保留" classname="truncateToLimit" time="0.000116" file="tests/config/token-utils.test.ts" line="63" assertions="7" />
+      <testcase name="超限时按优先级截断低优先级附件" classname="truncateToLimit" time="0.000077" file="tests/config/token-utils.test.ts" line="80" assertions="4" />
+      <testcase name="核心部分始终保留" classname="truncateToLimit" time="0.000117" file="tests/config/token-utils.test.ts" line="99" assertions="1" />
+      <testcase name="返回结构化的截断追踪信息" classname="truncateToLimit" time="0.000092" file="tests/config/token-utils.test.ts" line="109" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/rules.test.ts" file="tests/config/rules.test.ts" tests="18" assertions="39" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="parseClaudeMd" file="tests/config/rules.test.ts" line="9" tests="13" assertions="26" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="解析 Instructions 段落" classname="parseClaudeMd" time="0.00018" file="tests/config/rules.test.ts" line="10" assertions="2" />
+      <testcase name="解析中文标题「指令」" classname="parseClaudeMd" time="0.000036" file="tests/config/rules.test.ts" line="20" assertions="1" />
+      <testcase name="解析 Allowed Tools" classname="parseClaudeMd" time="0.000084" file="tests/config/rules.test.ts" line="28" assertions="1" />
+      <testcase name="解析中文标题「允许的工具」" classname="parseClaudeMd" time="0.000031" file="tests/config/rules.test.ts" line="38" assertions="1" />
+      <testcase name="解析 Disallowed Tools" classname="parseClaudeMd" time="0.000016" file="tests/config/rules.test.ts" line="47" assertions="1" />
+      <testcase name="解析 Permission Mode" classname="parseClaudeMd" time="0.000017" file="tests/config/rules.test.ts" line="56" assertions="1" />
+      <testcase name="解析 Model" classname="parseClaudeMd" time="0.000013" file="tests/config/rules.test.ts" line="64" assertions="1" />
+      <testcase name="解析 System Prompt Addition" classname="parseClaudeMd" time="0.000028" file="tests/config/rules.test.ts" line="72" assertions="1" />
+      <testcase name="解析 Custom Rules" classname="parseClaudeMd" time="0.000025" file="tests/config/rules.test.ts" line="80" assertions="2" />
+      <testcase name="解析 Memory 键值对" classname="parseClaudeMd" time="0.000051" file="tests/config/rules.test.ts" line="90" assertions="1" />
+      <testcase name="解析完整的 CLAUDE.md" classname="parseClaudeMd" time="0.00007" file="tests/config/rules.test.ts" line="102" assertions="9" />
+      <testcase name="无结构化标题时只保留 rawContent" classname="parseClaudeMd" time="0.000027" file="tests/config/rules.test.ts" line="143" assertions="3" />
+      <testcase name="多个 Instructions 段落累积" classname="parseClaudeMd" time="0.000018" file="tests/config/rules.test.ts" line="154" assertions="2" />
+    </testsuite>
+    <testsuite name="mergeProjectRules" file="tests/config/rules.test.ts" line="171" tests="5" assertions="13" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="覆盖型字段：项目覆盖全局" classname="mergeProjectRules" time="0.00004" file="tests/config/rules.test.ts" line="172" assertions="4" />
+      <testcase name="累积型字段：合并而非覆盖" classname="mergeProjectRules" time="0.000024" file="tests/config/rules.test.ts" line="197" assertions="4" />
+      <testcase name="memory 同 key 时项目覆盖全局" classname="mergeProjectRules" time="0.000017" file="tests/config/rules.test.ts" line="223" assertions="1" />
+      <testcase name="rawContent 拼接" classname="mergeProjectRules" time="0.000032" file="tests/config/rules.test.ts" line="240" assertions="2" />
+      <testcase name="一方为空时保留另一方" classname="mergeProjectRules" time="0.000014" file="tests/config/rules.test.ts" line="256" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/env-interpolation.test.ts" file="tests/config/env-interpolation.test.ts" tests="8" assertions="12" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="Environment Variable Interpolation" file="tests/config/env-interpolation.test.ts" line="4" tests="8" assertions="12" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="interpolates $VAR format" classname="Environment Variable Interpolation" time="0.000097" file="tests/config/env-interpolation.test.ts" line="12" assertions="1" />
+      <testcase name="interpolates ${VAR} format" classname="Environment Variable Interpolation" time="0.000033" file="tests/config/env-interpolation.test.ts" line="18" assertions="1" />
+      <testcase name="preserves undefined variables" classname="Environment Variable Interpolation" time="0.000018" file="tests/config/env-interpolation.test.ts" line="24" assertions="1" />
+      <testcase name="handles nested objects" classname="Environment Variable Interpolation" time="0.000018" file="tests/config/env-interpolation.test.ts" line="30" assertions="2" />
+      <testcase name="handles arrays" classname="Environment Variable Interpolation" time="0.000024" file="tests/config/env-interpolation.test.ts" line="42" assertions="2" />
+      <testcase name="does not interpolate non-string values" classname="Environment Variable Interpolation" time="0.000018" file="tests/config/env-interpolation.test.ts" line="51" assertions="3" />
+      <testcase name="handles mixed interpolation" classname="Environment Variable Interpolation" time="0.000013" file="tests/config/env-interpolation.test.ts" line="63" assertions="1" />
+      <testcase name="handles empty variable values" classname="Environment Variable Interpolation" time="0.000022" file="tests/config/env-interpolation.test.ts" line="69" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/config/rules-layered.test.ts" file="tests/config/rules-layered.test.ts" tests="13" assertions="21" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="parseRulesFrontmatter" file="tests/config/rules-layered.test.ts" line="16" tests="4" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="inline 数组写法" classname="parseRulesFrontmatter" time="0.000058" file="tests/config/rules-layered.test.ts" line="17" assertions="2" />
+      <testcase name="多行列表写法" classname="parseRulesFrontmatter" time="0.000081" file="tests/config/rules-layered.test.ts" line="26" assertions="1" />
+      <testcase name="单值写法" classname="parseRulesFrontmatter" time="0.000035" file="tests/config/rules-layered.test.ts" line="36" assertions="1" />
+      <testcase name="无 frontmatter 返回原内容" classname="parseRulesFrontmatter" time="0.000018" file="tests/config/rules-layered.test.ts" line="44" assertions="2" />
+    </testsuite>
+    <testsuite name="rulesPathsMatch" file="tests/config/rules-layered.test.ts" line="51" tests="4" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="无 paths 条件始终匹配" classname="rulesPathsMatch" time="0.000033" file="tests/config/rules-layered.test.ts" line="52" assertions="2" />
+      <testcase name="有 paths 条件但无活动文件不匹配" classname="rulesPathsMatch" time="0.00001" file="tests/config/rules-layered.test.ts" line="57" assertions="1" />
+      <testcase name="glob 匹配活动文件" classname="rulesPathsMatch" time="0.000035" file="tests/config/rules-layered.test.ts" line="61" assertions="2" />
+      <testcase name="任一 glob 匹配任一文件即生效" classname="rulesPathsMatch" time="0.000018" file="tests/config/rules-layered.test.ts" line="66" assertions="1" />
+    </testsuite>
+    <testsuite name="parseClaudeMd 带 frontmatter" file="tests/config/rules-layered.test.ts" line="71" tests="1" assertions="2" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="提取 paths 并正常解析段落" classname="parseClaudeMd 带 frontmatter" time="0.00003" file="tests/config/rules-layered.test.ts" line="72" assertions="2" />
+    </testsuite>
+    <testsuite name="loadAllCLAUDEmd 多层级" file="tests/config/rules-layered.test.ts" line="84" tests="4" assertions="7" failures="0" skipped="0" time="0.002" hostname="718b8ab21c28">
+      <testcase name="加载 .claude/rules/ 目录规则" classname="loadAllCLAUDEmd 多层级" time="0.002672" file="tests/config/rules-layered.test.ts" line="94" assertions="3" />
+      <testcase name="CLAUDE.local.md 优先级最高（覆盖 model）" classname="loadAllCLAUDEmd 多层级" time="0.000414" file="tests/config/rules-layered.test.ts" line="105" assertions="1" />
+      <testcase name="frontmatter paths 不匹配的规则被跳过" classname="loadAllCLAUDEmd 多层级" time="0.000701" file="tests/config/rules-layered.test.ts" line="113" assertions="2" />
+      <testcase name="项目内无规则文件时不泄露项目内容" classname="loadAllCLAUDEmd 多层级" time="0.000177" file="tests/config/rules-layered.test.ts" line="131" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/sdk/command-queue.test.ts" file="tests/sdk/command-queue.test.ts" tests="10" assertions="21" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="CommandQueue 优先级" file="tests/sdk/command-queue.test.ts" line="12" tests="2" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="now &gt; next &gt; later" classname="CommandQueue 优先级" time="0.000084" file="tests/sdk/command-queue.test.ts" line="13" assertions="3" />
+      <testcase name="同优先级稳定 FIFO" classname="CommandQueue 优先级" time="0.000021" file="tests/sdk/command-queue.test.ts" line="23" assertions="3" />
+    </testsuite>
+    <testsuite name="CommandQueue 基本操作" file="tests/sdk/command-queue.test.ts" line="34" tests="3" assertions="7" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="isEmpty / size" classname="CommandQueue 基本操作" time="0.000022" file="tests/sdk/command-queue.test.ts" line="35" assertions="3" />
+      <testcase name="peek 不移除" classname="CommandQueue 基本操作" time="0.000031" file="tests/sdk/command-queue.test.ts" line="43" assertions="2" />
+      <testcase name="dequeue 带过滤器" classname="CommandQueue 基本操作" time="0.000027" file="tests/sdk/command-queue.test.ts" line="50" assertions="2" />
+    </testsuite>
+    <testsuite name="CommandQueue 批量合并" file="tests/sdk/command-queue.test.ts" line="60" tests="5" assertions="8" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="连续同 workload 的 prompt 合并" classname="CommandQueue 批量合并" time="0.000077" file="tests/sdk/command-queue.test.ts" line="61" assertions="2" />
+      <testcase name="不同 workload 不合并" classname="CommandQueue 批量合并" time="0.000014" file="tests/sdk/command-queue.test.ts" line="71" assertions="2" />
+      <testcase name="非 prompt 命令不合并" classname="CommandQueue 批量合并" time="0.000012" file="tests/sdk/command-queue.test.ts" line="80" assertions="1" />
+      <testcase name="合并后 uuid 取最后一条有 uuid 的" classname="CommandQueue 批量合并" time="0.000017" file="tests/sdk/command-queue.test.ts" line="88" assertions="1" />
+      <testcase name="isMeta 不同不合并" classname="CommandQueue 批量合并" time="0.000013" file="tests/sdk/command-queue.test.ts" line="96" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/sdk/session-recovery.test.ts" file="tests/sdk/session-recovery.test.ts" tests="16" assertions="25" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="deserializeMessagesWithInterruptDetection" file="tests/sdk/session-recovery.test.ts" line="16" tests="16" assertions="25" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="空历史" classname="deserializeMessagesWithInterruptDetection" time="0.000059" file="tests/sdk/session-recovery.test.ts" line="17" assertions="2" />
+      <testcase name="过滤未解析的 tool_use" classname="deserializeMessagesWithInterruptDetection" time="0.000149" file="tests/sdk/session-recovery.test.ts" line="23" assertions="1" />
+      <testcase name="保留已解析的 tool_use" classname="deserializeMessagesWithInterruptDetection" time="0.000067" file="tests/sdk/session-recovery.test.ts" line="41" assertions="2" />
+      <testcase name="过滤空白助手消息（全部 tool_use 未解析）" classname="deserializeMessagesWithInterruptDetection" time="0.000032" file="tests/sdk/session-recovery.test.ts" line="60" assertions="1" />
+      <testcase name="末尾纯用户输入 → interrupted_prompt" classname="deserializeMessagesWithInterruptDetection" time="0.000025" file="tests/sdk/session-recovery.test.ts" line="73" assertions="3" />
+      <testcase name="末尾正常 assistant 回复 → none" classname="deserializeMessagesWithInterruptDetection" time="0.000014" file="tests/sdk/session-recovery.test.ts" line="90" assertions="1" />
+      <testcase name="末尾用户消息含 tool_result 且无后续回复 → interrupted_turn，携带工具名" classname="deserializeMessagesWithInterruptDetection" time="0.000025" file="tests/sdk/session-recovery.test.ts" line="101" assertions="3" />
+      <testcase name="并行多工具调用全部完成但未回复 → interrupted_turn 携带全部工具名" classname="deserializeMessagesWithInterruptDetection" time="0.000026" file="tests/sdk/session-recovery.test.ts" line="121" assertions="2" />
+      <testcase name="终结性工具白名单：结果全部来自白名单工具时不算中断" classname="deserializeMessagesWithInterruptDetection" time="0.000025" file="tests/sdk/session-recovery.test.ts" line="145" assertions="1" />
+      <testcase name="终结性工具白名单：混合白名单与非白名单工具仍算中断" classname="deserializeMessagesWithInterruptDetection" time="0.000022" file="tests/sdk/session-recovery.test.ts" line="165" assertions="1" />
+      <testcase name="权限模式清洗：失效的 permissionMode 被清理但消息保留" classname="deserializeMessagesWithInterruptDetection" time="0.000038" file="tests/sdk/session-recovery.test.ts" line="193" assertions="2" />
+      <testcase name="权限模式清洗：合法模式保留不变" classname="deserializeMessagesWithInterruptDetection" time="0.000024" file="tests/sdk/session-recovery.test.ts" line="208" assertions="1" />
+      <testcase name="孤立 thinking-only 消息过滤：仅含 thinking block 的 assistant 消息被丢弃" classname="deserializeMessagesWithInterruptDetection" time="0.000027" file="tests/sdk/session-recovery.test.ts" line="222" assertions="1" />
+      <testcase name="thinking block 与正文并存时保留整条消息" classname="deserializeMessagesWithInterruptDetection" time="0.000026" file="tests/sdk/session-recovery.test.ts" line="235" assertions="2" />
+      <testcase name="content block 完整性校验：缺失 id 的 tool_use 所在消息被丢弃" classname="deserializeMessagesWithInterruptDetection" time="0.000027" file="tests/sdk/session-recovery.test.ts" line="252" assertions="1" />
+      <testcase name="content block 完整性校验：id/tool_use_id 均为空字符串时兜底剔除" classname="deserializeMessagesWithInterruptDetection" time="0.000019" file="tests/sdk/session-recovery.test.ts" line="264" assertions="1" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/sdk/schemas.test.ts" file="tests/sdk/schemas.test.ts" tests="23" assertions="33" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="lazySchema" file="tests/sdk/schemas.test.ts" line="26" tests="1" assertions="2" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="首次调用构造，后续返回同一实例" classname="lazySchema" time="0.000058" file="tests/sdk/schemas.test.ts" line="27" assertions="2" />
+    </testsuite>
+    <testsuite name="UsageSchema" file="tests/sdk/schemas.test.ts" line="40" tests="3" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="接受完整 usage" classname="UsageSchema" time="0.000177" file="tests/sdk/schemas.test.ts" line="41" assertions="1" />
+      <testcase name="缓存字段可选" classname="UsageSchema" time="0.000067" file="tests/sdk/schemas.test.ts" line="51" assertions="1" />
+      <testcase name="缺失 inputTokens 失败" classname="UsageSchema" time="0.000037" file="tests/sdk/schemas.test.ts" line="56" assertions="1" />
+    </testsuite>
+    <testsuite name="ContentBlockSchema" file="tests/sdk/schemas.test.ts" line="62" tests="4" assertions="4" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="text block" classname="ContentBlockSchema" time="0.000345" file="tests/sdk/schemas.test.ts" line="63" assertions="1" />
+      <testcase name="tool_use block" classname="ContentBlockSchema" time="0.000067" file="tests/sdk/schemas.test.ts" line="66" assertions="1" />
+      <testcase name="tool_result block" classname="ContentBlockSchema" time="0.000028" file="tests/sdk/schemas.test.ts" line="76" assertions="1" />
+      <testcase name="未知 type 失败" classname="ContentBlockSchema" time="0.000039" file="tests/sdk/schemas.test.ts" line="85" assertions="1" />
+    </testsuite>
+    <testsuite name="SDKUserMessageSchema" file="tests/sdk/schemas.test.ts" line="90" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="合法用户消息" classname="SDKUserMessageSchema" time="0.000146" file="tests/sdk/schemas.test.ts" line="91" assertions="1" />
+    </testsuite>
+    <testsuite name="SDKAssistantMessageSchema" file="tests/sdk/schemas.test.ts" line="102" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="合法助手消息" classname="SDKAssistantMessageSchema" time="0.000158" file="tests/sdk/schemas.test.ts" line="103" assertions="1" />
+    </testsuite>
+    <testsuite name="SDKResultMessageSchema" file="tests/sdk/schemas.test.ts" line="116" tests="3" assertions="5" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="success 结果" classname="SDKResultMessageSchema" time="0.000213" file="tests/sdk/schemas.test.ts" line="117" assertions="2" />
+      <testcase name="error 结果" classname="SDKResultMessageSchema" time="0.000077" file="tests/sdk/schemas.test.ts" line="135" assertions="2" />
+      <testcase name="未知 subtype 失败" classname="SDKResultMessageSchema" time="0.000033" file="tests/sdk/schemas.test.ts" line="150" assertions="1" />
+    </testsuite>
+    <testsuite name="SDKSystemInitSchema" file="tests/sdk/schemas.test.ts" line="157" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="合法 init" classname="SDKSystemInitSchema" time="0.000092" file="tests/sdk/schemas.test.ts" line="158" assertions="1" />
+    </testsuite>
+    <testsuite name="SDKToolProgressSchema" file="tests/sdk/schemas.test.ts" line="171" tests="2" assertions="2" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="start" classname="SDKToolProgressSchema" time="0.000094" file="tests/sdk/schemas.test.ts" line="172" assertions="1" />
+      <testcase name="end with result" classname="SDKToolProgressSchema" time="0.000053" file="tests/sdk/schemas.test.ts" line="182" assertions="1" />
+    </testsuite>
+    <testsuite name="SDKMessageSchema 聚合联合" file="tests/sdk/schemas.test.ts" line="194" tests="2" assertions="8" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="接受 init / user / assistant / result / tool_progress / status" classname="SDKMessageSchema 聚合联合" time="0.000775" file="tests/sdk/schemas.test.ts" line="195" assertions="7" />
+      <testcase name="拒绝完全未知类型" classname="SDKMessageSchema 聚合联合" time="0.000141" file="tests/sdk/schemas.test.ts" line="230" assertions="1" />
+    </testsuite>
+    <testsuite name="控制协议 Schema" file="tests/sdk/schemas.test.ts" line="235" tests="5" assertions="6" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="control_request: can_use_tool" classname="控制协议 Schema" time="0.000288" file="tests/sdk/schemas.test.ts" line="236" assertions="1" />
+      <testcase name="control_request: initialize" classname="控制协议 Schema" time="0.000025" file="tests/sdk/schemas.test.ts" line="250" assertions="1" />
+      <testcase name="control_response: success" classname="控制协议 Schema" time="0.000108" file="tests/sdk/schemas.test.ts" line="259" assertions="1" />
+      <testcase name="control_response: error" classname="控制协议 Schema" time="0.000032" file="tests/sdk/schemas.test.ts" line="267" assertions="1" />
+      <testcase name="权限响应 behavior 枚举" classname="控制协议 Schema" time="0.000082" file="tests/sdk/schemas.test.ts" line="275" assertions="2" />
+    </testsuite>
+  </testsuite>
+  <testsuite name="tests/sdk/structured-output.test.ts" file="tests/sdk/structured-output.test.ts" tests="11" assertions="19" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+    <testsuite name="extractStructuredOutput" file="tests/sdk/structured-output.test.ts" line="22" tests="10" assertions="16" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="纯 JSON 文本" classname="extractStructuredOutput" time="0.000264" file="tests/sdk/structured-output.test.ts" line="23" assertions="2" />
+      <testcase name="```json 代码块包裹" classname="extractStructuredOutput" time="0.000037" file="tests/sdk/structured-output.test.ts" line="29" assertions="2" />
+      <testcase name="``` 无语言标记的代码块" classname="extractStructuredOutput" time="0.000018" file="tests/sdk/structured-output.test.ts" line="36" assertions="1" />
+      <testcase name="非助手消息失败" classname="extractStructuredOutput" time="0.000012" file="tests/sdk/structured-output.test.ts" line="42" assertions="1" />
+      <testcase name="无文本内容失败" classname="extractStructuredOutput" time="0.000026" file="tests/sdk/structured-output.test.ts" line="50" assertions="1" />
+      <testcase name="非法 JSON 失败" classname="extractStructuredOutput" time="0.000044" file="tests/sdk/structured-output.test.ts" line="58" assertions="2" />
+      <testcase name="缺失必填字段失败" classname="extractStructuredOutput" time="0.000036" file="tests/sdk/structured-output.test.ts" line="64" assertions="2" />
+      <testcase name="期望 object 但给 array 失败" classname="extractStructuredOutput" time="0.000018" file="tests/sdk/structured-output.test.ts" line="70" assertions="1" />
+      <testcase name="array schema 校验" classname="extractStructuredOutput" time="0.000028" file="tests/sdk/structured-output.test.ts" line="75" assertions="2" />
+      <testcase name="取最后一个 text block" classname="extractStructuredOutput" time="0.000028" file="tests/sdk/structured-output.test.ts" line="81" assertions="2" />
+    </testsuite>
+    <testsuite name="buildStructuredOutputPrompt" file="tests/sdk/structured-output.test.ts" line="95" tests="1" assertions="3" failures="0" skipped="0" time="0" hostname="718b8ab21c28">
+      <testcase name="包含 schema 与代码块标记" classname="buildStructuredOutputPrompt" time="0.00012" file="tests/sdk/structured-output.test.ts" line="96" assertions="3" />
+    </testsuite>
+  </testsuite>
+</testsuites>

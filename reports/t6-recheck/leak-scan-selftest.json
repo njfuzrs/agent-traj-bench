@@ -1,0 +1,16 @@
+{
+  "机制": "对照组 + 四个注入体。注入必然泄漏的文件，要求扫描器报红并指向注入点",
+  "基线": "t6scan:t0002（T0002 的真实镜像）",
+  "结果": "5/5 通过",
+  "cases": [
+    {"name": "L0-control", "期望": "0 违规", "实测": "命中 69 全良性（65 skill baseline + 2 stub + 2 node_modules stub）", "ok": true},
+    {"name": "L1-bugfixes文档", "注入": "/repo/docs/bugfixes/leak.md", "期望": "报红", "实测": "违规 2，首项 /repo/docs/bugfixes", "ok": true},
+    {"name": "L2-judge校准集", "注入": "/repo/evals/_judge/calibration-set/", "期望": "报红", "实测": "违规 4，首项 /repo/evals", "ok": true},
+    {"name": "L3-.claude目录", "注入": "/repo/.claude/settings.json", "期望": "报红", "实测": "违规 2，首项 /repo/.claude", "ok": true},
+    {"name": "L4-harbor自身", "注入": "/repo/external-benchmarks/harbor/", "期望": "报红", "实测": "违规 3，首项 /repo/external-benchmarks", "ok": true}
+  ],
+  "自证过程中修掉的扫描器缺陷": [
+    "方案给的 -path '*evals*' 匹配不到 /eval-framework（少个 s）—— 而它是方案自己点名的三类良性之一，等于扫描器对它完全失明",
+    "但放宽成 '*eval*' 会把 timeval（perl 头文件）与 evaluator.ts（仓库真实源码）扫成违规，噪声淹掉真违规 —— 改为精确单列 eval-framework"
+  ]
+}

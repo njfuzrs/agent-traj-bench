@@ -1,0 +1,35 @@
+  6/6 Error_Code: 0.000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0:04:19 0:00:00
+tasks • oracle
+┏━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━┓
+┃ Tria… ┃ Exce… ┃ Erro… ┃   F2P ┃ F2P_… ┃ F2P_… ┃   P2P ┃ P2P_… ┃ P2P_… ┃ Rew… ┃
+┡━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━┩
+│     6 │     0 │ 0.000 │ 1.000 │ 3.000 │ 3.000 │ 0.000 │ 30.0… │ 30.0… │ 0.0… │
+└───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┴──────┘
+
+┏━━━━━━━━┳━━━━━━━┓
+┃ Reward ┃ Count ┃
+┡━━━━━━━━╇━━━━━━━┩
+│ 0.0    │     6 │
+│ 1.0    │     6 │
+│ 0.0    │     6 │
+│ 0      │     6 │
+│ 5.0    │     3 │
+│ 1.0    │     3 │
+│ 5.0    │     3 │
+│ 1.0    │     3 │
+│ 30.0   │     6 │
+│ 30.0   │     6 │
+└────────┴───────┘
+
+Job Info
+Total runtime: 4m 19s
+Results written to 
+/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-re
+check/oracle-k3/2026-09-11__10-10-26/result.json
+Inspect results by running `harbor view 
+/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-re
+check/oracle-k3`
+Share results by running `harbor upload 
+/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-re
+check/oracle-k3/2026-09-11__10-10-26`
+

@@ -1,0 +1,11 @@
+{
+    "jobs_dir": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-recheck/oracle-k3",
+    "n_attempts": 3,
+    "verifier_timeout_multiplier": 6.0,
+    "n_concurrent_trials": 1,
+    "datasets": [
+        {
+            "path": "/Users/zhourusheng/Code/person/trajectory-platform/bench/v0.2-mini/reports/t6-recheck/tasks"
+        }
+    ]
+}
