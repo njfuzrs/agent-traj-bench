@@ -115,5 +115,26 @@
     "p2p"
   ],
   "reward_file": "reward.json",
-  "generated_by": "scripts/mvp/t3-build-harbor-tasks.py"
+  "generated_by": "scripts/mvp/t3-build-harbor-tasks.py",
+  "solvability": {
+    "gold_verified": true,
+    "gate_oracle": true,
+    "gate_nop": true,
+    "gate_oracle_k3": true,
+    "verified_by": "T5 三道门禁（oracle / nop / oracle-k3）"
+  },
+  "leakage": {
+    "leak_scan_passed": true,
+    "leak_scan_note": "容器内 find 全盘扫描：命中 69，违规 0，已核良性 69",
+    "leak_scan_violations": [],
+    "scanned_by": "scripts/mvp/t6-leak-scan.py（容器内，非读 tar）",
+    "filename_specificity": "symptom",
+    "filename_note": "mechanism=文件名点出修法所需机制，得分可能偏高（4 条，T7 要标注）；symptom=仅症状词，§4.2 判为正常题面；topic_only=仅主题"
+  },
+  "review": {
+    "grade": "B",
+    "eliminated": false,
+    "grade_meaning": "A2 只剩祈使句 / A1 点名交付物 / B 文件名点出症状 / C 散文自带可复现症状 / X 淘汰",
+    "reviewed_by": "T6 人工过目 100%（reports/t6-review.md §3.4）"
+  }
 }

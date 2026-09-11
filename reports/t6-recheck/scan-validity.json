@@ -1,0 +1,24 @@
+{
+  "问题": "我的扫描容器与 harbor 实跑容器，看到的是同一份文件树吗？若不是，检查⑤的零违规就不作数",
+  "已核三点": [
+    {
+      "项": "镜像同源",
+      "判据": "扫描用 task 自己的 environment/Dockerfile + environment/ 作构建上下文，与 harbor 完全一致（harbor 也是读这两个）",
+      "结论": "同一份镜像"
+    },
+    {
+      "项": "无额外挂载",
+      "判据": "实跑 trial 的 config.json 只有 task.path / trial_name / trials_dir / verifier_timeout_multiplier / job_id，零挂载配置；trial.log 里零处 volume/mount/bind 痕迹；判分产物是靠「Collecting main service artifacts」拷出来的，不是靠挂载。harbor 源码里的 volumes/mount 逻辑全在 ack/gke/islo 等云后端，本地 docker 后端不走",
+      "结论": "harbor 不往容器里挂宿主目录 → 不存在「挂进来的泄漏面我扫不到」"
+    },
+    {
+      "项": "网络不影响文件树",
+      "判据": "扫描与实跑都是 --network none；且文件树在构建期就定了，运行期网络与它无关",
+      "结论": "无影响"
+    }
+  ],
+  "两处刻意的差异及其安全性": [
+    "--entrypoint find 覆盖入口：只读文件不跑 test.sh，不改容器状态",
+    "prune 掉 /proc /sys /dev：内核虚拟文件系统，不属于 task 内容；/ 下其余全扫（harbor/judge 若被误放到根下仍能发现）"
+  ]
+}

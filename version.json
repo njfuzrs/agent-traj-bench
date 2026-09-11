@@ -17,7 +17,10 @@
     "T0": {
       "state": "done",
       "date": "2026-09-07",
-      "artifacts": ["scripts/mvp/", "bench/v0.2-mini/"],
+      "artifacts": [
+        "scripts/mvp/",
+        "bench/v0.2-mini/"
+      ],
       "gate": "pytest 68 passed / 0 skipped；harbor Task.is_valid_dir 认格式"
     },
     "T1": {
@@ -29,11 +32,65 @@
       ],
       "gate": "182 条 ≥120；S41/M52/L89 三档各 ≥15；反向自证非零退出"
     },
-    "T2": { "state": "todo" },
-    "T3": { "state": "todo" },
-    "T4": { "state": "todo" },
-    "T5": { "state": "todo" },
-    "T6": { "state": "todo" },
-    "T7": { "state": "todo" }
+    "T2": {
+      "state": "done",
+      "date": "2026-09-08",
+      "artifacts": [
+        "bench/v0.2-mini/meta/resolved.jsonl",
+        "bench/v0.2-mini/reports/t2-resolve.md"
+      ],
+      "gate": "70 条反解成功（目标 40-50）；exact 100%，锚点 96.1%"
+    },
+    "T3": {
+      "state": "done",
+      "date": "2026-09-10",
+      "artifacts": [
+        "bench/v0.2-mini/tasks/T####/",
+        "bench/v0.2-mini/meta/p2p.jsonl",
+        "bench/v0.2-mini/meta/tasks.stats.json",
+        "bench/v0.2-mini/reports/t3-tasks.md"
+      ],
+      "gate": "65 条 task；Task.is_valid_dir 65/65；P2P 采样 50/50 base；四条作弊路径 + 三条反向自证全封堵",
+      "note": "⚠️ S 档仅 5 条，不达「各档 ≥10」，根因在 T2（见 t3-tasks.md §9.1）"
+    },
+    "T4": {
+      "state": "done",
+      "date": "2026-09-10",
+      "artifacts": [
+        "bench/v0.2-mini/tasks/T####/environment/",
+        "bench/v0.2-mini/meta/snapshots.jsonl",
+        "bench/v0.2-mini/reports/t4-env.md"
+      ],
+      "gate": "65 条快照；步骤④交叉 apply --check 130/130；泄漏扫描零违规"
+    },
+    "T5": {
+      "state": "done",
+      "date": "2026-09-11",
+      "artifacts": [
+        "bench/v0.2-mini/meta/gate.jsonl",
+        "bench/v0.2-mini/reports/t5-gate.md",
+        "bench/v0.2-mini/reports/t5-selftest.md",
+        "scripts/mvp/t5-gate.py",
+        "scripts/mvp/t5_gate_lib.py"
+      ],
+      "gate": "三道门禁（oracle 44/65、nop 61/65、oracle-k3 在 40 条上 40/40 三次一致）后存活 40 条；反向自证 6/6；实付 $0",
+      "note": "7 条因 src/ink/ 从未入库不可复现；T0017/T0027 留作待复查，已由 T6 定性淘汰"
+    },
+    "T6": {
+      "state": "done",
+      "date": "2026-09-11",
+      "artifacts": [
+        "bench/v0.2-mini/reports/t6-review.md",
+        "bench/v0.2-mini/reports/t6-recheck/",
+        "scripts/mvp/t6-leak-scan.py",
+        "scripts/mvp/t6-writeback.py"
+      ],
+      "gate": "40/40 过目（100%，非抽样）；容器内泄漏扫描零违规 + 扫描器 5/5 反向自证；F2P 因果 40/40",
+      "survivors": 39,
+      "note": "🔴 淘汰 T0005 后存活 39 条，已跌破方案「≥40」底线，处置权交 T7（t6-review.md §6.2）；🔴 35/40 题面指向容器内不存在且含标准答案的文档，20 条剥掉路径后只剩一句祈使句 —— T7 的基线必须按 A2/A1/B/C 分级分组报，dataset card 须写明（见 t6-review.md §3、§7）"
+    },
+    "T7": {
+      "state": "todo"
+    }
   }
 }

@@ -178,6 +178,23 @@ docker run --rm --network none --entrypoint find <task-image> / \
 
 > ⚠️ T4 报告把第一类记作 `packages/*/skill/builtin/*/evals/`（monorepo 形态）。本批 40 条全是 external 形态，落在 `src/` 下 —— **同一类，路径不同**。照 T4 的路径去核会以为「没命中」。
 
+> ⚠️ **`T0002` 那一行是加宽判据前扫的，命中数 65 而非 69** —— 差的 4 项正是
+> `/eval-framework` 与 `node_modules/eval-framework`（判据补入前扫描器看不见它们）。
+> 结论同为零违规，但**分母不同不能并排采信** —— 已按新判据复扫对齐，
+> 见 `leak-scan-container.jsonl` 里 `T0002` 的 `n_hits`（应为 69，与其余 39 条一致）。
+
+### 4.0 前提核验：我扫的容器 == harbor 实跑的容器
+
+「容器内零违规」只有在**扫描容器与实跑容器看到同一份文件树**时才作数。若 harbor 会往容器里挂宿主目录，挂进来的泄漏面我这边根本扫不到 —— 整个检查⑤就成了空转。已核三点（产物 `reports/t6-recheck/scan-validity.json`）：
+
+| 项 | 判据 | 结论 |
+|---|---|---|
+| 镜像同源 | 扫描用 task 自己的 `environment/Dockerfile` + `environment/` 作构建上下文，与 harbor 读的是同两个 | 同一份镜像 |
+| 无额外挂载 | 实跑 trial 的 `config.json` 只有 `task.path`/`trial_name`/`trials_dir`/`verifier_timeout_multiplier`/`job_id`，**零挂载配置**；`trial.log` 里零处 volume/mount/bind；判分产物靠「Collecting main service artifacts」拷出来，不靠挂载。harbor 源码的 volumes/mount 逻辑全在 ack/gke/islo 云后端，本地 docker 后端不走 | harbor 不挂宿主目录 → 不存在「挂进来的泄漏面扫不到」 |
+| 网络不影响文件树 | 扫描与实跑都是 `--network none`；文件树在构建期就定了，运行期网络与它无关 | 无影响 |
+
+**两处刻意的差异及其安全性**：① `--entrypoint find` 覆盖入口 —— 只读文件不跑 `test.sh`，不改容器状态；② prune 掉 `/proc /sys /dev` —— 内核虚拟文件系统，不属于 task 内容，`/` 下其余全扫（harbor/judge 若被误放到根下仍能发现）。
+
 ### 4.1 扫描器自己也被扫描（T4 交接 #6 的教训）
 
 T4 的自证阈值是拍的，导致它自称检查却永远返绿。所以这次先注入必然泄漏的文件，要求扫描器报红且**违规路径指向注入点**：
@@ -207,7 +224,17 @@ T4 的自证阈值是拍的，导致它自称检查却永远返绿。所以这�
 | `T0065` | `builtin-skill附属文件不释放+delegate读不到references` | 点出两处症状 |
 | `T0010` `T0014` `T0054` `T0063` | 污染 / 误伤 / 缺少选项 / 不显示 | 仅症状，属正常题面 |
 
-**不淘汰**：这些是 bug 标题的自然形态，症状描述本就该给 agent。只有 `T0002` 接近「把修法写在题面上」。**T7 的 dataset card 要标注这 8 条**，分析时留意它们可能偏高。
+**不淘汰**：这些是 bug 标题的自然形态，症状描述本就该给 agent。只有 `T0002` 接近「把修法写在题面上」。
+
+**口径要分三级，不是「8 条 vs 其余」**（已回写为 `meta.json` 的 `leakage.filename_specificity`）：
+
+| 级 | 条数 | 是谁 | T7 怎么用 |
+|---|---|---|---|
+| `mechanism` | **4** | `T0002` `T0040` `T0038` `T0065` | 🔴 **文件名点出修法所需的机制**，得分可能偏高 —— dataset card 要标注的是这 4 条 |
+| `symptom` | 4 | `T0010` `T0014` `T0054` `T0063` | 仅症状词（污染/误伤/缺少选项/不显示），**属正常题面**，不必打折扣 |
+| `topic_only` | 27 | 其余 | 文件名只点主题 |
+
+⚠️ `reports/t6-recheck/filename-leak.json` 只做了「带信息 8 条 vs 仅主题 27 条」的二分，**没有 mechanism/symptom 这一层** —— 照它的二分给 8 条一律打折扣，会把上表明确判为「正常题面」的 4 条也算进去。分级依据是本节表格，回写脚本里的名单与它由单测绑定（`test_t6_filename_mechanism_set_matches_report`）。
 
 ---
 
@@ -294,6 +321,7 @@ T5 交接 #1 明确：存活 40 条正好压线，T6 再淘汰任何一条就跌
 | # | 事项 | 严重度 |
 |---|---|---|
 | 1 | **存活 39 条，已跌破 ≥40**。建议按 §6.2 选项 A 降量交付，dataset card 写明 | 🔴 |
+| 1b | ⚠️ **存活集读 `reports/t6-recheck/survivors.json`，不要读 `meta/gate.jsonl` 的 `survives`** —— 后者是 T5 三道门禁的结论（**40 条**），不含 T6 的人工淘汰。照它取会把 `T0005` 算进基线，而那条的题面与判分对象完全无关。`meta.json` 已补 `review.eliminated` 供逐条判别 | 🔴 |
 | 2 | **基线数字必须按 §3.4 分级分组报**（A2 20 / A1 11 / B 4 / C 4）。混在一起报会把「题面缺信息」误读成「模型能力差」 | 🔴 |
 | 3 | **dataset card 的 Limitations 至少写四条**：① 7 条因 `src/ink/` 从未入库不可复现（T5 交接 #2）② 5 条 iam 被内网 registry 挡（T5 交接 #2）③ **35/40 题面指向容器内不存在的文档，20 条题面信息量极低**（§3）④ **8 条文件名点出根因，得分可能偏高**（§4.2） | 🔴 |
 | 4 | 泄漏扫描结论读 `reports/t6-recheck/leak-scan-container.jsonl`，**不要读本报告的 markdown**；`meta.json` 的 `leak_scan_passed` 已按它回写，未验的写 `null` 而非 `true` | 中 |
@@ -314,8 +342,12 @@ T5 交接 #1 明确：存活 40 条正好压线，T6 再淘汰任何一条就跌
 | `reports/t6-recheck/leak-scan-container.jsonl` | 逐条容器内扫描结论（**权威源**） |
 | `reports/t6-recheck/leak-scan-selftest.json` | 扫描器的 5/5 反向自证 + 修掉的两处缺陷 |
 | `reports/t6-recheck/grade.json` | 逐条题面分级（A2/A1/B/C/X） |
+| `reports/t6-recheck/survivors.json` | **存活名单（T7 取存活集读这里）** —— gate 存活 40 − T6 淘汰 1 = 39 |
+| `reports/t6-recheck/t7-grade-groups.json` | 分级分组名单，T7 分组报基线用 |
+| `reports/t6-recheck/scan-validity.json` | 扫描容器与 harbor 实跑容器条件一致性核验（§4.0） |
+| `reports/t6-recheck/filename-leak.json` | 题面文件名是否点出根因的二分（8 条点出 / 27 条仅症状，§4.2），已回写为 `meta.json` 的 `leakage.rootcause_in_filename` |
 | `reports/t6-recheck/doc-refs.json` | 题面引用的 37 个文档路径与容器内缺失情况 |
 | `reports/t6-recheck/doc-recoverable.json` | 宿主机上能找回哪些（31/37）及其位置 |
 | `reports/t6-recheck/testpatch-applies.json` | 40/40 `git apply --check` 通过 → 快照都是 base 版 |
 | `scripts/mvp/t6-leak-scan.py` | 容器内泄漏扫描（含 420s 超时、逐条落盘、`--resume`） |
-| `scripts/mvp/t6-writeback.py` | 回写 meta.json 两个字段（未验写 `null`） |
+| `scripts/mvp/t6-writeback.py` | 回写 meta.json 的 `solvability`／`leakage`／`review` 三段（未验、未过目一律写 `null`，不写 `true`／`false`） |
