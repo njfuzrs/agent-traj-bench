@@ -1950,3 +1950,127 @@ def test_t6_scan_still_flags_real_leaks():
     ]
     viol, benign = m.classify(leaks)
     assert len(viol) == len(leaks), f"真泄漏被误判成良性：{benign}"
+
+
+def test_t6_writeback_marks_manual_elimination():
+    """回写必须让「T6 人工淘汰」在 meta.json 里可见 —— 否则下游会把淘汰的题算进基线。
+
+    `gate.jsonl` 的 `survives` 是 T5 三道门禁的结论（40 条），**不含 T6 的人工淘汰**。
+    T0005 三道门禁全绿，只写 `gold_verified` 的话它在 meta.json 里与存活条目一模一样，
+    而它的题面（发版 + 更新官网日志）与判分对象（AUDIT 日志级别门控）完全无关。
+    """
+    wb = (MVP / "t6-writeback.py").read_text(encoding="utf-8")
+    assert 'm["review"]["eliminated"]' in wb, "必须写 review.eliminated，让人工淘汰可机读"
+    assert 'm["review"]["grade"]' in wb, "必须写 review.grade，T7 要按分级分组报基线"
+    # 没过目的写 None，不写 False —— 与 leak_scan_passed 同一条纪律
+    assert 'None if g6 is None else (g6 == "X")' in wb, (
+        "未过目的条目必须写 None，不能写 False（「没过目」≠「过目了没淘汰」）"
+    )
+
+
+def test_t6_survivors_list_excludes_manually_eliminated():
+    """存活名单产物必须是 gate 存活减去 T6 淘汰，且与分级分组自洽。
+
+    T7 取存活集若照 `gate.jsonl` 的 `survives` 取，会多算 T0005。所以要有一份
+    显式名单，且它必须与 `grade.json`（逐条分级）、`t7-grade-groups.json`（分组）
+    三者一致 —— 任一处漂移都会让基线的分母对不上。
+    """
+    r = c.MVP_REPORTS / "t6-recheck"
+    surv = json.loads((r / "survivors.json").read_text(encoding="utf-8"))
+    grade = json.loads((r / "grade.json").read_text(encoding="utf-8"))
+    groups = json.loads((r / "t7-grade-groups.json").read_text(encoding="utf-8"))
+
+    elim = {t for t, v in grade.items() if v == "X"}
+    assert set(surv["t6_eliminated"]) == elim, "survivors.json 的淘汰名单与 grade.json 不一致"
+    assert set(surv["survivors"]) == set(grade) - elim, "存活名单 ≠ 分级全集减淘汰"
+    assert surv["survivors_n"] == len(surv["survivors"])
+
+    union = set().union(*(set(v) for v in groups.values()))
+    assert union == set(surv["survivors"]), (
+        "分组并集与存活名单不一致 —— T7 按分组报基线时分母会对不上"
+    )
+
+
+def test_t6_writeback_marks_filename_leak():
+    """题面文件名的具体程度要在 meta.json 里可机读 —— 容器内扫描抓不到这类泄漏。
+
+    §4.2：泄漏在**题面文本**里（文档打不开，但路径文本留在 instruction.md 里，
+    agent 读得到）。容器内 find 只扫文件树，对它完全失明。交接清单要求 T7 在
+    dataset card 里标注，没有字段的话 T7 只能回来手抄报告 markdown ——
+    而交接 #4/#5 的纪律恰恰是「读产物，不要读报告 markdown」。
+
+    ⚠️ 必须是三级而非布尔：`filename-leak.json` 只做了「带信息 8 条 vs 仅主题 27 条」
+    的二分，但 §4.2 的表格把前 8 条再分两级 —— 只有 4 条点出**机制**，另 4 条是
+    症状词（污染/误伤/缺少选项/不显示），原文明确判为「仅症状，属正常题面」。
+    照二分一律标 True，会让 T7 按 8 条的口径打折扣，而报告说的是 4 条。
+    """
+    wb = (MVP / "t6-writeback.py").read_text(encoding="utf-8")
+    assert 'm["leakage"]["filename_specificity"]' in wb, (
+        "必须回写 filename_specificity，否则 T7 只能手抄报告"
+    )
+    for level in ("mechanism", "symptom", "topic_only"):
+        assert f'"{level}"' in wb, f"三级里缺 {level} —— 布尔化会把「正常题面」标成根因泄漏"
+    # 未核的写 None —— 与 leak_scan_passed / review.eliminated 同一条纪律
+    assert 'm["leakage"]["filename_specificity"] = None' in wb, (
+        "未核的条目必须写 None（「没核」≠「核过不点机制」）"
+    )
+
+
+def test_t6_filename_mechanism_set_matches_report():
+    """回写脚本的 mechanism 名单必须与报告 §4.2 三级表逐条一致，且三级互不重叠。
+
+    这个名单在回写脚本里是硬编码的（`filename-leak.json` 没有 mechanism/symptom
+    这一层），所以它和报告之间没有机械约束 —— 改了一处忘了另一处不会有任何报错。
+    这条测试就是那个约束。
+
+    ⚠️ 只认 §4.2 的**三级表**（`| \`mechanism\` |` 那张）为权威源。该节还留着
+    一张更早的「泄漏程度」表，两张表的名单并列 —— 若解析时把两张混在一起，
+    正是这条测试要防的漂移。
+    """
+    import re as _re
+
+    wb = (MVP / "t6-writeback.py").read_text(encoding="utf-8")
+    m = _re.search(r"FN_MECHANISM = \{([^}]*)\}", wb)
+    assert m, "找不到 FN_MECHANISM"
+    in_code = set(_re.findall(r"T\d{4}", m.group(1)))
+
+    md = (c.MVP_REPORTS / "t6-review.md").read_text(encoding="utf-8")
+    sec = md.split("### 4.2 ")[1].split("\n---")[0]
+
+    # 三级表：每级恰好一行，行首是 | `<级名>` |
+    levels = {}
+    for lv in ("mechanism", "symptom", "topic_only"):
+        rows = [ln for ln in sec.splitlines() if ln.startswith(f"| `{lv}` |")]
+        assert len(rows) == 1, f"§4.2 三级表里 `{lv}` 的行数为 {len(rows)}，应为 1"
+        levels[lv] = set(_re.findall(r"T\d{4}", rows[0]))
+
+    assert in_code == levels["mechanism"], (
+        f"回写脚本的 mechanism 名单 {sorted(in_code)} "
+        f"与 §4.2 三级表 {sorted(levels['mechanism'])} 不一致"
+    )
+    assert not (levels["mechanism"] & levels["symptom"]), "机制级与仅症状级重叠"
+    assert len(levels["mechanism"]) == 4 and len(levels["symptom"]) == 4, (
+        "§4.2 的两级各 4 条 —— 数量变了要同步改 dataset card 的标注口径"
+    )
+
+
+def test_t6_filename_leak_partition_covers_reviewed_set():
+    """filename-leak.json 的两组必须不重叠，且并集覆盖全部过目条目。
+
+    这两组是「点出根因」与「仅症状」的二分。若有条目两组都不在，报告的
+    「8 条偏高」就没有分母；若两组重叠，同一条会被同时算进两个口径。
+    """
+    import json as _json
+
+    r = c.MVP_REPORTS / "t6-recheck"
+    fnl = _json.loads((r / "filename-leak.json").read_text(encoding="utf-8"))
+    grade = _json.loads((r / "grade.json").read_text(encoding="utf-8"))
+
+    root = set(fnl["rootcause_in_filename"])
+    topic = set(fnl["topic_only"])
+    assert not (root & topic), f"两组重叠：{root & topic}"
+    # 全集是过目的 40 条；未被二分的条目要能说清是哪些（题面无文档引用的 5 条）
+    unpartitioned = set(grade) - root - topic
+    assert len(unpartitioned) <= 5, (
+        f"未二分的条目过多（{len(unpartitioned)}），说明 filename-leak.json 漏了：{unpartitioned}"
+    )
