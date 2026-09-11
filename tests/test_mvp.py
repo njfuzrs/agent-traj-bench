@@ -1828,3 +1828,125 @@ def test_t5_selftest_mutants_share_one_environment_image():
             f"变异体写入了 {m.group(1)}/ —— 只许改 tests/ 与 solution/，"
             f"改 environment/ 会破坏镜像共享"
         )
+
+
+# ── ㊻-㊾ T6 泄漏扫描器的守卫（每条都对应 T6 实测踩到的坑） ──────────────
+
+
+def _t6_scan_src() -> str:
+    return (MVP / "t6-leak-scan.py").read_text(encoding="utf-8")
+
+
+def _t6_mod():
+    """按文件路径加载 t6-leak-scan.py（文件名带连字符，不能 import）。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("t6_leak_scan", MVP / "t6-leak-scan.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_t6_scan_matches_eval_framework_not_just_evals():
+    """判据必须能命中 `/eval-framework` —— 方案原文的 `*evals*` 匹配不到它。
+
+    🔴 T6 实测发现：方案 §4 T6 给的 `-path '*evals*'` **少个 s，匹配不到
+    `/eval-framework`**，而那正是方案自己点名的三类「像泄漏其实是真实资产」
+    之一 —— 等于扫描器对它完全失明，既报不出它，也无法确认它没被误剔。
+    """
+    src = _t6_scan_src()
+    assert '"*eval-framework*"' in src, (
+        "必须单列 eval-framework —— `*evals*` 少个 s 匹配不到 `/eval-framework`"
+    )
+
+
+def test_t6_scan_does_not_widen_to_bare_eval():
+    """但不许放宽成 `*eval*` —— 噪声淹掉真违规比漏看更危险。
+
+    实测：放宽成 `*eval*` 后，T0002 的对照组从「0 违规」变成「6 违规」，
+    混进来的是 `timeval`（perl 头文件）、`evaluator.ts`（仓库真实源码）。
+    一旦对照组自己就有 6 条噪声违规，真泄漏出现时没人看得出来。
+    """
+    src = _t6_scan_src()
+    idx = src.index("FIND_EXPR = [")
+    expr = src[idx : src.index("]", idx)]
+    assert '"*eval*"' not in expr, (
+        "不许用裸 `*eval*` —— 会把 timeval / evaluator.ts 扫成违规，"
+        "噪声淹掉真违规"
+    )
+
+
+def test_t6_scan_build_has_timeout():
+    """构建必须有超时 —— 宿主代理断开时 `bun install` 会无限等待。
+
+    🔴 T6 实测：代理进程被关掉后，构建容器（从 dockerd 继承 HTTP_PROXY）
+    卡在一条死连接上，0.02% CPU 挂了 8 分钟不退，而 `docker build` 自己
+    **没有任何超时**。没有这个上限，一次代理抖动就会把整轮扫描永久卡住。
+    """
+    src = _t6_scan_src()
+    assert "BUILD_TIMEOUT_SEC" in src, "构建必须有超时上限"
+    assert "subprocess.TimeoutExpired" in src, "必须捕获超时并继续，而不是崩掉"
+    assert "timeout=BUILD_TIMEOUT_SEC" in src, "超时值必须真的传给 subprocess.run"
+
+
+def test_t6_scan_writes_each_row_immediately():
+    """逐条落盘，不许只在结尾一次性写 —— 否则中途被杀就全白跑。
+
+    🔴 T6 实测：首版在结尾才 `write_jsonl`。跑到第 13 条时代理断开、进程被杀，
+    40 条只留下 1 行 —— 前 12 条的容器全白建了（每条约 2.5 分钟）。
+    长跑任务的中间结果必须即时可见。
+    """
+    src = _t6_scan_src()
+    assert 'OUT.open("a"' in src, "必须以追加模式逐条落盘"
+    assert "--resume" in src, "必须支持续跑，否则中断后只能从头再来"
+
+
+def test_t6_scan_distinguishes_unverified_from_clean():
+    """镜像没建成要写 `null`，不能写 `true` —— 「没验」和「验过没问题」必须可区分。
+
+    这是方法论第一条（验收脚本自己会骗人）的直接应用：一个在构建失败时
+    也写 `true` 的字段，等于没有这个字段。回写脚本同样要守这条。
+    """
+    scan_src = _t6_scan_src()
+    assert '"leak_scan_passed": None' in scan_src, "构建失败时必须写 None，不是 True"
+    wb = (MVP / "t6-writeback.py").read_text(encoding="utf-8")
+    assert 'm["leakage"]["leak_scan_passed"] = None' in wb, (
+        "回写脚本在未扫/未建成时必须写 None"
+    )
+
+
+def test_t6_scan_keeps_the_three_known_benign_classes():
+    """三类已核良性必须都在判据里 —— 少一类就会误淘汰，且会打断存活测试。
+
+    `src/skill/builtin/*/evals/` 被 `tests/skill/code-review.test.ts:54`
+    断言存在，剔了它 P2P 直接变红 —— 那是自己造一个假的测试失败。
+    ⚠️ T4 报告记的是 `packages/*/...`（monorepo 形态），本批 40 条是
+    external 形态落在 `src/` 下 —— 同一类，路径不同，判据要能同时命中。
+    """
+    m = _t6_mod()
+    cases = [
+        "/repo/src/skill/builtin/ci-self-heal/evals/case_csh_001.yaml",
+        "/repo/packages/web/skill/builtin/code-review/evals/case_cr_001.yaml",
+        "/eval-framework/package.json",
+        "/repo/node_modules/eval-framework/package.json",
+    ]
+    viol, benign = m.classify(cases)
+    assert not viol, f"这些都是已核良性，不该判违规：{viol}"
+    assert len(benign) == len(cases)
+
+
+def test_t6_scan_still_flags_real_leaks():
+    """真泄漏必须仍报红 —— 良性白名单不能宽到把真泄漏也放过。
+
+    与上一条成对：只有「良性放过」而没有「真泄漏报红」，白名单就可能被
+    写得过宽而无人察觉（M4/M5 配对反证的同一个道理）。
+    """
+    m = _t6_mod()
+    leaks = [
+        "/repo/docs/bugfixes/todo/20260807-某bug根因.md",
+        "/repo/evals/_judge/calibration-set/c1.yaml",
+        "/repo/.claude/settings.json",
+        "/repo/external-benchmarks/harbor/pyproject.toml",
+    ]
+    viol, benign = m.classify(leaks)
+    assert len(viol) == len(leaks), f"真泄漏被误判成良性：{benign}"
