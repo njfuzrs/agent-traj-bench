@@ -2023,7 +2023,7 @@ def test_t6_filename_mechanism_set_matches_report():
     这一层），所以它和报告之间没有机械约束 —— 改了一处忘了另一处不会有任何报错。
     这条测试就是那个约束。
 
-    ⚠️ 只认 §4.2 的**三级表**（`| \`mechanism\` |` 那张）为权威源。该节还留着
+    ⚠️ 只认 §4.2 的**三级表**（行首为 | `mechanism` | 的那张）为权威源。该节还留着
     一张更早的「泄漏程度」表，两张表的名单并列 —— 若解析时把两张混在一起，
     正是这条测试要防的漂移。
     """
@@ -2073,4 +2073,57 @@ def test_t6_filename_leak_partition_covers_reviewed_set():
     unpartitioned = set(grade) - root - topic
     assert len(unpartitioned) <= 5, (
         f"未二分的条目过多（{len(unpartitioned)}），说明 filename-leak.json 漏了：{unpartitioned}"
+    )
+
+
+def test_t6_report_distribution_table_matches_artifacts():
+    """报告 §7.1 的三张分布表必须与产物实算一致 —— 它们是 T7 报基线的分母。
+
+    这三张表是手写的数字，与 `survivors.json` × 各 `meta.json` 之间没有机械约束。
+    T7 的交接 2b/2c 直接引用它们决定「报几档」「哪档不能报」，一处漂移就会让
+    基线的分母对不上，而没有任何东西会报错。这条测试就是那个约束。
+    """
+    import json as _json
+    import re as _re
+
+    r = c.MVP_REPORTS / "t6-recheck"
+    surv = _json.loads((r / "survivors.json").read_text(encoding="utf-8"))["survivors"]
+    tasks = c.MVP_TASKS if hasattr(c, "MVP_TASKS") else c.MVP_ROOT / "tasks"
+
+    band, cat = {}, {}
+    for t in surv:
+        m = _json.loads((tasks / t / "meta.json").read_text(encoding="utf-8"))
+        band[m["band"]] = band.get(m["band"], 0) + 1
+        cat[m["category"]] = cat.get(m["category"], 0) + 1
+
+    md = (c.MVP_REPORTS / "t6-review.md").read_text(encoding="utf-8")
+    sec = md.split("### 7.1 ")[1].split("\n## ")[0]
+
+    def cell(label: str) -> int:
+        """取 §7.1 表格里 `| <label> | <数字> | ...` 的第二列（数字可带 ** 强调）。
+
+        按列切而不是对整行做正则 —— 第三列的说明文字里有「5 条」「41%」这类数字，
+        对整行搜会命中它们。
+        """
+        rows = [ln for ln in sec.splitlines()
+                if _re.match(rf"^\|\s*`?{_re.escape(label)}`?\s*\|", ln)]
+        assert len(rows) == 1, f"§7.1 里 {label!r} 的行数为 {len(rows)}，应为 1"
+        cols = [x.strip() for x in rows[0].strip().strip("|").split("|")]
+        assert len(cols) >= 2, f"§7.1 的 {label!r} 行列数不足：{rows[0]}"
+        m = _re.fullmatch(r"\*{0,2}(\d+)\*{0,2}", cols[1])
+        assert m, f"§7.1 的 {label!r} 行第二列不是纯条数：{cols[1]!r}"
+        return int(m.group(1))
+
+    # 难度档：S 必须是 0（实测为零，不是待填）
+    assert cell("S") == band.get("S", 0) == 0, (
+        f"§7.1 的 S 档与实算不一致：报告 {cell('S')}，实算 {band.get('S', 0)}。"
+        "S=0 是 T7 健康度判据第三条失效的依据（交接 2c），改动要同步 dataset card"
+    )
+    for b in ("M", "L"):
+        assert cell(b) == band[b], f"§7.1 的 {b} 档：报告 {cell(b)}，实算 {band[b]}"
+    for k in ("bug_fix", "test_authoring"):
+        assert cell(k) == cat[k], f"§7.1 的 {k}：报告 {cell(k)}，实算 {cat[k]}"
+
+    assert sum(band.values()) == len(surv) == 39, (
+        f"难度分布合计 {sum(band.values())} ≠ 存活 {len(surv)}"
     )
