@@ -103,26 +103,52 @@ def wilson(passed: int, n: int, z: float = 1.959963984540054) -> tuple[float, fl
 
 @dataclass
 class Cell:
-    """一个分组格子的统计。"""
+    """一个分组格子的统计。
+
+    ⚠️ `missing` 与 `excluded` 是**两件不同的事**，刻意分开存：
+
+      - `excluded` —— 跑了，但 infra 故障（抛异常 / verifier 未写分）
+      - `missing`  —— **压根没跑**（跑批未完成、或该 task 不在这一轮的 `-p` 名单里）
+
+    两者都不进分母，但混成一个字段就无法回答「这张表覆盖了多少」。
+    ⛔ 更不能让 `missing` 留在分母里 —— 那等于**把没跑的题记成答错**，
+    形态是「A1 报 0/11 而实际只跑了 1 条」，且主表分母（3）与分组表分母（39）
+    互相矛盾却不报错。2026-09-13 用跑到 3/39 的中途产物实测撞到：
+    这正是 R1「绿着坏掉」——跑完 39 条时数字会碰巧对上，缺陷仍在，
+    此后任何一条 infra 排除都会重新触发。
+    """
 
     label: str
     tasks: list[str] = field(default_factory=list)
     solved: int = 0
     excluded: int = 0
+    #: 分组名单里、但这一轮产物里没有任何 trial 的 task 数
+    missing: int = 0
 
     @property
     def scored(self) -> int:
-        return len(self.tasks) - self.excluded
+        return len(self.tasks) - self.excluded - self.missing
 
     @property
     def report_pct(self) -> bool:
         """够不够报百分比。< 5 条只报绝对条数（交接 2b）。"""
         return self.scored >= SMALL_CELL
 
+    @property
+    def coverage_note(self) -> str:
+        """这一格的覆盖情况。**没跑的与被排除的分开写**，空串表示全跑齐了。"""
+        bits = []
+        if self.missing:
+            bits.append(f"{self.missing} 条未跑")
+        if self.excluded:
+            bits.append(f"{self.excluded} 条 infra 排除")
+        return "，".join(bits)
+
     def fmt(self) -> str:
         """格内结果的字符串形态。**小格刻意不出百分比。**"""
         if self.scored == 0:
-            return f"0/0（全部排除，n={len(self.tasks)}）"
+            why = self.coverage_note or "全部排除"
+            return f"0/0（{why}，n={len(self.tasks)}）"
         if not self.report_pct:
             return f"{self.solved}/{self.scored} 条（n<{SMALL_CELL}，刻意不报百分比）"
         p, lo, hi = wilson(self.solved, self.scored)
@@ -257,14 +283,25 @@ def pass_at_1(trials: list[Trial]) -> dict:
 
 def group(per_task_rate: dict[str, float], groups: dict[str, list[str]],
           excluded_tasks: list[str]) -> dict[str, Cell]:
-    """按给定分组切格。**一个维度一张表，不交叉**（交接 2b）。"""
+    """按给定分组切格。**一个维度一张表，不交叉**（交接 2b）。
+
+    ⚠️ 三分而不是二分：分组名单里的每个 task 要么**被排除**、要么**没跑**、
+    要么**跑了**（解出与否看 `per_task_rate`）。
+
+    ⛔ 不能写成 `per_task_rate.get(t, 0.0)` —— 那把「没跑」和「跑了没解出」
+    压成同一个 0，没跑的 task 就静默留在分母里被记成答错。
+    判据只能是 `t in per_task_rate`（键在不在），不是取值是不是 0：
+    真正跑出 0 分的 task 键**是在**的，值也是 0.0，两者取值完全一样。
+    """
     out: dict[str, Cell] = {}
     for label, members in groups.items():
         cell = Cell(label=label, tasks=sorted(members))
         for t in members:
             if t in excluded_tasks:
                 cell.excluded += 1
+            elif t not in per_task_rate:
+                cell.missing += 1
             else:
-                cell.solved += round(per_task_rate.get(t, 0.0))
+                cell.solved += round(per_task_rate[t])
         out[label] = cell
     return out

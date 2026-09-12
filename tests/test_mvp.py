@@ -2271,10 +2271,20 @@ def test_small_cell_reports_counts_not_percentage():
 
 
 def test_cell_all_excluded_does_not_divide_by_zero():
-    """整格被排除时不许崩、也不许报 0% —— 要报「全部排除」。"""
+    """整格被排除时不许崩、也不许报 0%，且要说清**为什么**是空格。
+
+    ⚠️ 断言从原先的字面「全部排除」改成查 `0/0` + 原因词（2026-09-13）：
+    加入 `missing` 后空格有两种成因（infra 排除 / 压根没跑），
+    这一格要报的是**具体哪种**。查死一个笼统词会把更精确的文案判成回归。
+    """
     cell = t7lib.Cell(label="C", tasks=["a", "b"], solved=0, excluded=2)
     assert cell.scored == 0
-    assert "全部排除" in cell.fmt()
+    assert "0/0" in cell.fmt() and "%" not in cell.fmt(), cell.fmt()
+    assert "排除" in cell.fmt(), cell.fmt()
+
+    unrun = t7lib.Cell(label="C", tasks=["a", "b"], solved=0, missing=2)
+    assert unrun.scored == 0
+    assert "未跑" in unrun.fmt() and "%" not in unrun.fmt(), unrun.fmt()
 
 
 # ㊼ 分组分母必须与存活名单对得上（交接 1b + 2）
@@ -2306,6 +2316,34 @@ def test_group_respects_excluded_tasks():
     assert cells["g"].excluded == 1 and cells["g"].solved == 1 and cells["g"].scored == 1
 
 
+def test_group_does_not_count_unrun_tasks_as_wrong():
+    """🔴 **没跑过的 task 不许留在分母里** —— 那等于把它记成答错。
+
+    2026-09-13 用跑到 3/39 的中途产物实测撞到：`A1` 报 `0/11` 而实际只跑了 1 条，
+    且主表分母（3）与分组表分母（39）互相矛盾却不报错 —— R1「绿着坏掉」。
+
+    根因是 `per_task_rate.get(t, 0.0)` 把「没跑」与「跑了没解出」压成同一个 0。
+    ⛔ 判据只能是键在不在，不能是取值是不是 0：**真跑出 0 分的 task 键是在的、
+    值也是 0.0**，取值完全一样。所以这条同时正面固定住「跑出 0 分要进分母」。
+    """
+    # A 跑了并解出、B 跑了但 0 分、C 压根没跑
+    cells = t7lib.group({"A": 1.0, "B": 0.0}, {"g": ["A", "B", "C"]}, excluded_tasks=[])
+    cell = cells["g"]
+    assert cell.missing == 1, f"没跑的 C 未被识别为 missing：{cell}"
+    assert cell.scored == 2, f"分母应只含跑过的 A/B，实际 {cell.scored}"
+    assert cell.solved == 1, f"solved 应只有 A，实际 {cell.solved}"
+    assert "1 条未跑" in cell.coverage_note, cell.coverage_note
+
+    # missing 与 excluded 必须可区分（同一条 null vs false 的纪律）
+    mixed = t7lib.group({"A": 1.0}, {"g": ["A", "B", "C"]}, excluded_tasks=["B"])["g"]
+    assert (mixed.excluded, mixed.missing, mixed.scored) == (1, 1, 1), mixed
+    assert "未跑" in mixed.coverage_note and "infra" in mixed.coverage_note, mixed.coverage_note
+
+    # 跑齐时不许留下「未跑」的尾巴，否则报告每张表都挂一句噪声
+    full = t7lib.group({"A": 1.0, "B": 0.0}, {"g": ["A", "B"]}, excluded_tasks=[])["g"]
+    assert full.missing == 0 and full.coverage_note == "", full.coverage_note
+
+
 # ㊽ 难度只有 M/L 两档，S=0（交接 2c）
 
 def test_difficulty_has_no_s_band():
@@ -2325,21 +2363,110 @@ def test_difficulty_has_no_s_band():
 
 # ㊾ 存活集只能读 survivors.json（交接 1b）
 
+#: 允许触碰 `gate.jsonl` / `survives` 的函数白名单。
+#: 这两个函数报的是**T5 自己的结论**（漏斗的「T5 门禁存活 40」那一级、门禁记录表的
+#: 过/淘汰数），是 gate.jsonl 的正当用途。⛔ 白名单之外一律禁止 —— 尤其
+#: `load_inputs()`（分母与分组的唯一来源）必须只认 survivors.json。
+_GATE_JSONL_ALLOWED_FUNCS = {"load_funnel", "load_gate_rows"}
+
+
 def test_t7_scripts_never_read_gate_jsonl_survives():
     """🔴 交接 1b：照 `meta/gate.jsonl` 的 `survives` 取会把 T0005 算进基线。
 
     判据走 AST 常量而不是 grep —— 注释里**要**写清这条纪律（不写下来传不下去），
     逐行 grep 会把说明文字本身判成违规。
+
+    ⚠️ 2026-09-13 放宽了判据：原先「凡出现 gate.jsonl 字面量即违规」**过粗**，
+    把「报 T5 自己的结论」这个正当用途也判成违规（报告的漏斗节要报「T5 门禁存活 40」、
+    门禁节要报三道门禁各自的过/淘汰数，取数源只能是 gate.jsonl）。
+    改成**按函数作用域**判：白名单内允许，白名单外禁止，
+    并**正面**钉住 `load_inputs()`（分母的唯一来源）不许碰它 —— 那才是交接 1b 真正要防的。
     """
     import ast as _ast
 
     offenders = []
     for p in sorted(MVP.glob("t7*.py")):
         tree = _ast.parse(p.read_text(encoding="utf-8"))
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.Constant) and isinstance(node.value, str):
-                if "gate.jsonl" in node.value and "不" not in node.value and "⛔" not in node.value:
-                    offenders.append(f"{p.name}: 字符串常量里出现 gate.jsonl（{node.value[:40]!r}）")
-    assert not offenders, "T7 脚本疑似从 gate.jsonl 取存活集：" + "; ".join(offenders)
-    # 正面：至少有一处读 survivors.json
+        for fn in [n for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)]:
+            if fn.name in _GATE_JSONL_ALLOWED_FUNCS:
+                continue
+            for node in _ast.walk(fn):
+                if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+                    v = node.value
+                    if ("gate.jsonl" in v or v == "survives") and "不" not in v and "⛔" not in v:
+                        offenders.append(f"{p.name}:{fn.name}() 触碰 gate.jsonl/survives（{v[:40]!r}）")
+    assert not offenders, ("T7 脚本疑似从 gate.jsonl 取存活集（白名单："
+                          f"{sorted(_GATE_JSONL_ALLOWED_FUNCS)}）：" + "; ".join(offenders))
+
+    # 正面①：至少有一处读 survivors.json
     assert any("survivors.json" in p.read_text(encoding="utf-8") for p in MVP.glob("t7*.py"))
+
+    # 正面②：分母与分组的唯一来源 load_inputs() 必须只认 survivors.json，绝不碰 gate.jsonl
+    rep = _ast.parse((MVP / "t7-report.py").read_text(encoding="utf-8"))
+    li = next((n for n in _ast.walk(rep)
+               if isinstance(n, _ast.FunctionDef) and n.name == "load_inputs"), None)
+    assert li is not None, "t7-report.py 里没有 load_inputs() —— 判据失效了，先修这条测试"
+    body = _ast.dump(li)
+    assert "gate.jsonl" not in body and "'survives'" not in body, \
+        "🔴 load_inputs() 碰了 gate.jsonl/survives —— 分母会把 T0005 算进来（交接 1b）"
+    assert "survivors.json" in body, "load_inputs() 未读 survivors.json"
+
+
+# ㊿ 报告结构：章节编号连续 + 局限恰好 13 条
+
+def test_report_sections_are_consecutively_numbered():
+    """🔴 章节编号必须 1..N 连续无重复。
+
+    2026-09-13 实测撞到：往中间插了 §6-§10 五节后，末尾那节仍写着「## 7. 复算方式」
+    —— 报告里同时出现两个 §7。形态是**报告能正常生成、每张表都对**，只有目录编号
+    自相矛盾；靠人眼过目就是这次撞到的原因，所以钉成单测。
+
+    判据读**生成器源码里的章节字面量**而不是产物 md：产物要跑批才有，
+    而这条缺陷在写代码时就该被拦住。
+    """
+    import re as _re
+
+    src = (MVP / "t7-report.py").read_text(encoding="utf-8")
+    nums = [int(m) for m in _re.findall(r'"## (\d+)\.', src)]
+    assert nums, "t7-report.py 里没找到任何 `## N.` 章节 —— 判据失效了，先修这条测试"
+    assert nums == sorted(nums), f"章节编号不是递增的：{nums}"
+    assert len(nums) == len(set(nums)), f"章节编号有重复：{nums}"
+    assert nums == list(range(1, len(nums) + 1)), f"章节编号不连续（应 1..{len(nums)}）：{nums}"
+
+
+def test_limitations_are_exactly_thirteen():
+    """🔴 方案 §6 要求 dataset card 写 **13 条**局限（v1.3 起含 T4 新增的第 12/13 条）。
+
+    少一条就是隐藏 —— 尤其第 12/13 条是 T4 主动做出的决策（私有 registry 纪律、
+    刻意保留的残余泄漏面），不披露等于假装没有。
+
+    另外正面钉住三处**实测改过措辞**的地方，防止有人「照方案原文回改」：
+      - 第 2 条要写「全部/彻底」单仓库，不是「以某仓库为主」
+      - 第 5 条要写「S 档为 0」，⛔ 不许写成「锚点无效」
+      - 第 13 条要给出「可证不参与判分」的论证，不能只写「已剔除泄漏面」
+    """
+    import importlib.util as _u
+
+    spec = _u.spec_from_file_location("_t7report", MVP / "t7-report.py")
+    mod = _u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    lims = mod.LIMITATIONS
+    assert len(lims) == 13, f"局限应为 13 条，实际 {len(lims)} 条"
+
+    # ⚠️ 查禁止词不能直接 `"X" not in text` —— 正文正是在**否定**它
+    #（「⛔ 这不是『以某仓库为主』」/「⛔ 不要写成『锚点无效』」）。
+    # 那样写会把「明确否认」判成「回改了」。判据要落在**否定语境之外**的出现上。
+    def _asserted_without_negation(text: str, word: str) -> bool:
+        """word 是否在**非否定**语境下出现（出现处附近没有否定标记就算肯定）。"""
+        for seg in text.replace("。", "\n").replace("；", "\n").split("\n"):
+            if word in seg and not any(x in seg for x in ("不是", "不要", "不许", "⛔", "并非")):
+                return True
+        return False
+
+    assert "彻底" in lims[1] or "全部" in lims[1], f"第 2 条未写明彻底单仓库：{lims[1][:60]}"
+    assert not _asserted_without_negation(lims[1], "为主"), \
+        f"第 2 条回改成了「以某仓库为主」：{lims[1][:80]}"
+    assert "S 档" in lims[4] and "0" in lims[4], f"第 5 条未写明 S 档为 0：{lims[4][:60]}"
+    assert not _asserted_without_negation(lims[4], "锚点无效"), \
+        f"第 5 条误写成「锚点无效」：{lims[4][:80]}"
+    assert "不参与判分" in lims[12], f"第 13 条缺「可证不参与判分」的论证：{lims[12][:80]}"
