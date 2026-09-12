@@ -499,26 +499,50 @@ def test_task_dir_missing_test_script_is_invalid(tmp_path):
 # ── ⑪ 未实现的骨架必须非零退出 ─────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "script",
-    [
-        # T2 已在 2026-09-08 实现，从这张名单里移出（它现在归下面的 ⑫-⑯ 管）
-        # T4 已在 2026-09-08 实现，归下面的 ⑰-㉑ 管
-        # T3 已在 2026-09-08 实现，归下面的 ㉒-㉘ 管
-        # T5 已在 2026-09-10 实现（t5-gate.py + t5_gate_lib.py），归下面的 ㊵-㊷ 管
-        "t7-baseline.sh",
-    ],
-)
+#: 骨架名单现在是**空的** —— TZ/T0-T7 全部实现完毕：
+#:   T2/T3/T4 2026-09-08（归 ⑫-⑯ / ㉒-㉚ / ⑰-㉑ 管）
+#:   T5       2026-09-10（t5-gate.py + t5_gate_lib.py，归 ㊵-㊷ 管）
+#:   T7       2026-09-12（t7-baseline.py + t7_report_lib.py，归 ㊸-㊾ 管）
+#: 🔴 `t7-baseline.sh` 已随 T7 实现一起**删除**，走的是 `t5-gate.sh` 那条教训：
+#: 「转发壳即地雷」—— 文件只要被执行就有副作用，则任何**以为自己只是在探测它**
+#: 的调用方（测试、`--help`、shell 补全）都会触发副作用。T5 当年就是被本测试
+#: `bash t5-gate.sh` 探了一下，真的起了一批 harbor（65 条 task 跑掉 9 个 trial
+#: 才被发现），与正式批次抢容器和磁盘。所以跑批一律只留 .py 入口。
+SKELETONS: list[str] = []
+
+
+@pytest.mark.parametrize("script", SKELETONS)
 def test_unimplemented_skeletons_exit_nonzero(script):
     """T0 只交付骨架。**不许静默产出空结果** —— 那会让 T3 拿着空文件「成功」跑完。
 
     退出码 64（EX_USAGE）而不是 1，是为了与「实现了但失败」区分开。
+
+    ⚠️ 名单为空时本测试**不产生任何用例**（pytest 会 skip 掉整个 parametrize）。
+    「骨架都实现完了」这件事由下面的 `test_no_skeleton_scripts_remain` 正面守住 ——
+    只靠空名单的话，将来有人新加骨架却忘了登记，这里会静默放过。
     """
     path = MVP / script
     cmd = ["bash", str(path)] if path.suffix == ".sh" else [sys.executable, str(path)]
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
     assert proc.returncode != 0, f"{script} 未实现却以 0 退出"
     assert "尚未实现" in (proc.stdout + proc.stderr)
+
+
+def test_no_skeleton_scripts_remain():
+    """正面守「没有漏登记的骨架」——空名单本身不构成证据。
+
+    判据：`scripts/mvp/` 下任何文件只要正文（去掉注释）里写着「尚未实现」，
+    就必须出现在 `SKELETONS` 名单里，否则它是个**没人测的骨架**。
+    """
+    unlisted = []
+    for p in sorted(MVP.glob("t*.py")) + sorted(MVP.glob("t*.sh")):
+        code = "\n".join(
+            ln for ln in p.read_text(encoding="utf-8").splitlines()
+            if not ln.lstrip().startswith("#")
+        )
+        if "尚未实现" in code and p.name not in SKELETONS:
+            unlisted.append(p.name)
+    assert not unlisted, f"这些脚本仍是骨架却没登记进 SKELETONS：{unlisted}"
 
 
 def test_no_script_starts_a_real_run_when_merely_executed():
@@ -2127,3 +2151,195 @@ def test_t6_report_distribution_table_matches_artifacts():
     assert sum(band.values()) == len(surv) == 39, (
         f"难度分布合计 {sum(band.values())} ≠ 存活 {len(surv)}"
     )
+
+
+# ── ㊸-㊾ T7 判定与统计层（t7_report_lib） ──────────────────────────
+#
+# 为什么要给统计层单测：08 号 §4.11 记着一次**真实的算错** —— 配对差的 SE 公式
+# 多除了一次 N，得出的 CI 与 McNemar 的 p 值直接矛盾。教训是
+# 「两个结果互相矛盾时先怀疑仪器」。这批的仪器就是 t7_report_lib，
+# 所以在它碰真数据之前先把每条判据用构造输入固定住。
+
+import t7_report_lib as t7lib  # noqa: E402
+
+
+def _trial(task="T0001", reward=1.0, exception=None, **kw):
+    """构造一条 trial。默认是「解出且无异常」。"""
+    return t7lib.Trial(task=task, reward=reward, f2p=reward, p2p=1.0,
+                       error_code=0, exception=exception, **kw)
+
+
+# ㊸ Wilson 区间不能跑出 [0,1]
+
+def test_wilson_stays_in_unit_interval():
+    """🔴 n=39 且 p 贴边时，正态近似会给出 [0,1] 之外的区间。
+
+    这是选 Wilson 而不是 `p ± 1.96·sqrt(p(1-p)/n)` 的**唯一理由**。
+    若有人图省事换回正态近似，这条会红 —— 全对/全错时正态近似的半宽是 0，
+    区间退化成一个点，把「n 小所以不确定」误报成「完全确定」。
+    """
+    for passed, n in ((0, 39), (39, 39), (1, 39), (38, 39)):
+        p, lo, hi = t7lib.wilson(passed, n)
+        assert 0.0 <= lo <= p <= hi <= 1.0, f"passed={passed} n={n} 给出 [{lo},{hi}]"
+        assert hi > lo, f"passed={passed} n={n} 的区间退化成点 —— 像是换回了正态近似"
+
+
+def test_wilson_zero_n_does_not_invent_a_rate():
+    """n=0 时不许编一个 0.5 出来。全格被排除是**要报出来**的事实。"""
+    assert t7lib.wilson(0, 0) == (0.0, 0.0, 0.0)
+
+
+def test_wilson_matches_a1_published_numbers():
+    """用 08 号 §4.11 已发表的 A1 数字反向校准仪器：28/54 → 51.9% [38.9%, 64.6%]。
+
+    这是**跨文档的锚点**：仪器算不出别人已经发表的那组数，就说明仪器坏了，
+    而不是「口径不同」。
+    """
+    p, lo, hi = t7lib.wilson(28, 54)
+    assert round(p * 100, 1) == 51.9, f"p={p}"
+    assert round(lo * 100, 1) == 38.9, f"lo={lo}"
+    assert round(hi * 100, 1) == 64.6, f"hi={hi}"
+
+
+# ㊹ infra 故障排除出分母，不记为答错
+
+def test_infra_failure_excluded_from_denominator_not_counted_wrong():
+    """🔴 分母纪律：基础设施故障算进分母 = 把它记成答错。
+
+    构造 4 条：2 解出、1 答错、1 抛异常。
+    正确结果是 3/4 参与计分、pass@1 = 2/3，**不是 2/4**。
+    """
+    trials = [
+        _trial("A", 1.0), _trial("B", 1.0), _trial("C", 0.0),
+        _trial("D", None, exception="RuntimeError"),
+    ]
+    r = t7lib.pass_at_1(trials)
+    assert r["n"] == 3, f"分母应是 3（排除 infra 那条），得到 {r['n']}"
+    assert r["excluded"] == 1 and r["excluded_tasks"] == ["D"]
+    assert round(r["p"], 4) == round(2 / 3, 4), f"p={r['p']} —— 若是 0.5 说明把 infra 算成答错了"
+
+
+def test_reward_none_is_infra_not_zero():
+    """verifier 没写分（reward=None）属于 infra，不是 0 分。
+
+    ⛔ 反过来：`reward == 0` **不算** infra —— 那是答错的正常形态。
+    把 0 分也当 infra 排除，会把分母越排越小、pass@1 虚高到 100%。
+    """
+    assert _trial(reward=None).infra_failure is True
+    assert _trial(reward=0.0).infra_failure is False
+
+
+# ㊺ pass@1 不是 pass@k
+
+def test_pass_at_1_is_not_pass_at_k():
+    """🔴 k=3 时「任一次通过就算通过」是 **pass@k**，会把数字报高。
+
+    构造一条 task 三次尝试中通过 1 次：pass@1 = 1/3，pass@k 会报 1.0。
+    """
+    trials = [_trial("A", 1.0), _trial("A", 0.0), _trial("A", 0.0)]
+    r = t7lib.pass_at_1(trials)
+    assert r["per_task_rate"]["A"] == 1 / 3, f"得到 {r['per_task_rate']['A']} —— 1.0 说明算成了 pass@k"
+
+
+def test_pass_at_1_partial_infra_uses_usable_trials_only():
+    """k=3 中有一次 infra 故障：该 task 仍计分，但只按能用的两次算。
+
+    整条 task 因为一次环境抖动被排除，等于用抖动决定交付集大小。
+    """
+    trials = [_trial("A", 1.0), _trial("A", 0.0), _trial("A", None, exception="Timeout")]
+    r = t7lib.pass_at_1(trials)
+    assert r["n"] == 1 and r["excluded"] == 0
+    assert r["per_task_rate"]["A"] == 0.5
+
+
+# ㊻ 小格不许报百分比（交接 2b）
+
+def test_small_cell_reports_counts_not_percentage():
+    """🔴 交接 2b：任一格 < 5 条只报绝对条数。
+
+    B/C 两档各 4 条，5 条以下的比例会被**单条结果整数级拉动**（1/4 → 25%，
+    2/4 → 50%），把噪声报成 25 个百分点的差异。
+    """
+    cell = t7lib.Cell(label="B", tasks=["a", "b", "c", "d"], solved=1)
+    assert cell.report_pct is False
+    assert "%" not in cell.fmt(), f"小格出了百分比：{cell.fmt()}"
+    assert "1/4" in cell.fmt()
+
+    big = t7lib.Cell(label="A2", tasks=[f"t{i}" for i in range(20)], solved=5)
+    assert big.report_pct is True
+    assert "%" in big.fmt()
+
+
+def test_cell_all_excluded_does_not_divide_by_zero():
+    """整格被排除时不许崩、也不许报 0% —— 要报「全部排除」。"""
+    cell = t7lib.Cell(label="C", tasks=["a", "b"], solved=0, excluded=2)
+    assert cell.scored == 0
+    assert "全部排除" in cell.fmt()
+
+
+# ㊼ 分组分母必须与存活名单对得上（交接 1b + 2）
+
+def test_grade_groups_partition_survivors_exactly():
+    """🔴 分级分组的并集必须**恰好**等于存活 39 条，不重不漏。
+
+    漏一条 → 分组表合计 < 总表，读者以为「有些题没跑」；
+    重一条 → 合计 > 总表，pass@1 的分母对不上。两种都不会自己报错。
+    """
+    r = c.MVP_REPORTS / "t6-recheck"
+    surv = set(json.loads((r / "survivors.json").read_text(encoding="utf-8"))["survivors"])
+    groups = json.loads((r / "t7-grade-groups.json").read_text(encoding="utf-8"))
+    union, seen = set(), []
+    for label, members in groups.items():
+        assert members, f"分组 {label} 是空的"
+        for m in members:
+            seen.append(m)
+        union |= set(members)
+    assert len(seen) == len(union), f"分组间有重复：{len(seen)} 项 vs {len(union)} 去重后"
+    assert union == surv, f"分组并集与存活名单不一致：多 {union - surv}，缺 {surv - union}"
+    # 交接 2 写死的四格条数
+    assert {k: len(v) for k, v in groups.items()} == {"A2": 20, "A1": 11, "B": 4, "C": 4}
+
+
+def test_group_respects_excluded_tasks():
+    """分组时被排除的 task 要落进该格的 excluded，不能算成答错。"""
+    cells = t7lib.group({"A": 1.0}, {"g": ["A", "B"]}, excluded_tasks=["B"])
+    assert cells["g"].excluded == 1 and cells["g"].solved == 1 and cells["g"].scored == 1
+
+
+# ㊽ 难度只有 M/L 两档，S=0（交接 2c）
+
+def test_difficulty_has_no_s_band():
+    """🔴 交接 2c：方案原写的「S > M > L 单调梯度」判据**整条失效**。
+
+    S 档在 T3 只剩 5 条、T5 门禁全数淘汰 ⇒ 存活里 S=0。
+    这条固定住「S 是 0 而不是待填」，防止后来有人补一个 S 档就以为可以报三档单调性。
+    """
+    surv = json.loads((c.MVP_REPORTS / "t6-recheck/survivors.json").read_text(encoding="utf-8"))["survivors"]
+    bands = {}
+    for t in surv:
+        m = json.loads((c.MVP_TASKS / t / "meta.json").read_text(encoding="utf-8"))
+        bands[m["band"]] = bands.get(m["band"], 0) + 1
+    assert bands.get("S", 0) == 0, f"S 档不再是 0（{bands}）—— 交接 2c 的依据变了，要同步 dataset card"
+    assert set(bands) == {"M", "L"}, f"难度档位不是 M/L 两档：{bands}"
+
+
+# ㊾ 存活集只能读 survivors.json（交接 1b）
+
+def test_t7_scripts_never_read_gate_jsonl_survives():
+    """🔴 交接 1b：照 `meta/gate.jsonl` 的 `survives` 取会把 T0005 算进基线。
+
+    判据走 AST 常量而不是 grep —— 注释里**要**写清这条纪律（不写下来传不下去），
+    逐行 grep 会把说明文字本身判成违规。
+    """
+    import ast as _ast
+
+    offenders = []
+    for p in sorted(MVP.glob("t7*.py")):
+        tree = _ast.parse(p.read_text(encoding="utf-8"))
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+                if "gate.jsonl" in node.value and "不" not in node.value and "⛔" not in node.value:
+                    offenders.append(f"{p.name}: 字符串常量里出现 gate.jsonl（{node.value[:40]!r}）")
+    assert not offenders, "T7 脚本疑似从 gate.jsonl 取存活集：" + "; ".join(offenders)
+    # 正面：至少有一处读 survivors.json
+    assert any("survivors.json" in p.read_text(encoding="utf-8") for p in MVP.glob("t7*.py"))
