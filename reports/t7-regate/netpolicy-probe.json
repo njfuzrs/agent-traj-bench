@@ -1,0 +1,17 @@
+{
+ "purpose": "实测 allowlist 网络策略：公网被挡、网关放行。$0（用免费 nop + 自写探针 task）",
+ "date": "2026-09-12",
+ "verdict": "PASS",
+ "blocked": {
+  "github.com": "SSL UNEXPECTED_EOF（被 sidecar 掐断）",
+  "registry.npmjs.org": "SSL UNEXPECTED_EOF",
+  "raw.githubusercontent.com": "SSL UNEXPECTED_EOF"
+ },
+ "allowed": {
+  "192.168.5.2:4101": "TCP 通",
+  "gateway /__stats": "HTTP 200"
+ },
+ "dns_note": "公网域名解析到 198.19.0.x（sidecar 的合成地址）—— 证明流量确实经过 egress 代理，而不是碰巧网络不好",
+ "instrument_bug_found": "首版探针用 curl，四个目标全 FAIL；实为**镜像里没有 curl 也没有 wget**（只装 git/make/python3/ripgrep）。「仪器坏了」与「策略生效」的输出长得一模一样 —— 改用 python3 urllib 后才拿到可信结论。",
+ "why_allowlist_not_no_network": "sid-code 必须连宿主网关 shim 才能调模型；no-network 会让整条臂跑不起来。对被测模型而言 github/npm 全不可达，与题面承诺的离线效果一致，差别只是多了一个它必须用的模型出口 —— 此差别必须写进 dataset card。"
+}

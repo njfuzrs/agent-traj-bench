@@ -1,0 +1,33 @@
+{
+ "purpose": "单独串行重跑复检失败条，分辨 flaky 与真缺陷",
+ "round": 1,
+ "tasks": [
+  "T0028",
+  "T0049",
+  "T0064"
+ ],
+ "n_trials": 3,
+ "missing": [],
+ "verdicts": {
+  "T0028": {
+   "ok": true,
+   "why": "oracle 通过 ⇒ 上一轮那次是 flaky（infra 抖动）"
+  },
+  "T0049": {
+   "ok": true,
+   "why": "oracle 通过 ⇒ 上一轮那次是 flaky（infra 抖动）"
+  },
+  "T0064": {
+   "ok": true,
+   "why": "oracle 通过 ⇒ 上一轮那次是 flaky（infra 抖动）"
+  }
+ },
+ "all_pass": true,
+ "elapsed_min": 1.2,
+ "cost_usd": 0,
+ "ruled_out": [
+  "task 自身缺陷：T5 三道门禁 oracle/nop/oracle-k3 全绿且三次一致",
+  "单独构建不行：裸 docker build 两条都成功（786MB/793MB，零 integrity 报错，bun install 层未命中缓存）"
+ ],
+ "attribution_mistake_logged": "曾据「只有 2 条 trial.log 出现 bake」宣布因果，实为 compose v5 默认用 bake、只有失败条会打完整 buildx 输出 —— 日志差异被误读成构建路径差异。相关≠因果。"
+}

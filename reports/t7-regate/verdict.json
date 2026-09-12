@@ -1,0 +1,26 @@
+{
+ "purpose": "网络策略改为 allowlist 后重跑 oracle 门禁，确认判分链路未受影响",
+ "network_mode": "allowlist + [192.168.5.2]",
+ "n_tasks": 39,
+ "n_trials": 39,
+ "all_oracle_pass": false,
+ "missing": [],
+ "reward_not_1": [
+  "T0028",
+  "T0049",
+  "T0064"
+ ],
+ "exceptions": [
+  "T0028",
+  "T0049",
+  "T0064"
+ ],
+ "dual_source_bad": [
+  "T0028",
+  "T0049",
+  "T0064"
+ ],
+ "elapsed_min": 95.4,
+ "cost_usd": 0,
+ "cost_basis": "oracle 零 LLM 依赖（未声明 MODEL_CONNECTION、未 import litellm/anthropic/openai）"
+}

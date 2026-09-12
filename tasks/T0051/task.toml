@@ -15,4 +15,6 @@ timeout_sec = 900.0
 timeout_sec = 2700.0
 
 [environment]
+network_mode = "allowlist"
+allowed_hosts = ["192.168.5.2"]
 build_timeout_sec = 1800.0

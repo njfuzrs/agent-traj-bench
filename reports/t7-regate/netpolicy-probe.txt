@@ -1,0 +1,10 @@
+=== 应当被挡住的（公网）===
+github.com => 不可达 (URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occur)
+registry.npmjs.org => 不可达 (URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occur)
+raw.githubusercontent.com => 不可达 (URLError: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occur)
+=== 应当放行的（网关，模型出口）===
+192.168.5.2:4101 => TCP 通
+gateway /__stats => HTTP 200  ⚠️ 可达
+=== DNS ===
+github.com => 解析到 198.19.0.5
+registry.npmjs.org => 解析到 198.19.0.4
