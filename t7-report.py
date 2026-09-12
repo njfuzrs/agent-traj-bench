@@ -220,7 +220,100 @@ def load_gate_rows() -> tuple[list[tuple[str, str, int, int]], dict[str, int]]:
     return rows, attrib
 
 
-def health_checks(res: dict, bcells: dict) -> list[tuple[str, str, str]]:
+def _zero_diag_section(zd: dict | None) -> list[str]:
+    """§9 真 0 / 假 0 归因。**pass@1 低时这一节是预案要求的必答项。**
+
+    没有 zero-diag.json 时刻意输出一行「未做」而不是静默跳过 ——
+    跳过会让报告看起来完整，而预案要求的那一步其实没做。
+    """
+    if not zd:
+        return [
+            "## 9. 真 0 / 假 0 归因",
+            "",
+            "🔴 **未做**：预案表要求 pass@1 < 10% 时先分辨真 0 假 0，"
+            "但 `reports/baseline/zero-diag.json` 不存在。",
+            "→ 跑 `scripts/mvp/t7-zero-diag.py`（纯读产物，$0）后重新生成本报告。",
+            "",
+        ]
+    v = zd.get("verdicts", {})
+    hd = zd.get("bash_hunting_doc", {})
+    term = zd.get("termination_subtypes", {})
+    n = zd.get("n_diagnosed", 0)
+    lines = [
+        "## 9. 真 0 / 假 0 归因（🔴 预案要求的必答项）",
+        "",
+        f"pass@1 低于 20% ⇒ 预案表写死「**优先怀疑 grader**，先分辨真 0 假 0」。"
+        f"已逐条归因 {n} 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，"
+        "产物 `reports/baseline/zero-diag.json`）。",
+        "",
+        "| 判定 | 条数 | 含义 |",
+        "|---|---|---|",
+        f"| `grader_incomplete` | {v.get('grader_incomplete', 0)} | "
+        "判分侧没看全 f2p（missing / no_tests / error_code≠0）⇒ "
+        "⛔ **不能**读作「模型答错」 |",
+        f"| `true_zero_no_attempt` | {v.get('true_zero_no_attempt', 0)} | "
+        "真 0，但模型**一次都没改文件** ⇒ 它没提交解法，不是解法不对 |",
+        f"| `true_zero_wrong_fix` | {v.get('true_zero_wrong_fix', 0)} | "
+        "真 0：测试跑起来了且模型改过文件 ⇒ 改动不对（**这才是能力信号**） |",
+        f"| `solved` | {v.get('solved', 0)} | 解出 |",
+        "",
+        f"**写文件工具调用合计：{zd.get('n_write_tool_calls_total')} 次**"
+        f"（{n} 条 trial 加起来）。",
+        "",
+    ]
+    if term:
+        lines += [f"终止类型：`{term}`。"]
+    # 轮次归因：取第一条有 attribution 的
+    att = next((t["termination"]["attribution"] for t in zd.get("trials", [])
+                if (t.get("termination") or {}).get("attribution")), None)
+    if att:
+        lines += [
+            "",
+            f"轮次归因：{att}",
+            "",
+            "> 判据出处：`sid_code_agent.py` 的 `sid_num_turns_without_model_interaction` "
+            "注释 —— `error_max_turns` 有**两类成因、不可混算**："
+            "「轮次真不够用」要抬 `--max-turns`，"
+            "「轮次没换来模型交互」是网络/重试问题，抬轮数治不了。",
+        ]
+    if hd.get("share") is not None:
+        lines += [
+            "",
+            f"**约 {hd['n_hunting']}/{hd['n_bash']}（{hd['share']:.0%}）的 bash 调用"
+            "花在容器里找那份题面点名、而实际不存在的文档上**"
+            f"（{hd.get('note', '')}）。",
+        ]
+    lines += [
+        "",
+        f"> 🔴 **{zd.get('conclusion_guard', '')}**",
+        "",
+        "⇒ 本批的 0% **不是**「模型解不动真实软件任务」，而是"
+        "**题面缺陷（点名容器内不存在的 `docs/`）叠加 40 轮隐式上限**："
+        "模型把预算花在找那份文档上，从未进入「改代码」阶段。"
+        "⛔ 这个数字不可作为模型能力的证据。",
+        "",
+        "**v0.3 的两个动作**（本轮无法自救，如实记下）："
+        "① T1 筛选链排除「题面主体是引用本地不可见文档」的会话，或引入指令重写；"
+        "② `--max-turns` 显式写进跑批命令而不是用 agent 默认值 —— "
+        "方案原就要求「`task.toml` 与 CLI 的 timeout 都显式写」，轮次上限是同一类隐式约束。",
+        "",
+    ]
+    return lines
+
+
+def load_zero_diag() -> dict | None:
+    """真 0 / 假 0 归因（`t7-zero-diag.py` 的产物）。没有就返回 None。
+
+    🔴 方案预案表写死：pass@1 < 10% ⇒ **优先怀疑 grader，先分辨真 0 假 0**。
+    所以 pass@1 低时报告**必须**带上这一节，否则等于跳过了预案要求的那一步。
+    """
+    p = RUNS / "zero-diag.json"
+    if not p.exists():
+        return None
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def health_checks(res: dict, bcells: dict, zd: dict | None = None) -> list[tuple[str, str, str]]:
     """健康度判据的逐条判定（方案 §9 三条，MVP 放宽后的口径）。
 
     🔴 第三条**整条失效**，不是「未达标」：S 档为 0 ⇒ 三档单调性无从谈起。
@@ -236,9 +329,8 @@ def health_checks(res: dict, bcells: dict) -> list[tuple[str, str, str]]:
         "① 最强模型 pass@1 ∈ [20%, 80%]",
         "✅ 达标" if ok1 else "🔴 **未达标**",
         f"实测 {p:.1%}。" + ("" if ok1 else
-        "低于 20% ⇒ 按预案查「task 过难 or grader 有 bug」。"
-        "本批已排除 grader 侧：T5 门禁① 44/65 条 oracle 能解出、"
-        "T6 oracle 复检 reward=1.0，判分链路本身是好的 ⇒ 指向题面质量（§2②）而非 grader。"),
+        "低于 20% ⇒ 触发预案「优先怀疑 grader，先分辨真 0 假 0」。"
+        "**已逐条归因，见 §9** —— 结论不是「模型能力差」。"),
     ))
 
     # ② 最强与最弱模型差距 ≥10pp —— 单模型跑不出来，如实写「无法判定」
@@ -317,7 +409,7 @@ def build_report(res: dict, trials: list[lib.Trial],
                  gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                  missing: list[str], n_surv: int,
                  funnel: list, gate_rows: list, attrib: dict, health: list,
-                 fingerprint: str) -> str:
+                 fingerprint: str, zd: dict | None = None) -> str:
     """排报告。**只吃已经算好的格子**，自己不做任何统计。
 
     刻意不收 `grade` / `band` 原始分组：它们已经被 `lib.group()` 变成 cells 了，
@@ -459,13 +551,14 @@ def build_report(res: dict, trials: list[lib.Trial],
         "|---|---|---|",
         *[f"| {name} | {verdict} | {why} |" for name, verdict, why in health],
         "",
-        f"## 9. 局限（{len(LIMITATIONS)} 条，主动披露）",
+        *_zero_diag_section(zd),
+        f"## 10. 局限（{len(LIMITATIONS)} 条，主动披露）",
         "",
         "> 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。",
         "",
         *[f"{i}. {x}" for i, x in enumerate(LIMITATIONS, 1)],
         "",
-        "## 10. 这批数字**不能**用来说什么",
+        "## 11. 这批数字**不能**用来说什么",
         "",
         f"- **不能**说「模型在真实软件任务上的通过率是 {p:.0%}」——"
         " 39 条全部来自单一仓库（`person/sid-code`）、两类任务（bug_fix / test_authoring）。",
@@ -475,7 +568,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "n=39 下小于这个量级的差异都在噪声里。",
         "- **不能**说「已按题面承诺离线运行」—— 实际是 allowlist（见 §2③）。",
         "",
-        "## 11. 复算方式",
+        "## 12. 复算方式",
         "",
         "```bash",
         "# 纯复算，不跑任何东西、不花钱",
@@ -565,12 +658,19 @@ def main() -> int:
 
     funnel = load_funnel()
     gate_rows, attrib = load_gate_rows()
-    health = health_checks(res, bcells)
+    zd = load_zero_diag()
+    health = health_checks(res, bcells, zd)
     fingerprint = json.loads(
         (STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))["fingerprint"][:12]
 
+    # 🔴 pass@1 低于健康度下限却没做真 0/假 0 归因 ⇒ 预案要求的那一步没做。
+    # 不拦住的话报告会「看起来完整」地把 0% 摊出来，读者只能读成「模型不行」。
+    if res["p"] < 0.20 and zd is None:
+        print("⚠️ pass@1 低于 20% 但缺 zero-diag.json —— 报告 §9 会标「未做」；"
+              "建议先跑 scripts/mvp/t7-zero-diag.py（$0）")
+
     REPORT.write_text(build_report(res, trials, gcells, bcells, cost, ctl, k, missing, len(surv),
-                                   funnel, gate_rows, attrib, health, fingerprint),
+                                   funnel, gate_rows, attrib, health, fingerprint, zd),
                       encoding="utf-8")
     print(f"pass@1 = {res['p']:.1%}（{res['passed']:g}/{res['n']}），排除 {res['excluded']}，实付 ${cost['total']}")
     print(f"  报告 {_rel(REPORT)}")

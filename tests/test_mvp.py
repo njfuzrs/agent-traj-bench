@@ -2427,11 +2427,28 @@ def test_report_sections_are_consecutively_numbered():
     import re as _re
 
     src = (MVP / "t7-report.py").read_text(encoding="utf-8")
-    nums = [int(m) for m in _re.findall(r'"## (\d+)\.', src)]
-    assert nums, "t7-report.py 里没找到任何 `## N.` 章节 —— 判据失效了，先修这条测试"
-    assert nums == sorted(nums), f"章节编号不是递增的：{nums}"
-    assert len(nums) == len(set(nums)), f"章节编号有重复：{nums}"
-    assert nums == list(range(1, len(nums) + 1)), f"章节编号不连续（应 1..{len(nums)}）：{nums}"
+
+    # ⚠️ 判据必须能看到**带字母后缀**的章节（`## 8b.`）。
+    # 最初只认 `\d+`，于是新加的 `## 8b.` 被**完全忽略** —— 测试照样绿，
+    # 但守卫其实没看那一节（2026-09-13 实测：加了 §8b 后 152 passed 是**假绿**）。
+    suffixed = _re.findall(r'"## (\d+[a-z])\.', src)
+    assert not suffixed, (
+        f"章节用了字母后缀 {suffixed} —— 请改成正式编号并把后续章节顺移。"
+        "带后缀的章节会绕过连续性检查，等于没被守卫看住。")
+
+    # ⛔ 连续性**不能**按源码里的出现顺序判：章节可以拆进辅助函数
+    #（`_zero_diag_section` 就在 `build_report` 之前定义），源码顺序 ≠ 报告输出顺序，
+    # 照源码判会把正确的编号误报成「不是递增的」（2026-09-13 实测撞到）。
+    # 判据落在**产物**上 —— 那才是读者看到的顺序。产物不存在就跳过这一半。
+    report = c.MVP_REPORTS / "baseline-v0.2-mini.md"
+    if not report.exists():
+        pytest.skip("还没生成 baseline-v0.2-mini.md —— 跑批跑完并出报告后这条才有判据")
+
+    nums = [int(m) for m in _re.findall(r'^## (\d+)\.', report.read_text(encoding="utf-8"), _re.M)]
+    assert nums, "报告里没找到任何 `## N.` 章节 —— 判据失效了，先修这条测试"
+    assert nums == sorted(nums), f"报告章节编号不是递增的：{nums}"
+    assert len(nums) == len(set(nums)), f"报告章节编号有重复：{nums}"
+    assert nums == list(range(1, len(nums) + 1)), f"报告章节编号不连续（应 1..{len(nums)}）：{nums}"
 
 
 def test_limitations_cover_all_required_disclosures():
