@@ -118,6 +118,16 @@ LIMITATIONS = [
     "内网私服，公网 404，装它必须把 `_authToken` 烤进镜像 —— 违反「不在容器里配私钥」。"
     "🔴 这是**纪律决定而非技术障碍**（内网当时可达）。后果就是第 2 条的单仓库；"
     "将来有内网镜像或 vendored 方案时这 5 条可回归。",
+    "**7 条 task 因 `src/ink/` 从未入库而不可复现**（T5 门禁① 淘汰）。"
+    "这是**采集侧**问题：轨迹引用了从未提交进仓库的路径，反解出的 base 里自然没有它。"
+    "v0.3 的动作是在 T1 筛选链里排除「引用未入库路径」的会话。",
+    "🔴 **4 条题面的文件名点出了修法所需机制，这 4 条得分可能偏高**"
+    "（`T0002` / `T0038` / `T0040` / `T0065`，取数 `meta.json` 的 "
+    "`leakage.filename_specificity == \"mechanism\"`）。"
+    "⛔ **不是 8 条** —— `reports/t6-recheck/filename-leak.json` 只做了"
+    "「带信息 8 条 vs 仅主题 27 条」的粗二分，**没有 mechanism/symptom 这一层**；"
+    "照它取会把 T6 明确判为「正常题面」的另 4 条 symptom 也算进来（T6 §4.2 的原话）。"
+    "另有 4 条无文件名可判，回写为 `null`（**不是 `false`**）。",
     "**快照内有两处刻意保留的残余泄漏面**：① 62 条 external 分支在容器 `/eval-framework`"
     "（**`/repo` 之外**）放了 name/version/private 三键的 stub，用于闭合 "
     "`file:../eval-framework` 依赖；② 3 条 monorepo base 保留了 "
@@ -449,7 +459,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "|---|---|---|",
         *[f"| {name} | {verdict} | {why} |" for name, verdict, why in health],
         "",
-        "## 9. 局限（13 条，主动披露）",
+        f"## 9. 局限（{len(LIMITATIONS)} 条，主动披露）",
         "",
         "> 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。",
         "",

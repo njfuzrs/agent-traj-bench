@@ -2434,16 +2434,19 @@ def test_report_sections_are_consecutively_numbered():
     assert nums == list(range(1, len(nums) + 1)), f"章节编号不连续（应 1..{len(nums)}）：{nums}"
 
 
-def test_limitations_are_exactly_thirteen():
-    """🔴 方案 §6 要求 dataset card 写 **13 条**局限（v1.3 起含 T4 新增的第 12/13 条）。
+def test_limitations_cover_all_required_disclosures():
+    """🔴 dataset card 的 Limitations：方案 §6 的 13 条 + T6 交接 #3 的两条 = **15 条**。
 
-    少一条就是隐藏 —— 尤其第 12/13 条是 T4 主动做出的决策（私有 registry 纪律、
-    刻意保留的残余泄漏面），不披露等于假装没有。
+    方案 §6 表格给了 13 条（v1.3 起含 T4 新增的私有 registry 与残余泄漏面）；
+    T6→T7 交接清单 #3 另要求两条，方案表格里没有：
+      - 7 条因 `src/ink/` 从未入库而不可复现（承自 T5 #2）
+      - 4 条题面文件名点出机制、得分可能偏高（§4.2）
 
-    另外正面钉住三处**实测改过措辞**的地方，防止有人「照方案原文回改」：
-      - 第 2 条要写「全部/彻底」单仓库，不是「以某仓库为主」
-      - 第 5 条要写「S 档为 0」，⛔ 不许写成「锚点无效」
-      - 第 13 条要给出「可证不参与判分」的论证，不能只写「已剔除泄漏面」
+    少一条就是隐藏。⛔ 尤其 T4/T6 那几条是**主动做出的决策**，不披露等于假装没有。
+
+    ⚠️ 断言按**内容**定位而不是下标（2026-09-13 改）：原先写死
+    `lims[1]` / `lims[4]` / `lims[12]`，补了两条后下标全漂 —— 一条测试
+    因为清单变长而红，是判据的问题，不是清单的问题。
     """
     import importlib.util as _u
 
@@ -2451,7 +2454,27 @@ def test_limitations_are_exactly_thirteen():
     mod = _u.module_from_spec(spec)
     spec.loader.exec_module(mod)
     lims = mod.LIMITATIONS
-    assert len(lims) == 13, f"局限应为 13 条，实际 {len(lims)} 条"
+    assert len(lims) == 15, f"局限应为 15 条（方案 §6 十三条 + 交接 #3 两条），实际 {len(lims)}"
+
+    def _find(*words: str) -> str:
+        """按关键词取那一条 —— 下标会漂，内容不会。"""
+        hits = [x for x in lims if all(w in x for w in words)]
+        assert len(hits) == 1, f"关键词 {words} 命中 {len(hits)} 条，判据失效了：{[h[:40] for h in hits]}"
+        return hits[0]
+
+    # 交接 #3 要求的四条必须都在
+    _find("src/ink")
+    _find("私有 registry")
+    _find("filename_specificity")
+    lims_1 = _find("单一仓库")
+    lims_5 = _find("难度锚点")
+    lims_13 = _find("残余泄漏面")
+
+    # mechanism 那条必须是 4 条口径，⛔ 不是 filename-leak.json 的粗二分 8 条
+    mech = _find("filename_specificity")
+    assert "4 条" in mech, f"文件名泄漏条未用 4 条（mechanism）口径：{mech[:80]}"
+    assert "8 条" in mech and "⛔" in mech, \
+        f"未写明「⛔ 不是 8 条」—— 照 filename-leak.json 粗二分取数会多算 4 条：{mech[:120]}"
 
     # ⚠️ 查禁止词不能直接 `"X" not in text` —— 正文正是在**否定**它
     #（「⛔ 这不是『以某仓库为主』」/「⛔ 不要写成『锚点无效』」）。
@@ -2463,10 +2486,10 @@ def test_limitations_are_exactly_thirteen():
                 return True
         return False
 
-    assert "彻底" in lims[1] or "全部" in lims[1], f"第 2 条未写明彻底单仓库：{lims[1][:60]}"
-    assert not _asserted_without_negation(lims[1], "为主"), \
-        f"第 2 条回改成了「以某仓库为主」：{lims[1][:80]}"
-    assert "S 档" in lims[4] and "0" in lims[4], f"第 5 条未写明 S 档为 0：{lims[4][:60]}"
-    assert not _asserted_without_negation(lims[4], "锚点无效"), \
-        f"第 5 条误写成「锚点无效」：{lims[4][:80]}"
-    assert "不参与判分" in lims[12], f"第 13 条缺「可证不参与判分」的论证：{lims[12][:80]}"
+    assert "彻底" in lims_1 or "全部" in lims_1, f"单仓库那条未写明「彻底」：{lims_1[:60]}"
+    assert not _asserted_without_negation(lims_1, "为主"), \
+        f"单仓库那条回改成了「以某仓库为主」：{lims_1[:80]}"
+    assert "S 档" in lims_5 and "0" in lims_5, f"难度锚点那条未写明 S 档为 0：{lims_5[:60]}"
+    assert not _asserted_without_negation(lims_5, "锚点无效"), \
+        f"难度锚点那条误写成「锚点无效」：{lims_5[:80]}"
+    assert "不参与判分" in lims_13, f"残余泄漏面那条缺「可证不参与判分」的论证：{lims_13[:80]}"
