@@ -220,15 +220,84 @@ def load_gate_rows() -> tuple[list[tuple[str, str, int, int]], dict[str, int]]:
     return rows, attrib
 
 
+def fp_split(trials: list[lib.Trial]) -> dict:
+    """F2P / P2P 两个分量分开统计（方案 §4 T7 第 2 项要求）。
+
+    🔴 **为什么必须分开报**：`reward` 把两件事压成一个 0/1，而它们含义完全不同：
+
+      - **F2P 红** = 没修好目标缺陷（该做的没做到）
+      - **P2P 红** = **改出了回归**（把原本好的测试弄坏了）—— 这是**更严重**的信号，
+        压进单个 reward 就彻底丢了
+
+    ⚠️ P2P 只统计**参与计分**的 trial：infra 故障那些 `p2p` 可能是 None，
+    按 0 计入会虚报「改出回归」（同 `cost_stats` 那条 None 不按 0 算的纪律）。
+    """
+    scored = [t for t in trials if not t.infra_failure]
+    f2p_vals = [t.f2p for t in scored if isinstance(t.f2p, (int, float))]
+    p2p_vals = [t.p2p for t in scored if isinstance(t.p2p, (int, float))]
+    # P2P < 1.0 就是有回归（P2P 的定义是「base 时点本来全绿的测试」）
+    regressed = sorted(t.task for t in scored
+                       if isinstance(t.p2p, (int, float)) and t.p2p < 1.0)
+    return {
+        "n_scored": len(scored),
+        "f2p": {"n": len(f2p_vals), "n_full": sum(1 for v in f2p_vals if v >= 1.0),
+                "mean": round(statistics.mean(f2p_vals), 4) if f2p_vals else None},
+        "p2p": {"n": len(p2p_vals), "n_full": sum(1 for v in p2p_vals if v >= 1.0),
+                "mean": round(statistics.mean(p2p_vals), 4) if p2p_vals else None},
+        "regressed_tasks": regressed,
+        "note": ("F2P 红 = 没修好目标缺陷；P2P 红 = **改出了回归**（更严重）。"
+                 "⛔ 压进单个 reward 就丢了这个区分。"
+                 "None 不按 0 计入 —— 那会虚报「改出回归」。"),
+    }
+
+
+def _fp_section(fp: dict | None) -> list[str]:
+    """§6 F2P / P2P 分量表。"""
+    if not fp:
+        return ["## 6. F2P / P2P 两个分量（⛔ 不压成单个 reward）", "",
+                "🔴 **未算出分量** —— `fp_split()` 没拿到数据，先查 reward 取值路径。", ""]
+    f, p = fp["f2p"], fp["p2p"]
+    n = fp["n_scored"]
+    reg = fp["regressed_tasks"]
+    lines = [
+        "## 6. F2P / P2P 两个分量（⛔ 不压成单个 reward）",
+        "",
+        "`reward` 把两件事压成一个 0/1，而它们含义完全不同 ——"
+        "**F2P 红 = 没修好目标缺陷；P2P 红 = 改出了回归**（更严重的信号）。",
+        "",
+        "| 分量 | 含义 | 满分条数 | 均值 |",
+        "|---|---|---|---|",
+        f"| **F2P** | 目标缺陷的测试（要从红转绿） | {f['n_full']}/{f['n']} | "
+        f"{f['mean'] if f['mean'] is not None else '—'} |",
+        f"| **P2P** | base 时点本来全绿的测试（不许弄坏） | {p['n_full']}/{p['n']} | "
+        f"{p['mean'] if p['mean'] is not None else '—'} |",
+        "",
+        f"分母是参与计分的 {n} 条（infra 故障不计入 —— `None` 按 0 算会**虚报**「改出回归」）。",
+        "",
+    ]
+    if reg:
+        lines += [
+            f"🔴 **{len(reg)} 条 P2P 未满分 ⇒ 模型改出了回归**：{', '.join(reg)}。",
+            "> 这比 F2P 红更值得看：说明改动破坏了原本通过的测试。",
+        ]
+    else:
+        lines += [
+            "✅ **P2P 全数满分 ⇒ 没有任何一条改出回归。**",
+            "> 结合 F2P 全红，形态是「模型没能修好，但也没弄坏别的」——"
+            "与 §10 归因的「模型压根没改文件」一致（没改自然不会有回归）。",
+        ]
+    return lines + [""]
+
+
 def _zero_diag_section(zd: dict | None) -> list[str]:
-    """§9 真 0 / 假 0 归因。**pass@1 低时这一节是预案要求的必答项。**
+    """§10 真 0 / 假 0 归因。**pass@1 低时这一节是预案要求的必答项。**
 
     没有 zero-diag.json 时刻意输出一行「未做」而不是静默跳过 ——
     跳过会让报告看起来完整，而预案要求的那一步其实没做。
     """
     if not zd:
         return [
-            "## 9. 真 0 / 假 0 归因",
+            "## 10. 真 0 / 假 0 归因",
             "",
             "🔴 **未做**：预案表要求 pass@1 < 10% 时先分辨真 0 假 0，"
             "但 `reports/baseline/zero-diag.json` 不存在。",
@@ -240,7 +309,7 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     term = zd.get("termination_subtypes", {})
     n = zd.get("n_diagnosed", 0)
     lines = [
-        "## 9. 真 0 / 假 0 归因（🔴 预案要求的必答项）",
+        "## 10. 真 0 / 假 0 归因（🔴 预案要求的必答项）",
         "",
     ]
     if zd.get("stale"):
@@ -388,7 +457,7 @@ def health_checks(res: dict, bcells: dict, zd: dict | None = None) -> list[tuple
         "✅ 达标" if ok1 else "🔴 **未达标**",
         f"实测 {p:.1%}。" + ("" if ok1 else
         "低于 20% ⇒ 触发预案「优先怀疑 grader，先分辨真 0 假 0」。"
-        "**已逐条归因，见 §9** —— 结论不是「模型能力差」。"),
+        "**已逐条归因，见 §10** —— 结论不是「模型能力差」。"),
     ))
 
     # ② 最强与最弱模型差距 ≥10pp —— 单模型跑不出来，如实写「无法判定」
@@ -467,7 +536,8 @@ def build_report(res: dict, trials: list[lib.Trial],
                  gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                  missing: list[str], n_surv: int,
                  funnel: list, gate_rows: list, attrib: dict, health: list,
-                 fingerprint: str, zd: dict | None = None) -> str:
+                 fingerprint: str, zd: dict | None = None,
+                 fp: dict | None = None) -> str:
     """排报告。**只吃已经算好的格子**，自己不做任何统计。
 
     刻意不收 `grade` / `band` 原始分组：它们已经被 `lib.group()` 变成 cells 了，
@@ -567,7 +637,8 @@ def build_report(res: dict, trials: list[lib.Trial],
         "> `error_code != 0` 的条数就是判分侧自己报错的条数（XML 缺失/解析失败等），"
         "与「模型答错」是两回事。",
         "",
-        "## 6. 数据集是怎么来的（漏斗）",
+        *_fp_section(fp),
+        "## 7. 数据集是怎么来的（漏斗）",
         "",
         "每一级都注明取数文件，**可逐级复算**。⛔ 报告里所有数字都不是手写的。",
         "",
@@ -582,7 +653,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "早期文档里的「8591 / CC 7132 / Codex 492 / sid-code 296」是**线上全量**的另一口径，"
         "三个分通道合计 7920 ≠ 8591（不闭合），⛔ 不要引用。",
         "",
-        "## 7. 这批 task 凭什么可信（三道门禁）",
+        "## 8. 这批 task 凭什么可信（三道门禁）",
         "",
         "**每一条 task 都过了三道机械门禁**，然后 **40 条 100% 人工过目**（非抽样）。",
         "",
@@ -601,7 +672,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "人工过目才发现它题面与判分对象完全无关且含提示词模板残留。"
         "⇒ 机械门禁不能替代人工过目。",
         "",
-        "## 8. 健康度判据逐条对账",
+        "## 9. 健康度判据逐条对账",
         "",
         "方案 §9 的三条（MVP 已放宽口径）。**达标与否都如实写，不达标不改判据。**",
         "",
@@ -610,13 +681,13 @@ def build_report(res: dict, trials: list[lib.Trial],
         *[f"| {name} | {verdict} | {why} |" for name, verdict, why in health],
         "",
         *_zero_diag_section(zd),
-        f"## 10. 局限（{len(LIMITATIONS)} 条，主动披露）",
+        f"## 11. 局限（{len(LIMITATIONS)} 条，主动披露）",
         "",
         "> 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。",
         "",
         *[f"{i}. {x}" for i, x in enumerate(LIMITATIONS, 1)],
         "",
-        "## 11. 这批数字**不能**用来说什么",
+        "## 12. 这批数字**不能**用来说什么",
         "",
         f"- **不能**说「模型在真实软件任务上的通过率是 {p:.0%}」——"
         " 39 条全部来自单一仓库（`person/sid-code`）、两类任务（bug_fix / test_authoring）。",
@@ -626,7 +697,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "n=39 下小于这个量级的差异都在噪声里。",
         "- **不能**说「已按题面承诺离线运行」—— 实际是 allowlist（见 §2③）。",
         "",
-        "## 12. 复算方式",
+        "## 13. 复算方式",
         "",
         "```bash",
         "# 纯复算，不跑任何东西、不花钱",
@@ -662,6 +733,7 @@ def main() -> int:
     bcells = lib.group(res["per_task_rate"], band, res["excluded_tasks"])
     cost = cost_stats(trials)
     ctl = controlled(trials)
+    fp = fp_split(trials)
 
     # 分母自校验：分组合计必须等于总表，否则报告自己对不上
     for name, cells in (("题面分级", gcells), ("难度分档", bcells)):
@@ -699,6 +771,8 @@ def main() -> int:
         "ci": {kk: vv for kk, vv in res.items() if kk != "per_task_rate"},
         "per_task_rate": res["per_task_rate"],
         "cost_usd": cost,
+        # F2P/P2P 分量：reward 把「没修好」与「改出回归」压成一个 0/1，分开存才留得住区分
+        "f2p_p2p": fp,
         "controlled_variables": ctl,
         "by_grade": {kk: {"n": len(v.tasks), "solved": v.solved, "scored": v.scored,
                           "missing": v.missing, "excluded": v.excluded,
@@ -720,7 +794,7 @@ def main() -> int:
     if zd and zd.get("stale"):
         st = zd["stale"]
         print(f"⚠️ zero-diag.json 已过期（判了 {st['n_diagnosed']} 条，run 里已有 "
-              f"{st['n_with_trial']} 条）—— 报告 §9 会标注；重跑 scripts/mvp/t7-zero-diag.py（$0）")
+              f"{st['n_with_trial']} 条）—— 报告 §10 会标注；重跑 scripts/mvp/t7-zero-diag.py（$0）")
     health = health_checks(res, bcells, zd)
     fingerprint = json.loads(
         (STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))["fingerprint"][:12]
@@ -728,11 +802,11 @@ def main() -> int:
     # 🔴 pass@1 低于健康度下限却没做真 0/假 0 归因 ⇒ 预案要求的那一步没做。
     # 不拦住的话报告会「看起来完整」地把 0% 摊出来，读者只能读成「模型不行」。
     if res["p"] < 0.20 and zd is None:
-        print("⚠️ pass@1 低于 20% 但缺 zero-diag.json —— 报告 §9 会标「未做」；"
+        print("⚠️ pass@1 低于 20% 但缺 zero-diag.json —— 报告 §10 会标「未做」；"
               "建议先跑 scripts/mvp/t7-zero-diag.py（$0）")
 
     REPORT.write_text(build_report(res, trials, gcells, bcells, cost, ctl, k, missing, len(surv),
-                                   funnel, gate_rows, attrib, health, fingerprint, zd),
+                                   funnel, gate_rows, attrib, health, fingerprint, zd, fp),
                       encoding="utf-8")
     print(f"pass@1 = {res['p']:.1%}（{res['passed']:g}/{res['n']}），排除 {res['excluded']}，实付 ${cost['total']}")
     print(f"  报告 {_rel(REPORT)}")
