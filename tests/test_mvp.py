@@ -2510,3 +2510,39 @@ def test_limitations_cover_all_required_disclosures():
     assert not _asserted_without_negation(lims_5, "锚点无效"), \
         f"难度锚点那条误写成「锚点无效」：{lims_5[:80]}"
     assert "不参与判分" in lims_13, f"残余泄漏面那条缺「可证不参与判分」的论证：{lims_13[:80]}"
+
+
+# 51 对照组必须只在存活集内取（交接 1b 的同一条纪律，换个地方又能踩）
+
+def test_zero_diag_control_group_only_from_survivors():
+    """🔴 对照组（题面不点名 `docs/`）只能在**存活 39 条**里找。
+
+    2026-09-13 实测踩到：扫 `MVP_TASKS` 下全部 65 个目录，把门禁淘汰的
+    T0001/T0005/T0021… 也算进对照组，**4 条虚报成 13 条**。
+    交接 1b 那条分母纪律，换个地方又能踩一次。
+
+    对照组是用来**反证归因**的：归因说「0 分因为题面点名容器里不存在的文档」，
+    那没有这个缺陷的几条就该表现不同。对照组本身取错分母，反证就失效了。
+    """
+    import importlib.util as _u
+
+    spec = _u.spec_from_file_location("_t7zd", MVP / "t7-zero-diag.py")
+    mod = _u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    surv = set(json.loads(
+        (c.MVP_REPORTS / "t6-recheck/survivors.json").read_text(encoding="utf-8"))["survivors"])
+    ctrl = mod.control_group([])
+    ids = set(ctrl["control_tasks"])
+    assert ids <= surv, f"对照组含非存活 task（门禁已淘汰的）：{sorted(ids - surv)}"
+    assert ctrl["n_control"] == len(ids)
+    # 定义自校验：每条都确实不含 docs/ 引用，且存活集里的其余条目都含
+    for tid in ids:
+        ins = (c.MVP_TASKS / tid / "instruction.md").read_text(encoding="utf-8")
+        assert "docs/" not in ins, f"{tid} 题面其实点名了 docs/，不该进对照组"
+    n_docs = sum(1 for t in surv
+                 if "docs/" in (c.MVP_TASKS / t / "instruction.md").read_text(encoding="utf-8"))
+    assert n_docs + len(ids) == len(surv), \
+        f"对照组 {len(ids)} + 点名 docs/ {n_docs} ≠ 存活 {len(surv)}"
+    # T6 报的是 35/39 点名 docs/ —— 这是跨文档锚点，对不上说明取数口径漂了
+    assert n_docs == 35, f"点名 docs/ 的应是 35 条（T6 §3 的实测），实际 {n_docs}"

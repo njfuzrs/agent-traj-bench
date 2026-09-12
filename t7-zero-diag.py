@@ -180,6 +180,63 @@ def diagnose_one(trial_dir: Path, max_turns: int) -> dict:
     return out
 
 
+def control_group(done: list[dict]) -> dict:
+    """🔴 **对照组：题面不点名 `docs/` 的那 4 条**（T0011/T0012/T0018/T0028）。
+
+    这是能**反证本脚本归因**的天然对照。归因说「0 分的成因是题面点名容器里
+    不存在的文档，模型把轮次花在找文档上」，那么题面**没有**这个缺陷的 4 条
+    就该表现不同 —— 至少不该是同一条「零改动 + 轮次耗尽」的路径。
+
+    预注册的判读（2026-09-13 写下时这 4 条**都还没跑**，不是事后挑的）：
+
+      - 对照组出现 `true_zero_wrong_fix` 或 `solved`
+        ⇒ 归因**成立**：题面缺陷确实是主因，去掉它模型就能进到「改代码」阶段
+      - 对照组也全是 `true_zero_no_attempt` + `error_max_turns`
+        ⇒ 归因**不完整**：40 轮上限本身就不够，或另有系统性障碍
+           （那时 §9 的措辞必须改，⛔ 不许只留「题面缺陷」这一个成因）
+
+    ⚠️ n=4 < 5，**只报绝对条数不报比例**（同交接 2b 的小格纪律）。
+    """
+    # 🔴 只在**存活 39 条**里找，⛔ 不许扫 MVP_TASKS 下的全部 65 个目录 ——
+    # 那会把门禁淘汰的（T0001/T0005/T0021…）也算进对照组，实测从 4 条虚报成 13 条。
+    # 这就是交接 1b 那条分母纪律，换个地方又能踩一次（2026-09-13 实测）。
+    surv = set(json.loads((RECHECK / "survivors.json").read_text(encoding="utf-8"))["survivors"])
+    ctrl_ids = []
+    for tid in sorted(surv):
+        ins = c.MVP_TASKS / tid / "instruction.md"
+        if ins.exists() and "docs/" not in ins.read_text(encoding="utf-8"):
+            ctrl_ids.append(tid)
+    rows = [r for r in done if r["task"] in set(ctrl_ids)]
+    v = Counter(r["verdict"] for r in rows)
+    n_attempted = sum(1 for r in rows if r.get("n_write_tool_calls", 0) > 0)
+
+    if not rows:
+        read = "⏳ 对照组还没跑到 —— 跑到后本节自动给出判读"
+    elif v.get("true_zero_wrong_fix", 0) or v.get("solved", 0):
+        read = ("✅ 归因**成立**：对照组里有条目进入了「改代码」阶段"
+                f"（wrong_fix {v.get('true_zero_wrong_fix', 0)} / solved {v.get('solved', 0)}）"
+                " ⇒ 题面点名不存在文档确实是主因")
+    elif n_attempted == 0 and all(
+            (r.get("termination") or {}).get("subtype") == "error_max_turns" for r in rows):
+        read = ("🔴 归因**不完整**：对照组也全是「零改动 + 轮次耗尽」 ⇒ "
+                "40 轮上限本身不够用，或另有系统性障碍。"
+                "⛔ §9 不许只留「题面缺陷」一个成因")
+    else:
+        read = "⚠️ 混合形态，需人工看逐条"
+
+    return {
+        "definition": "题面不含 `docs/` 引用的存活 task（天然对照组）",
+        "control_tasks": ctrl_ids,
+        "n_control": len(ctrl_ids),
+        "n_control_done": len(rows),
+        "verdicts": dict(v),
+        "n_with_write_calls": n_attempted,
+        "prereg_note": ("预注册：写下判读时这 4 条都还没跑（2026-09-13），"
+                        "不是事后挑的。n=4 < 5 ⇒ 只报绝对条数不报比例"),
+        "reading": read,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="只打印 JSON，不打人读表格")
@@ -201,6 +258,7 @@ def main() -> int:
         ins = c.MVP_TASKS / r["task"] / "instruction.md"
         r["instruction_names_docs"] = ("docs/" in ins.read_text(encoding="utf-8")) if ins.exists() else None
 
+    control = control_group(done)
     verdicts = Counter(r["verdict"] for r in done)
     n_bash = sum(r.get("n_bash", 0) for r in done)
     n_hunt = sum(r.get("n_bash_hunting_doc", 0) for r in done)
@@ -220,6 +278,7 @@ def main() -> int:
             "⛔ pass@1=0 不等于「模型能力差」。verdict=grader_incomplete 的条数**不能**"
             "读作模型答错；verdict=true_zero_no_attempt 说明模型没提交解法（本批的成因是"
             "题面点名容器里不存在的 docs/ 文档 + 40 轮隐式上限），也不能读作「解法不对」。"),
+        "control_group": control,
         "trials": done,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +300,9 @@ def main() -> int:
     if n_bash:
         print(f"bash 里约 {n_hunt}/{n_bash}（{n_hunt / n_bash:.0%}）花在找那份不存在的文档上")
     print(f"终止类型：{summary['termination_subtypes']}")
+    print(f"\n对照组（题面**不**点名 docs/，{control['n_control']} 条，"
+          f"已跑 {control['n_control_done']}）：{control['control_tasks']}")
+    print(f"  {control['reading']}")
     for r in done:
         att = (r.get("termination") or {}).get("attribution")
         if att:

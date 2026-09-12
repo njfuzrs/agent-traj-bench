@@ -242,6 +242,17 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     lines = [
         "## 9. 真 0 / 假 0 归因（🔴 预案要求的必答项）",
         "",
+    ]
+    if zd.get("stale"):
+        st = zd["stale"]
+        lines += [
+            f"> ⚠️ **本节数据比主表旧**：归因跑的是 {st['n_diagnosed']} 条，"
+            f"而 run 里已有 {st['n_with_trial']} 条 —— 跑批仍在前进。"
+            "本节的绝对条数因此**小于**主表，不是矛盾。"
+            "重跑 `scripts/mvp/t7-zero-diag.py`（$0）即可对齐。",
+            "",
+        ]
+    lines += [
         f"pass@1 低于 20% ⇒ 预案表写死「**优先怀疑 grader**，先分辨真 0 假 0」。"
         f"已逐条归因 {n} 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，"
         "产物 `reports/baseline/zero-diag.json`）。",
@@ -283,14 +294,50 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
             "花在容器里找那份题面点名、而实际不存在的文档上**"
             f"（{hd.get('note', '')}）。",
         ]
+    ctrl = zd.get("control_group") or {}
+    if ctrl:
+        lines += [
+            "",
+            "### 对照组：能反证上面这个归因的 4 条",
+            "",
+            f"存活 39 条里有 **{ctrl.get('n_control')} 条题面不点名 `docs/`**"
+            f"（{', '.join(ctrl.get('control_tasks', []))}）—— 天然对照组。"
+            f"已跑 {ctrl.get('n_control_done')} 条。",
+            "",
+            f"判读：{ctrl.get('reading')}",
+            "",
+            f"> {ctrl.get('prereg_note', '')}",
+            "> 归因**可被这组数据推翻**：若对照组也全是「零改动 + 轮次耗尽」，"
+            "就说明 40 轮上限本身不够用，⛔ 那时不许只把责任推给题面缺陷。",
+        ]
+    # ⚠️ 结论强度必须跟证据强度对齐：对照组没跑完时只能说「已判的这些条不是能力信号」，
+    # ⛔ 不许提前写成「本批的 0% 不是模型能力问题」—— 那是反证做完之后才成立的话。
+    ctrl_done = bool(ctrl.get("n_control_done"))
+    ctrl_supports = "成立" in str(ctrl.get("reading", ""))
     lines += [
         "",
         f"> 🔴 **{zd.get('conclusion_guard', '')}**",
         "",
-        "⇒ 本批的 0% **不是**「模型解不动真实软件任务」，而是"
-        "**题面缺陷（点名容器内不存在的 `docs/`）叠加 40 轮隐式上限**："
-        "模型把预算花在找那份文档上，从未进入「改代码」阶段。"
-        "⛔ 这个数字不可作为模型能力的证据。",
+    ]
+    if ctrl_done and ctrl_supports:
+        lines += [
+            "⇒ 本批的 0% **不是**「模型解不动真实软件任务」，而是"
+            "**题面缺陷（点名容器内不存在的 `docs/`）叠加 40 轮隐式上限**："
+            "模型把预算花在找那份文档上，从未进入「改代码」阶段。"
+            "对照组已给出反向支持（见上）。"
+            "⛔ 这个数字不可作为模型能力的证据。",
+        ]
+    else:
+        lines += [
+            f"⇒ 已判的 {n} 条里**没有一条**是「改了代码但改错」（`true_zero_wrong_fix` = 0）"
+            "—— 就这些条而言，0 分**不是**能力信号：模型从未进入「改代码」阶段。",
+            "",
+            "⚠️ **但「整批 0% 都由题面缺陷解释」这句话现在还不能说**："
+            "对照组（题面无此缺陷的 4 条）"
+            + ("的判读尚未支持归因" if ctrl_done else "还没跑到")
+            + "，反证未完成。⛔ 不许提前把整批的 0% 归给题面缺陷。",
+        ]
+    lines += [
         "",
         "**v0.3 的两个动作**（本轮无法自救，如实记下）："
         "① T1 筛选链排除「题面主体是引用本地不可见文档」的会话，或引入指令重写；"
@@ -301,16 +348,27 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     return lines
 
 
-def load_zero_diag() -> dict | None:
+def load_zero_diag(n_with_trial: int) -> dict | None:
     """真 0 / 假 0 归因（`t7-zero-diag.py` 的产物）。没有就返回 None。
 
     🔴 方案预案表写死：pass@1 < 10% ⇒ **优先怀疑 grader，先分辨真 0 假 0**。
     所以 pass@1 低时报告**必须**带上这一节，否则等于跳过了预案要求的那一步。
+
+    ⚠️ **新鲜度校验**：`zero-diag.json` 是另一个脚本在**另一个时刻**跑出的快照。
+    跑批还在前进时，它会比 run 产物旧 —— 实测撞到过 §9 写「已判 5 条」而
+    主表已经是 6 条。⛔ 报告不许引用比自己旧的取数源：两个数字并排放在同一份
+    报告里而口径不同，读者无从判断哪个是真的。
+    过期就带上 `stale` 标记，由报告显式说明，⛔ 不静默使用。
     """
     p = RUNS / "zero-diag.json"
     if not p.exists():
         return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    zd = json.loads(p.read_text(encoding="utf-8"))
+    n_diag = zd.get("n_diagnosed", 0)
+    if n_diag < n_with_trial:
+        zd["stale"] = {"n_diagnosed": n_diag, "n_with_trial": n_with_trial,
+                       "note": "zero-diag.json 比 run 产物旧，需重跑 t7-zero-diag.py"}
+    return zd
 
 
 def health_checks(res: dict, bcells: dict, zd: dict | None = None) -> list[tuple[str, str, str]]:
@@ -658,7 +716,11 @@ def main() -> int:
 
     funnel = load_funnel()
     gate_rows, attrib = load_gate_rows()
-    zd = load_zero_diag()
+    zd = load_zero_diag(len(res["per_task_rate"]))
+    if zd and zd.get("stale"):
+        st = zd["stale"]
+        print(f"⚠️ zero-diag.json 已过期（判了 {st['n_diagnosed']} 条，run 里已有 "
+              f"{st['n_with_trial']} 条）—— 报告 §9 会标注；重跑 scripts/mvp/t7-zero-diag.py（$0）")
     health = health_checks(res, bcells, zd)
     fingerprint = json.loads(
         (STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))["fingerprint"][:12]
