@@ -2546,3 +2546,51 @@ def test_zero_diag_control_group_only_from_survivors():
         f"对照组 {len(ids)} + 点名 docs/ {n_docs} ≠ 存活 {len(surv)}"
     # T6 报的是 35/39 点名 docs/ —— 这是跨文档锚点，对不上说明取数口径漂了
     assert n_docs == 35, f"点名 docs/ 的应是 35 条（T6 §3 的实测），实际 {n_docs}"
+
+
+# 52 metadata 在 agent_result 下，不是 agent_info 下
+
+def test_read_trial_finds_binary_sha_in_agent_result_metadata():
+    """🔴 `metadata` 挂在 **`agent_result`** 下，⛔ 不是 `agent_info` 下。
+
+    2026-09-13 冒烟实测：写成 `agent_info.metadata` 时 `sid_binary_sha256` 永远读不到，
+    报告 §5 必控变量表报「观测值 `[]`，缺失 N」—— 看着像「agent 没回填这个字段」，
+    真相是**取错了位置**。
+
+    这条为什么值得单测：§5 那张表的**唯一作用**就是证明「只换了模型、二进制没变」。
+    它静默失效 ⇒ 这一轮的必控变量根本没被核对过，而报告照样生成、照样好看
+    —— 本仓「代码在、测试绿、真实路径不经过」的同型又一例。
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td) / "T0001__abc"
+        (d / "verifier").mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({
+            "task_name": "T0001",
+            "verifier_result": {"rewards": {"reward": 1.0, "f2p": 1.0, "p2p": 1.0,
+                                            "error_code": 0}},
+            "agent_info": {"model_info": {"name": "m1"}},
+            # 真实产物就是这个形状：metadata 在 agent_result 下
+            "agent_result": {"cost_usd": 0.1,
+                             "metadata": {"sid_binary_sha256": "deadbeef" * 8,
+                                          "sid_model": "m1"}},
+        }), encoding="utf-8")
+        t = t7lib.read_trial(d)
+        assert t is not None, "read_trial 没认出这个 trial"
+        assert t.binary_sha == "deadbeef" * 8, \
+            f"没从 agent_result.metadata 读到 sha256（拿到 {t.binary_sha!r}）"
+        assert t.model == "m1"
+
+        # 兜底：老形状（metadata 挂 agent_info）也要能读，别为了修新形状把旧的弄坏
+        d2 = Path(td) / "T0002__def"
+        (d2 / "verifier").mkdir(parents=True)
+        (d2 / "result.json").write_text(json.dumps({
+            "task_name": "T0002",
+            "verifier_result": {"rewards": {"reward": 0.0, "error_code": 0}},
+            "agent_info": {"metadata": {"sid_binary_sha256": "cafe" * 16}},
+            "agent_result": {"cost_usd": 0.2},
+        }), encoding="utf-8")
+        t2 = t7lib.read_trial(d2)
+        assert t2 is not None and t2.binary_sha == "cafe" * 16, \
+            "agent_info.metadata 的兜底读法坏了"

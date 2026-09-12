@@ -59,6 +59,23 @@ RUNS = c.MVP_REPORTS / "baseline"
 RECHECK = c.MVP_REPORTS / "t6-recheck"
 OUT = RUNS / "zero-diag.json"
 
+
+def _rel(p: Path) -> str:
+    """仓内路径写相对、仓外写绝对。
+
+    ⛔ 不能用裸 `relative_to`：路径不在仓内时它**抛 ValueError**。
+    `MVP_DIR` 是可被环境变量改的（冒烟测试就把它指到 /tmp），
+    形态是「脚本干完所有活、崩在打印路径的最后一行」，报错完全不指向路径。
+
+    ⚠️ **这是同一个坑的第二次**：`t7-report.py` 早有同名函数、docstring 写着
+    2026-09-12 冒烟时撞到过，我写这个新脚本时没沿用 —— 2026-09-13 冒烟又抓到。
+    新脚本里凡是要打印路径，一律走这个函数。
+    """
+    try:
+        return str(p.resolve().relative_to(c.REPO_ROOT))
+    except ValueError:
+        return str(p)
+
 #: sid-code 侧的写文件工具名。🔴 **全小写** —— 见模块 docstring ② 的实测。
 WRITE_TOOLS = {"write", "edit", "multi_edit", "multiedit", "str_replace",
                "apply_patch", "notebook_edit"}
@@ -180,6 +197,35 @@ def diagnose_one(trial_dir: Path, max_turns: int) -> dict:
     return out
 
 
+def _guard_text(v: Counter, n_done: int) -> str:
+    """结论护栏文案 —— **按实际判定生成，不写死**。
+
+    每一句都必须对应真实存在的条数：说「模型没提交解法」的前提是
+    `true_zero_no_attempt > 0`；说「不能读作答错」的前提是
+    `grader_incomplete > 0`。否则报告会在数据变化后继续讲上一轮的故事。
+    """
+    n_wrong = v.get("true_zero_wrong_fix", 0)
+    n_no_attempt = v.get("true_zero_no_attempt", 0)
+    n_grader = v.get("grader_incomplete", 0)
+    n_solved = v.get("solved", 0)
+
+    bits = [f"已判 {n_done} 条：解出 {n_solved}、"
+            f"改了但改错 {n_wrong}、未提交解法 {n_no_attempt}、判分未看全 {n_grader}。"]
+    if n_grader:
+        bits.append(f"⛔ 那 {n_grader} 条 `grader_incomplete` **不能**读作模型答错"
+                    "（判分侧没拿全测试节点）。")
+    if n_no_attempt:
+        bits.append(f"⛔ 那 {n_no_attempt} 条 `true_zero_no_attempt` 是**模型没提交解法**，"
+                    "不是解法不对 —— 它一次都没改文件。")
+    if n_wrong:
+        bits.append(f"✅ 只有那 {n_wrong} 条 `true_zero_wrong_fix` 是能力信号"
+                    "（测试跑起来了、模型改过文件、仍红）。")
+    else:
+        bits.append("🔴 **`true_zero_wrong_fix` 为 0 ⇒ 这批里没有任何一条能作为"
+                    "「模型改了但改错」的能力证据。**")
+    return "".join(bits)
+
+
 def control_group(done: list[dict]) -> dict:
     """🔴 **对照组：题面不点名 `docs/` 的那 4 条**（T0011/T0012/T0018/T0028）。
 
@@ -263,7 +309,7 @@ def main() -> int:
     n_bash = sum(r.get("n_bash", 0) for r in done)
     n_hunt = sum(r.get("n_bash_hunting_doc", 0) for r in done)
     summary = {
-        "run_dir": str(run.relative_to(c.REPO_ROOT)) if run.is_relative_to(c.REPO_ROOT) else str(run),
+        "run_dir": _rel(run),
         "max_turns": args.max_turns,
         "n_diagnosed": len(done),
         "verdicts": dict(verdicts),
@@ -274,10 +320,11 @@ def main() -> int:
                                      "用于量级说明，报告里须写「约」"},
         "termination_subtypes": dict(Counter(
             (r.get("termination") or {}).get("subtype") for r in done)),
-        "conclusion_guard": (
-            "⛔ pass@1=0 不等于「模型能力差」。verdict=grader_incomplete 的条数**不能**"
-            "读作模型答错；verdict=true_zero_no_attempt 说明模型没提交解法（本批的成因是"
-            "题面点名容器里不存在的 docs/ 文档 + 40 轮隐式上限），也不能读作「解法不对」。"),
+        # ⛔ 这段话**必须按实际判定生成**，不能写死。
+        # 2026-09-13 冒烟抓到：固定文案在「9 条解出、终止类型含 success」时还在说
+        # 「本批的成因是题面点名不存在的 docs/ + 40 轮上限」—— 数据变了，结论没变，
+        # 那就是报告在撒谎。同一类形态与「没跑的题算成答错」一样：输出看着完整。
+        "conclusion_guard": _guard_text(verdicts, len(done)),
         "control_group": control,
         "trials": done,
     }
@@ -309,7 +356,7 @@ def main() -> int:
             print(f"  {r['task']}: {att}")
             break
     print(f"\n{summary['conclusion_guard']}")
-    print(f"\n已写 {OUT.relative_to(c.REPO_ROOT)}")
+    print(f"\n已写 {_rel(OUT)}")
     return 0
 
 

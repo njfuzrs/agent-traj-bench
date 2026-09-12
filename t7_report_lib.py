@@ -196,7 +196,13 @@ def read_trial(trial_dir: Path) -> Trial | None:
     ar = doc.get("agent_result") or {}
     ai = doc.get("agent_info") or {}
     mi = ai.get("model_info") or {}
-    meta = ai.get("metadata") or {}
+    # 🔴 metadata 在 **`agent_result`** 下，不是 `agent_info` 下。
+    # 2026-09-13 冒烟实测：写成 `ai.get("metadata")` 时 `sid_binary_sha256` 永远读不到，
+    # 报告 §5 的必控变量表报「观测值 []，缺失 3」—— 看着像「agent 没回填这个字段」，
+    # 真相是**取错了位置**。而那张表的唯一作用就是证明「只换了模型、二进制没变」，
+    # 它静默失效等于这一轮的必控变量根本没被核对过（R1「绿着坏掉」的又一例）。
+    # 两个位置都试：真实产物在 agent_result.metadata，留 agent_info 作兜底。
+    meta = ar.get("metadata") or ai.get("metadata") or {}
 
     ec = rewards.get("error_code")
     return Trial(
