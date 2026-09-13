@@ -3174,3 +3174,41 @@ def test_zero_diag_section_never_contradicts_its_own_wrong_fix_count(tmp_path):
     # ③ 两种形态都不许提前把整批低分归给题面缺陷（对照组没跑完）
     for x in (sec, sec0):
         assert "反证未完成" in x, f"缺「反证未完成」的强度约束：\n{x[-400:]}"
+
+
+def test_zero_diag_final_branch_has_no_hardcoded_baseline_numbers():
+    """🔴 `ctrl_done and ctrl_supports` 那一支**只在终版触发**，写死最难发现。
+
+    2026-09-14 抓到：原文写死「本批的 0%」+「40 轮隐式上限」，
+    而本批实测 pass@1 ≈ 33%、显式跑的是 120 轮。中途 `--partial` 永远
+    走不到这一支 ⇒ 这些数字要等最后一次出报告才现形，那时已经在发布路径上。
+
+    还有一处**逻辑**过期：这句把低分整体归给「题面缺陷（点名容器内不存在的
+    docs/）」，但修复① 已把文档原文内联进题面 ⇒ 本批那个缺陷已消除。
+    """
+    rep = _load("t7-report")
+
+    base = {"n_diagnosed": 24, "max_turns": 120,
+            "conclusion_guard": "已判 24 条",
+            # 对照组跑完且判读支持归因 ⇒ 走终版那一支
+            "control_group": {"n_control": 4, "control_tasks": ["T0011"], "n_control_done": 4,
+                              "reading": "✅ 归因**成立**：对照组里有条目进入了「改代码」阶段"}}
+
+    # ① 本批形态：wrong_fix > 0 ⇒ ⛔ 不许把低分整体归给题面缺陷
+    zd = dict(base, verdicts={"true_zero_wrong_fix": 7, "solved": 8})
+    sec = "\n".join(rep._zero_diag_section(zd))
+    assert "40 轮" not in sec, f"写死了 40 轮（本批是 120）：\n{sec[-800:]}"
+    assert "本批的 0%" not in sec, f"写死了 0%：\n{sec[-800:]}"
+    assert "120" in sec, f"没现读 max_turns：\n{sec[-800:]}"
+    assert "7 条" in sec and "是能力信号" in sec, f"没把 wrong_fix 读成能力信号：\n{sec[-800:]}"
+    assert "已被修复① 消除" in sec, f"仍把低分归给题面缺 docs/：\n{sec[-800:]}"
+
+    # ② baseline 形态：wrong_fix == 0 ⇒ 原归因保留，但轮次仍须现读
+    zd0 = dict(base, max_turns=40, verdicts={"true_zero_no_attempt": 6, "solved": 0})
+    sec0 = "\n".join(rep._zero_diag_section(zd0))
+    assert "从未进入「改代码」阶段" in sec0, f"baseline 归因被弄丢：\n{sec0[-800:]}"
+    assert "40" in sec0 and "120" not in sec0, f"轮次没跟着 zd 走：\n{sec0[-800:]}"
+
+    # ③ 对照组「可被推翻」那句的轮次也必须现读，⛔ 不写死
+    assert "120 轮上限本身不够用" in sec, f"推翻句写死了轮次：\n{sec[:900]}"
+    assert "40 轮上限本身不够用" in sec0, sec0[:900]
