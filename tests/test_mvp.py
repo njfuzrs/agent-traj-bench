@@ -3369,3 +3369,40 @@ def test_control_group_defers_verdict_until_fully_run(monkeypatch, tmp_path):
     c = zd.control_group(r)
     assert c["supports"] is False, c["reading"]
     assert "不完整" in c["reading"], c["reading"]
+
+
+def test_zero_diag_section_paths_follow_runs_target(tmp_path):
+    """🔴 §10 里的取数源路径与命令必须跟着 `--runs` 走，⛔ 不许写死 `reports/baseline/`。
+
+    2026-09-14 冒烟（造 39 条跑齐的产物实跑冻结路径）时抓到两处：
+    - 「未做」分支说 `reports/baseline/zero-diag.json` 不存在，而取数源在
+      `reports/t8-rerun/` ⇒ 读者照它去查**另一批**的目录，查了会发现「文件明明在」。
+    - 阈值写「pass@1 < 10%」，而实际触发判据是 `res["p"] < 0.20`
+      （健康度①「pass@1 ∈ [20%, 80%]」的下限）⇒ 同一份报告两个数字打架。
+    """
+    rep = _load("t7-report")
+    orig = rep.RUNS
+    try:
+        rep.RUNS = tmp_path / "t8-rerun"
+
+        # ① 没有 zero-diag ⇒ 路径与命令都得指向当前批
+        sec = "\n".join(rep._zero_diag_section(None))
+        assert "reports/baseline/zero-diag.json" not in sec, f"写死了 baseline 路径：\n{sec}"
+        assert "t8-rerun/zero-diag.json" in sec, f"没指向当前批：\n{sec}"
+        assert "--runs t8-rerun" in sec, f"命令没带 --runs：\n{sec}"
+        assert "< 10%" not in sec, f"阈值与实际判据（0.20）打架：\n{sec}"
+        assert "20%" in sec, sec
+
+        # ② 有 zero-diag ⇒ 产物路径同样不许写死
+        zd = {"n_diagnosed": 26, "max_turns": 120, "verdicts": {"solved": 9},
+              "conclusion_guard": "x", "control_group": {}}
+        sec = "\n".join(rep._zero_diag_section(zd))
+        assert "reports/baseline/zero-diag.json" not in sec, f"写死了 baseline 路径：\n{sec[:400]}"
+        assert "t8-rerun/zero-diag.json" in sec, f"没指向当前批：\n{sec[:400]}"
+
+        # ③ 切回 baseline 批时应当指向 baseline（不是把写死换个方向）
+        rep.RUNS = tmp_path / "baseline"
+        sec = "\n".join(rep._zero_diag_section(None))
+        assert "baseline/zero-diag.json" in sec and "--runs baseline" in sec, sec
+    finally:
+        rep.RUNS = orig

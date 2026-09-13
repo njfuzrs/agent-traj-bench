@@ -448,12 +448,18 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     跳过会让报告看起来完整，而预案要求的那一步其实没做。
     """
     if not zd:
+        # ⛔ 路径与阈值都不许写死：
+        #  - 取数源随 `--runs` 变（本批在 `reports/t8-rerun/`），
+        #    写死 `reports/baseline/` 会让读者照它去查**另一批**的目录。
+        #  - 阈值这里原写「< 10%」，而实际触发判据是 `res["p"] < 0.20`
+        #    （健康度①「pass@1 ∈ [20%, 80%]」的下限），同一份报告两个数字打架。
         return [
             "## 10. 真 0 / 假 0 归因",
             "",
-            "🔴 **未做**：预案表要求 pass@1 < 10% 时先分辨真 0 假 0，"
-            "但 `reports/baseline/zero-diag.json` 不存在。",
-            "→ 跑 `scripts/mvp/t7-zero-diag.py`（纯读产物，$0）后重新生成本报告。",
+            "🔴 **未做**：pass@1 低于健康度下限（20%）时预案表要求先分辨真 0 假 0，"
+            f"但 `{_rel(RUNS / 'zero-diag.json')}` 不存在。",
+            f"→ 跑 `scripts/mvp/t7-zero-diag.py --runs {RUNS.name}`"
+            "（纯读产物，$0）后重新生成本报告。",
             "",
         ]
     v = zd.get("verdicts", {})
@@ -485,7 +491,8 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     lines += [
         f"pass@1 低于 20% ⇒ 预案表写死「**优先怀疑 grader**，先分辨真 0 假 0」。"
         f"已逐条归因 {n} 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，"
-        "产物 `reports/baseline/zero-diag.json`）。",
+        # ⛔ 产物路径随 `--runs` 变，不写死 reports/baseline/
+        f"产物 `{_rel(RUNS / 'zero-diag.json')}`）。",
         "",
         "| 判定 | 条数 | 含义 |",
         "|---|---|---|",
