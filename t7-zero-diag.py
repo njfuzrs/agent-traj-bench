@@ -300,12 +300,30 @@ def _guard_text(v: Counter, n_done: int) -> str:
     if n_no_attempt:
         bits.append(f"⛔ 那 {n_no_attempt} 条 `true_zero_no_attempt` 是**模型没提交解法**，"
                     "不是解法不对 —— 它一次都没改文件。")
-    if n_wrong:
-        bits.append(f"✅ 只有那 {n_wrong} 条 `true_zero_wrong_fix` 是能力信号"
-                    "（测试跑起来了、模型改过文件、仍红）。")
+    # 🔴 能力信号 = `true_zero_wrong_fix` + `true_zero_missing_symbol`，⛔ 不止前者。
+    #
+    # 2026-09-14 抓到**本段自相矛盾**：上面刚说那 N 条 `true_zero_missing_symbol`
+    # 是「**真 0** ⇒ ⛔ 不是判分缺陷」（即模型没做到），紧接着却说
+    # 「✅ **只有**那 M 条 `true_zero_wrong_fix` 是能力信号」——
+    # 「只有」把自己刚认定的真 0 又排除在能力信号之外。
+    # 那个「只有」是为 baseline 批写死的（那批 missing_symbol 为 0，措辞才成立）。
+    #
+    # 这段会被**逐字嵌进报告 §10**，且 §5 的 error_code 注释也引用它的判定
+    # ⇒ 一处措辞错会同时污染三节。
+    n_cap = n_wrong + n_missing_sym
+    if n_cap:
+        parts = []
+        if n_wrong:
+            parts.append(f"{n_wrong} 条 `true_zero_wrong_fix`（改了但改错）")
+        if n_missing_sym:
+            parts.append(f"{n_missing_sym} 条 `true_zero_missing_symbol`"
+                         "（没写出 gold patch 创建的符号）")
+        bits.append(f"✅ 能力信号共 {n_cap} 条：" + " + ".join(parts) + "。"
+                    + ("⛔ 注意**不含** `true_zero_no_attempt`（一次都没改文件，"
+                       "那是没提交解法，不是解法不对）。" if n_no_attempt else ""))
     else:
-        bits.append("🔴 **`true_zero_wrong_fix` 为 0 ⇒ 这批里没有任何一条能作为"
-                    "「模型改了但改错」的能力证据。**")
+        bits.append("🔴 **`true_zero_wrong_fix` 与 `true_zero_missing_symbol` 均为 0"
+                    " ⇒ 这批里没有任何一条能作为「模型做了但没做到」的能力证据。**")
     return "".join(bits)
 
 

@@ -693,7 +693,17 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
         f"| `true_zero_no_attempt` | {v.get('true_zero_no_attempt', 0)} | "
         "真 0，但模型**一次都没改文件** ⇒ 它没提交解法，不是解法不对 |",
         f"| `true_zero_wrong_fix` | {v.get('true_zero_wrong_fix', 0)} | "
-        "真 0：测试跑起来了且模型改过文件 ⇒ 改动不对（**这才是能力信号**） |",
+        # ⛔ 不许写「**这才是**能力信号」—— 排他措辞会与 conclusion_guard 的
+        # 「能力信号共 N 条」打架（后者含 true_zero_missing_symbol）。
+        "真 0：测试跑起来了且模型改过文件 ⇒ 改动不对（**能力信号**） |",
+        # 🔴 这一行原本**整行缺失** —— 2026-09-14 抓到：本批有 5 条
+        # `true_zero_missing_symbol`，conclusion_guard 与 §5 都在讲它，
+        # 而 §10 的判定表里没有它，读者对不上「5 条从哪来的」。
+        f"| `true_zero_missing_symbol` | {v.get('true_zero_missing_symbol', 0)} | "
+        "真 0：测试跑到了，但模型没写出被 import 的 src 符号"
+        "（那些正是 gold patch 要创建的）⇒ **也是能力信号**，⛔ 不是判分缺陷 |",
+        f"| `infra_upstream_disconnect` | {v.get('infra_upstream_disconnect', 0)} | "
+        "**假 0**：上游 LLM 链路断连，verifier 照常打了分 ⇒ 已按 infra 排除出分母 |",
         f"| `solved` | {v.get('solved', 0)} | 解出 |",
         "",
         f"**写文件工具调用合计：{zd.get('n_write_tool_calls_total')} 次**"

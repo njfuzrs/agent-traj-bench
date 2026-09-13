@@ -3887,3 +3887,73 @@ def test_inlined_count_survives_resume_shrinking_stage(tmp_path):
             f"该批没内联却报成已内联（跨批次回归）：{rep._n_inlined()}"
     finally:
         rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = orig
+
+
+def test_conclusion_guard_counts_all_capability_signals():
+    """🔴 `conclusion_guard` 里「能力信号」必须含 `true_zero_missing_symbol`。
+
+    2026-09-14 抓到**本段自相矛盾**：同一段先说那 N 条 `true_zero_missing_symbol`
+    是「**真 0** ⇒ ⛔ 不是判分缺陷」（即模型没做到），紧接着又说
+    「✅ **只有**那 M 条 `true_zero_wrong_fix` 是能力信号」——
+    「只有」把自己刚认定的真 0 又排除在能力信号之外。
+    本批实测 wrong_fix=15、missing_symbol=5 ⇒ 真实能力信号 20 条，guard 却说 15。
+
+    那个「只有」是为 baseline 批写死的（那批 missing_symbol=0，措辞才成立）。
+    这段会被**逐字嵌进报告 §10**，且 §5 的 error_code 注释也引用它的判定
+    ⇒ 一处措辞错同时污染三节。
+    """
+    from collections import Counter
+    zd = _load("t7-zero-diag")
+
+    # ① 两类都有 ⇒ 必须报合计，⛔ 不许出现「只有」
+    g = zd._guard_text(Counter({"true_zero_wrong_fix": 15, "true_zero_missing_symbol": 5,
+                                "solved": 10}), 31)
+    assert "能力信号共 20 条" in g, f"没把两类相加：{g}"
+    assert "只有那 15 条" not in g, f"仍用排他措辞：{g}"
+    assert "15 条 `true_zero_wrong_fix`" in g and "5 条 `true_zero_missing_symbol`" in g, g
+
+    # ② 只有 wrong_fix（baseline 形态）⇒ 合计就等于它，措辞仍要成立
+    g2 = zd._guard_text(Counter({"true_zero_wrong_fix": 7, "solved": 0}), 7)
+    assert "能力信号共 7 条" in g2, g2
+    assert "missing_symbol" not in g2, f"该项为 0 却出现在句子里：{g2}"
+
+    # ③ 两类都为 0 ⇒ 明说没有能力证据
+    g3 = zd._guard_text(Counter({"true_zero_no_attempt": 6}), 6)
+    assert "均为 0" in g3 and "没有任何一条" in g3, g3
+
+    # ④ no_attempt 必须被显式排除在能力信号之外
+    g4 = zd._guard_text(Counter({"true_zero_wrong_fix": 3, "true_zero_no_attempt": 2}), 5)
+    assert "不含" in g4 and "no_attempt" in g4, f"没排除 no_attempt：{g4}"
+
+
+def test_zero_diag_verdict_table_lists_every_verdict(tmp_path):
+    """🔴 §10 判定表必须列出**每一种**判定，否则条数对不上。
+
+    2026-09-14 抓到：`true_zero_missing_symbol`（本批 5 条）与
+    `infra_upstream_disconnect`（1 条）**整行缺失** —— conclusion_guard 与 §5
+    都在讲这 5 条，而判定表里没有它，读者对不上「5 条从哪来的」。
+    表格各行相加也不等于「已归因 N 条」。
+    """
+    rep = _load("t7-report")
+    orig = rep.RUNS
+    try:
+        rep.RUNS = tmp_path / "t8-rerun"
+        v = {"grader_incomplete": 0, "true_zero_no_attempt": 0,
+             "true_zero_wrong_fix": 15, "true_zero_missing_symbol": 5,
+             "infra_upstream_disconnect": 1, "solved": 10}
+        zd = {"n_diagnosed": sum(v.values()), "max_turns": 120, "verdicts": v,
+              "conclusion_guard": "x", "control_group": {}}
+        sec = "\n".join(rep._zero_diag_section(zd, 0.33))
+
+        for k in v:
+            assert f"`{k}`" in sec, f"判定表缺 {k} 这一行"
+        # 表格里的条数相加必须等于 n_diagnosed
+        import re as _re2
+        rows = _re2.findall(r"^\| `(\w+)` \| (\d+) \|", sec, _re2.M)
+        assert {k for k, _ in rows} == set(v), f"行不齐：{sorted(k for k, _ in rows)}"
+        assert sum(int(n) for _, n in rows) == zd["n_diagnosed"], \
+            f"各行相加 {sum(int(n) for _, n in rows)} ≠ 已归因 {zd['n_diagnosed']}"
+        # ⛔ 排他措辞不许出现（会与 guard 的「能力信号共 N 条」打架）
+        assert "这才是能力信号" not in sec, "wrong_fix 行仍用排他措辞"
+    finally:
+        rep.RUNS = orig
