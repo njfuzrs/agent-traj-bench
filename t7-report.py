@@ -441,7 +441,7 @@ def _docs_gap_para(zd: dict | None) -> list[str]:
     return lines
 
 
-def _zero_diag_section(zd: dict | None) -> list[str]:
+def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
     """§10 真 0 / 假 0 归因。**pass@1 低时这一节是预案要求的必答项。**
 
     没有 zero-diag.json 时刻意输出一行「未做」而不是静默跳过 ——
@@ -453,11 +453,19 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
         #    写死 `reports/baseline/` 会让读者照它去查**另一批**的目录。
         #  - 阈值这里原写「< 10%」，而实际触发判据是 `res["p"] < 0.20`
         #    （健康度①「pass@1 ∈ [20%, 80%]」的下限），同一份报告两个数字打架。
+        # ⚠️ pass@1 达标（≥ 20%）时这一节**不是**预案的必答项 ——
+        # 仍然建议做（0 分的成因值得分辨），但标 🔴「未做」会谎报一条未完成的要求。
+        low = p is not None and p < 0.20
         return [
             "## 10. 真 0 / 假 0 归因",
             "",
-            "🔴 **未做**：pass@1 低于健康度下限（20%）时预案表要求先分辨真 0 假 0，"
-            f"但 `{_rel(RUNS / 'zero-diag.json')}` 不存在。",
+            (f"🔴 **未做**：pass@1 = {p:.1%} 低于健康度下限（20%）⇒ "
+             "预案表要求先分辨真 0 假 0，" if low else
+             (f"ℹ️ **未做**（非必答）：pass@1 = {p:.1%} 已达健康度下限（20%），"
+              "预案未被触发；仍建议归因 0 分的成因，"
+              if p is not None else
+              "ℹ️ **未做**：预案表要求 pass@1 低于 20% 时先分辨真 0 假 0，"))
+            + f"而 `{_rel(RUNS / 'zero-diag.json')}` 不存在。",
             f"→ 跑 `scripts/mvp/t7-zero-diag.py --runs {RUNS.name}`"
             "（纯读产物，$0）后重新生成本报告。",
             "",
@@ -466,8 +474,15 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     hd = zd.get("bash_hunting_doc", {})
     term = zd.get("termination_subtypes", {})
     n = zd.get("n_diagnosed", 0)
+    # 🔴 标题与首句都随实际 pass@1 变，⛔ 不许写死「低于 20% / 预案要求的必答项」。
+    #
+    # 2026-09-14 抓到：整节无条件断言「pass@1 低于 20% ⇒ 预案表写死优先怀疑 grader」，
+    # 而本批实测 36%（健康度① **达标**）⇒ 报告在陈述一条与自己主表相反的事实，
+    # 且把一节「本不该触发的预案」讲成了必答项。
+    low = p is not None and p < 0.20
     lines = [
-        "## 10. 真 0 / 假 0 归因（🔴 预案要求的必答项）",
+        "## 10. 真 0 / 假 0 归因"
+        + ("（🔴 预案要求的必答项）" if low or p is None else "（ℹ️ 预案未触发，主动归因）"),
         "",
     ]
     if zd.get("stale"):
@@ -489,8 +504,13 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
             "",
         ]
     lines += [
-        f"pass@1 低于 20% ⇒ 预案表写死「**优先怀疑 grader**，先分辨真 0 假 0」。"
-        f"已逐条归因 {n} 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，"
+        (f"pass@1 = {p:.1%} 低于 20% ⇒ 预案表写死「**优先怀疑 grader**，先分辨真 0 假 0」。"
+         if low else
+         (f"pass@1 = {p:.1%} 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」**未被触发**；"
+          "本节是主动归因，用来分辨 0 分里哪些是能力信号、哪些是判分或环境问题。"
+          if p is not None else
+          "预案表写死：pass@1 低于 20% ⇒「**优先怀疑 grader**，先分辨真 0 假 0」。"))
+        + f"已逐条归因 {n} 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，"
         # ⛔ 产物路径随 `--runs` 变，不写死 reports/baseline/
         f"产物 `{_rel(RUNS / 'zero-diag.json')}`）。",
         "",
@@ -937,7 +957,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "|---|---|---|",
         *[f"| {name} | {verdict} | {why} |" for name, verdict, why in health],
         "",
-        *_zero_diag_section(zd),
+        *_zero_diag_section(zd, p),
         f"## 11. 局限（{len(LIMITATIONS)} 条，主动披露）",
         "",
         "> 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。",

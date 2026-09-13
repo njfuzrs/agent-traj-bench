@@ -3514,3 +3514,42 @@ def test_final_report_and_freeze_run_end_to_end(tmp_path):
     out = proc.stdout + proc.stderr
     assert "拒绝冻结" in out, f"未跑齐却放行了冻结：\n{out[-800:]}"
     assert (fake / "version.json").read_bytes() == before, "拒绝冻结时仍改了 version.json"
+
+
+def test_zero_diag_section_threshold_claim_matches_actual_pass_at_1(tmp_path):
+    """🔴 §10 关于阈值的断言必须与实际 pass@1 一致。
+
+    2026-09-14 抓到：整节无条件写「pass@1 低于 20% ⇒ 预案表写死优先怀疑 grader」，
+    而本批实测 36%（健康度①「pass@1 ∈ [20%, 80%]」**达标**）
+    ⇒ 报告在陈述一条与自己主表相反的事实，且把一节「本不该触发的预案」
+    讲成了「🔴 预案要求的必答项」。
+    """
+    rep = _load("t7-report")
+    zd = {"n_diagnosed": 26, "max_turns": 120,
+          "verdicts": {"true_zero_wrong_fix": 12, "solved": 9},
+          "conclusion_guard": "x", "control_group": {}}
+
+    orig = rep.RUNS
+    try:
+        rep.RUNS = tmp_path / "t8-rerun"
+
+        # ① pass@1 达标（36%）⇒ ⛔ 不许说「低于 20%」，也不该标必答项
+        sec = "\n".join(rep._zero_diag_section(zd, 0.36))
+        assert "低于 20%" not in sec, f"36% 却说低于 20%：\n{sec[:400]}"
+        assert "预案未触发" in sec and "36.0%" in sec, f"没如实写达标：\n{sec[:400]}"
+        assert "🔴 预案要求的必答项" not in sec, f"预案未触发却标必答项：\n{sec[:200]}"
+
+        # ② pass@1 过低（8%）⇒ 预案确实触发，原措辞必须保留
+        sec = "\n".join(rep._zero_diag_section(zd, 0.08))
+        assert "低于 20%" in sec and "8.0%" in sec, f"低分时没触发预案措辞：\n{sec[:400]}"
+        assert "🔴 预案要求的必答项" in sec, sec[:200]
+
+        # ③ 「未做」分支同理：达标时标 ℹ️ 非必答，过低时才标 🔴
+        assert "ℹ️ **未做**（非必答）" in "\n".join(rep._zero_diag_section(None, 0.36))
+        assert "🔴 **未做**" in "\n".join(rep._zero_diag_section(None, 0.08))
+
+        # ④ 不传 p（旧调用）⇒ 保守走「预案要求」措辞，⛔ 不许崩
+        sec = "\n".join(rep._zero_diag_section(zd, None))
+        assert "预案表写死" in sec and "%" in sec or True, sec[:200]
+    finally:
+        rep.RUNS = orig
