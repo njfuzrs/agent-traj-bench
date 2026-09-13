@@ -3705,3 +3705,33 @@ def test_gate_table_rows_carry_their_own_denominator():
     surv = json.loads(
         (rep.RECHECK / "survivors.json").read_text(encoding="utf-8"))["survivors"]
     assert sum(attrib.values()) == len(gate) - len(surv)
+
+
+def test_limitations_concurrency_matches_actual_run():
+    """🔴 局限清单里的并发数必须与本轮实际一致，⛔ 不许写死 `-n 1`。
+
+    2026-09-14 抓到：第 10 条写「已按其判据设门禁（`-n 1`、reward 双源核对）」，
+    而本批实测跑的是 `-n 6`（config.json 的 n_concurrent_trials）。
+    §1 与 §5 都如实写了 -n 6，只有这条还是旧值 ——
+    而「**并发失真**」正是这条自己点名的六类静默失效之一，
+    写错并发数等于这条局限在陈述一个与主表相反的执行条件。
+    """
+    rep = _load("t7-report")
+
+    # 占位符必须存在于常量里（否则填充函数形同虚设）
+    raw = "\n".join(rep.LIMITATIONS)
+    assert "{n_conc}" in raw, "LIMITATIONS 里没有占位符 —— 并发数又被写死了？"
+    assert "`-n 1`" not in raw, "仍写死 -n 1"
+
+    for n in (1, 6):
+        out = "\n".join(rep._limitations(n))
+        assert f"`-n {n}`" in out, f"n_conc={n} 没填进去"
+        assert "{n_conc}" not in out, "占位符没被替换 —— 会把花括号原样印进报告"
+    # 条数不能因为填充而变
+    assert len(rep._limitations(6)) == len(rep.LIMITATIONS)
+
+    # 渲染侧必须走填充函数，⛔ 不许直接迭代 LIMITATIONS
+    code = [ln.split("#", 1)[0] for ln in
+            Path(rep.__file__).read_text(encoding="utf-8").splitlines()]
+    assert not [ln for ln in code if "enumerate(LIMITATIONS" in ln], \
+        "渲染侧直接迭代 LIMITATIONS ⇒ 占位符会原样输出"

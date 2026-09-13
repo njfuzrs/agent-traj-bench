@@ -131,8 +131,11 @@ LIMITATIONS = [
     "这一项**未做**，不假装做了。",
     "**base 快照不带 git 历史**：容器内是 `git init` 的单 commit，agent 看不到真实提交历史。"
     "副作用是消除了「翻 git log 找答案」的泄漏路径，但也偏离真实开发环境。",
+    # ⚠️ `{n_conc}` 由 `_limitations(n_conc)` 按 run 产物填 —— ⛔ 不许写死 `-n 1`。
+    # 「并发失真」正是本条自己点名的六类静默失效之一，写错并发数等于这条局限
+    # 在陈述一个与 §1/§5 相反的执行条件。
     "**继承 harbor 的六类静默失效**（verifier 恒返值、双层超时互掩、并发失真等）。"
-    "已按其判据设门禁（`-n 1`、reward 双源核对），但**不能声称已全部排除**。",
+    "已按其判据设门禁（`-n {n_conc}`、reward 双源核对），但**不能声称已全部排除**。",
     "**单一执行环境**：只在本机 colima + arm64 上验证过。换 x64 或换 Docker 后端须重跑门禁，"
     "结果不保证可比。",
     "**5 条 task 因私有 registry 被排除**：`ruijie/iam-studio-fe` 的 `@ruijie/*` 依赖只存在于"
@@ -156,6 +159,18 @@ LIMITATIONS = [
     "**可证不参与判分**：两者都不含判分逻辑与测试代码，且容器内泄漏扫描零违规"
     "（扫描器另有 5/5 反向自证）。⛔ 不能只写「已剔除泄漏面」了事。",
 ]
+
+
+def _limitations(n_conc: int) -> list[str]:
+    """局限清单，把 `{n_conc}` 占位符换成本轮实际并发数。
+
+    🔴 2026-09-14 抓到：第 10 条写死「已按其判据设门禁（`-n 1`）」，
+    而本批实测跑的是 `-n 6`（`config.json` 的 `n_concurrent_trials`）。
+    §1 与 §5 都如实写了 `-n 6`，只有这条还是旧值 ——
+    而「**并发失真**」正是这条自己点名的六类静默失效之一，
+    写错并发数等于这条局限在陈述一个与主表相反的执行条件。
+    """
+    return [x.replace("{n_conc}", str(n_conc)) for x in LIMITATIONS]
 
 
 def load_funnel() -> list[tuple[str, int | str, str]]:
@@ -1050,7 +1065,9 @@ def build_report(res: dict, trials: list[lib.Trial],
         "",
         "> 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。",
         "",
-        *[f"{i}. {x}" for i, x in enumerate(LIMITATIONS, 1)],
+        # ⛔ 不许直接渲染 LIMITATIONS：其中一条含 `{n_conc}` 占位符，
+        # 直接输出会把花括号原样印进报告（且并发数仍是错的）。
+        *[f"{i}. {x}" for i, x in enumerate(_limitations(n_conc), 1)],
         "",
         "## 12. 这批数字**不能**用来说什么",
         "",
