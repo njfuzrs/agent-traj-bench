@@ -3137,3 +3137,40 @@ def test_summarize_spans_all_run_dirs_not_just_latest(tmp_path):
     s2 = t8.summarize(tmp_path)
     assert s2["n"] == 4, f"同名重跑被算成两条 ⇒ 分母虚增：{s2['n']}"
     assert "T0003" in s2["solved_tasks"], "重跑后的新结果没覆盖旧的 0 分"
+
+
+def test_zero_diag_section_never_contradicts_its_own_wrong_fix_count(tmp_path):
+    """🔴 §10 的收尾结论必须与它自己的 `true_zero_wrong_fix` 条数一致。
+
+    2026-09-14 抓到**同一份报告自相矛盾**：那段收尾文案写死了 baseline 批的形态
+    （wrong_fix 确实为 0），而本批实测 7 条。渲染出来是这样三行并排：
+
+      | `true_zero_wrong_fix` | 7 | 真 0：… ⇒ **这才是能力信号** |
+      > 🔴 …✅ 只有那 7 条 `true_zero_wrong_fix` 是能力信号…
+      ⇒ 已判的 18 条里**没有一条**是「改了代码但改错」（= 0）⇒ 0 分**不是**能力信号
+
+    读者无从判断哪个是真的，而三处都「看着完整」。
+    """
+    rep = _load("t7-report")
+
+    # ① wrong_fix > 0 ⇒ ⛔ 不许出现「没有一条」「= 0」
+    zd = {"n_diagnosed": 18,
+          "verdicts": {"true_zero_wrong_fix": 7, "solved": 7, "true_zero_missing_symbol": 3},
+          "conclusion_guard": "已判 18 条：解出 7、改了但改错 7",
+          "control_group": {"n_control": 4, "control_tasks": ["T0011"], "n_control_done": 0,
+                            "reading": "⏳ 对照组还没跑到"}}
+    sec = "\n".join(rep._zero_diag_section(zd))
+    assert "没有一条" not in sec, f"wrong_fix=7 却说「没有一条」：\n{sec[-700:]}"
+    assert "`true_zero_wrong_fix` = 0" not in sec, f"写死了 =0：\n{sec[-700:]}"
+    assert "7 条" in sec and "是能力信号" in sec, f"没把 7 条读成能力信号：\n{sec[-700:]}"
+
+    # ② wrong_fix == 0（baseline 批的真实形态）⇒ 原结论必须保留
+    zd0 = dict(zd, verdicts={"true_zero_no_attempt": 6, "solved": 0})
+    sec0 = "\n".join(rep._zero_diag_section(zd0))
+    assert "没有一条" in sec0 and "`true_zero_wrong_fix` = 0" in sec0, \
+        f"wrong_fix=0 时原结论被弄丢了：\n{sec0[-700:]}"
+    assert "**不是**能力信号" in sec0, sec0[-700:]
+
+    # ③ 两种形态都不许提前把整批低分归给题面缺陷（对照组没跑完）
+    for x in (sec, sec0):
+        assert "反证未完成" in x, f"缺「反证未完成」的强度约束：\n{x[-400:]}"
