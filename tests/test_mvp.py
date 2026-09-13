@@ -3212,3 +3212,44 @@ def test_zero_diag_final_branch_has_no_hardcoded_baseline_numbers():
     # ③ 对照组「可被推翻」那句的轮次也必须现读，⛔ 不写死
     assert "120 轮上限本身不够用" in sec, f"推翻句写死了轮次：\n{sec[:900]}"
     assert "40 轮上限本身不够用" in sec0, sec0[:900]
+
+
+def test_freeze_artifacts_and_caveat_follow_runs_target():
+    """🔴 `--freeze` 写进 version.json 的路径与 caveat 必须跟着 `--runs` 走。
+
+    这是**永久冻结**的元数据，且 `--freeze` 只在 39 条跑齐时才放行
+    ⇒ 写死的东西要等最后一刻才现形，中途完全测不到。
+
+    2026-09-14 抓到两处：
+    - `artifacts` 写死 `baseline-v0.2-mini.md` + `reports/baseline/summary.json`，
+      而 `--runs t8-rerun` 的产物是 `baseline-v0.2-mini-t8-rerun.md` +
+      `reports/t8-rerun/summary.json` ⇒ 冻进去的是**另一批**的路径，
+      日后照它复现只会读到 baseline 那批。
+    - `known_caveat` 写死「题面缺 docs/ ⇒ A2 低分不可读作模型能力」，
+      而修复① 内联文档后这条已不成立（同 §2②）。
+    """
+    rep = _load("t7-report")
+
+    # 源码级判据：⛔ 这两处不许再出现写死字面量
+    src = Path(rep.__file__).read_text(encoding="utf-8")
+    freeze_seg = src.split("if args.freeze:", 1)[1]
+    assert '"bench/v0.2-mini/reports/baseline-v0.2-mini.md"' not in freeze_seg, \
+        "artifacts 仍写死 baseline 报告路径"
+    assert '"bench/v0.2-mini/reports/baseline/summary.json"' not in freeze_seg, \
+        "artifacts 仍写死 baseline summary 路径"
+    assert "_rel(REPORT)" in freeze_seg and "_rel(SUMMARY)" in freeze_seg, \
+        "artifacts 没改成从 REPORT / SUMMARY 现取"
+    assert "35/39" not in freeze_seg, "known_caveat 仍写死 35/39"
+    assert "_docs_gap_caveat(zd)" in freeze_seg, "known_caveat 没与 §2② 同源"
+
+    # 行为判据：切批后 REPORT / SUMMARY 必须一起变（_retarget 的三个全局）
+    orig = (rep.RUNS, rep.REPORT, rep.SUMMARY)
+    try:
+        rep._retarget("t8-rerun")
+        assert rep.REPORT.name == "baseline-v0.2-mini-t8-rerun.md", rep.REPORT
+        assert rep.SUMMARY.parent.name == "t8-rerun", rep.SUMMARY
+        rep._retarget("baseline")
+        assert rep.REPORT.name == "baseline-v0.2-mini.md", rep.REPORT
+        assert rep.SUMMARY.parent.name == "baseline", rep.SUMMARY
+    finally:
+        rep.RUNS, rep.REPORT, rep.SUMMARY = orig

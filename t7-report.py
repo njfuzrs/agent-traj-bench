@@ -1087,11 +1087,11 @@ def main() -> int:
         doc.setdefault("progress", {})["T7"] = {
             "state": "done",
             "date": datetime.now(UTC).strftime("%Y-%m-%d"),
-            "artifacts": [
-                "bench/v0.2-mini/reports/baseline-v0.2-mini.md",
-                "bench/v0.2-mini/reports/baseline/summary.json",
-                _rel(run),
-            ],
+            # ⛔ 路径不许写死 baseline —— `--runs t8-rerun` 时报告叫
+            # `baseline-v0.2-mini-t8-rerun.md`、summary 在 `reports/t8-rerun/` 下。
+            # 写死会把**另一批**的产物路径永久冻进 version.json，
+            # 而日后照它去复现只会读到 baseline 那批（或根本不存在的文件）。
+            "artifacts": [_rel(REPORT), _rel(SUMMARY), _rel(run)],
             "gate": (f"pass@1={res['p']:.1%}（{res['passed']:g}/{res['n']}），"
                      f"分母 {len(surv)} 条，排除 {res['excluded']} 条，"
                      f"实付 ${cost['total']}"),
@@ -1101,8 +1101,10 @@ def main() -> int:
             "network_policy": ("allowlist（只放宿主网关 IP），**非题面写的 --network none**；"
                                "对被测模型而言 github/npm 全不可达（实测 SSL EOF），"
                                "证据 reports/t7-regate/netpolicy-probe.json"),
-            "known_caveat": ("35/39 条题面点名容器内不存在的 docs/（T6 核心发现）⇒ "
-                             "A2 档 20 条的低分首先是题面缺信息，不可读作模型能力"),
+            # 🔴 与 §2② / summary.caveats 同源现读，⛔ 不写死 ——
+            # 修复① 内联文档后「题面缺 docs/」已不成立，而 version.json 是
+            # **永久冻结**的元数据：写死会让日后回看时拿到一个与报告相反的结论。
+            "known_caveat": _docs_gap_caveat(zd),
         }
         vp.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  已冻结 version.json：task_count={len(surv)}，progress.T7 已记录")
