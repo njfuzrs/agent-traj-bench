@@ -62,6 +62,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -3406,3 +3407,110 @@ def test_zero_diag_section_paths_follow_runs_target(tmp_path):
         assert "baseline/zero-diag.json" in sec and "--runs baseline" in sec, sec
     finally:
         rep.RUNS = orig
+
+
+def _build_freeze_fixture(dst: Path, *, n_solved_every: int = 3) -> list[str]:
+    """造一份「39 条全跑齐」的产物，用于实跑终版链路（出报告 + 冻结）。
+
+    只读取数源（gate.jsonl / stats / t6-recheck / tasks 的 meta.json 与题面）
+    从真实产物复制 —— 造假的会让漏斗表与分组表的分母对不上，而那些正是
+    报告自己的守卫要核的东西。run 产物则必须造：真实的那批还没跑齐。
+    """
+    real = c.MVP_DIR
+    (dst / "meta").mkdir(parents=True)
+    (dst / "reports").mkdir(parents=True)
+    for rel in ("meta/gate.jsonl", "meta/resolved.stats.json", "meta/tasks.stats.json",
+                "meta/candidates.stats.json", "version.json"):
+        if (real / rel).exists():
+            (dst / rel).parent.mkdir(parents=True, exist_ok=True)
+            (dst / rel).write_bytes((real / rel).read_bytes())
+    shutil.copytree(real / "reports/t6-recheck", dst / "reports/t6-recheck")
+
+    surv = json.loads(
+        (real / "reports/t6-recheck/survivors.json").read_text(encoding="utf-8"))["survivors"]
+
+    run = dst / "reports/t8-rerun/2026-09-14__00-00-00"
+    for i, t in enumerate(surv):
+        d = run / f"{t}__smoke{i}"
+        (d / "verifier").mkdir(parents=True)
+        rw = 1.0 if i % n_solved_every == 0 else 0.0
+        (d / "result.json").write_text(json.dumps({
+            "task_name": t,
+            "verifier_result": {"rewards": {"reward": rw, "f2p": rw, "p2p": 1.0,
+                                            "error_code": 0}},
+            "agent_info": {"model_info": {"name": "smoke-model"}},
+            "agent_result": {"cost_usd": 0.5,
+                             "metadata": {"sid_binary_sha256": "ab" * 32,
+                                          "sid_model": "smoke-model",
+                                          "sid_num_turns": 10}},
+        }), encoding="utf-8")
+        (d / "verifier/reward.json").write_text(json.dumps(
+            {"reward": rw, "f2p": rw, "p2p": 1.0, "error_code": 0}), encoding="utf-8")
+    (run / "config.json").write_text(json.dumps({"n_concurrent": 6}), encoding="utf-8")
+
+    # 题面两份都要：stage 的（含内联段，§2② 判据）+ 原始的（对照组判据）
+    for t in surv:
+        (dst / "reports/t8-rerun/tasks" / t).mkdir(parents=True, exist_ok=True)
+        (dst / "tasks" / t).mkdir(parents=True, exist_ok=True)
+        st = real / "reports/t8-rerun/tasks" / t / "instruction.md"
+        (dst / "reports/t8-rerun/tasks" / t / "instruction.md").write_bytes(
+            st.read_bytes() if st.exists() else b"x\n")
+        for rel in ("instruction.md", "meta.json"):
+            src = real / "tasks" / t / rel
+            if src.exists():
+                (dst / "tasks" / t / rel).write_bytes(src.read_bytes())
+    return surv
+
+
+def test_final_report_and_freeze_run_end_to_end(tmp_path):
+    """🔴 终版链路（39 条跑齐 → 出报告 → `--freeze`）必须能实跑通。
+
+    这条路**只在跑齐时才放行**，真跑之前一次都走不到 ⇒ 它坏了要等最后一米才发现，
+    而那时批次已经烧完 $30、几小时不可重来。2026-09-14 手搓冒烟实测撞到两处
+    （§10 写死 `reports/baseline/` 路径、阈值 10% 与实际判据 0.20 打架），
+    还验证了 artifacts / known_caveat 是否真的跟着 `--runs` 走。
+
+    所以固化成测试：以后每次改报告脚本都替真跑走一遍这条路。
+    """
+    if not (c.MVP_DIR / "reports/t6-recheck/survivors.json").exists():
+        pytest.skip("没有 T6 产物（survivors.json）—— 这条冒烟要真实取数源")
+
+    fake = tmp_path / "bench/v0.2-mini"
+    surv = _build_freeze_fixture(fake)
+    env = {**os.environ, "MVP_DIR": str(fake)}
+    script = str(MVP / "t7-report.py")
+
+    # ① 39 条跑齐 ⇒ 报告与冻结都该成功
+    proc = subprocess.run([sys.executable, script, "--runs", "t8-rerun", "--freeze"],
+                          capture_output=True, text=True, cwd=REPO_ROOT, env=env)
+    out = proc.stdout + proc.stderr
+    # ⚠️ 只在 MVP_DIR 覆盖**确实不生效**时跳过（报告写回了真实目录而非 tmp），
+    # ⛔ 判据不许写成「str(fake) 里没有 MVP_DIR 字面量」—— 那恒为真，
+    # 会让这条冒烟永久静默跳过（2026-09-14 自己踩到：明明跑成功了却报 skip）。
+    if str(fake) not in out:
+        pytest.skip(f"MVP_DIR 覆盖不生效（报告没写进 tmp）：{out[-300:]}")
+    assert proc.returncode == 0, f"终版链路跑失败：\n{out[-1500:]}"
+    assert "已冻结 version.json" in out, f"冻结没执行：\n{out[-800:]}"
+
+    # ② 冻结内容必须跟着 --runs 走，⛔ 不许写死 baseline
+    doc = json.loads((fake / "version.json").read_text(encoding="utf-8"))
+    assert doc["status"] == "frozen" and doc["task_count"] == len(surv)
+    t7 = doc["progress"]["T7"]
+    arts = " ".join(t7["artifacts"])
+    assert "t8-rerun" in arts, f"artifacts 没指向本批：{t7['artifacts']}"
+    assert "baseline-v0.2-mini.md" not in arts, f"artifacts 写死了 baseline：{t7['artifacts']}"
+    assert "35/39" not in t7["known_caveat"], f"known_caveat 写死了：{t7['known_caveat']}"
+
+    # ③ 报告里不许残留写死的另一批路径
+    rep = (fake / "reports/baseline-v0.2-mini-t8-rerun.md").read_text(encoding="utf-8")
+    assert "reports/baseline/zero-diag.json" not in rep, "§10 仍写死 baseline 路径"
+    assert "pass@1 < 10%" not in rep, "§10 阈值仍与实际判据（0.20）打架"
+
+    # ④ 未跑齐时必须拒绝冻结，且 ⛔ 不许动 version.json
+    before = (fake / "version.json").read_bytes()
+    shutil.rmtree(fake / "reports/t8-rerun/2026-09-14__00-00-00" / f"{surv[0]}__smoke0")
+    proc = subprocess.run([sys.executable, script, "--runs", "t8-rerun", "--partial", "--freeze"],
+                          capture_output=True, text=True, cwd=REPO_ROOT, env=env)
+    out = proc.stdout + proc.stderr
+    assert "拒绝冻结" in out, f"未跑齐却放行了冻结：\n{out[-800:]}"
+    assert (fake / "version.json").read_bytes() == before, "拒绝冻结时仍改了 version.json"
