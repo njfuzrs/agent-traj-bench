@@ -3659,3 +3659,49 @@ def test_error_code_note_does_not_contradict_zero_diag_verdicts():
 
     # ④ 全为 0 ⇒ 一句话说明即可
     assert "没有自报错误" in "\n".join(rep._error_code_note(Counter(), zd))
+
+
+def test_gate_table_rows_carry_their_own_denominator():
+    """🔴 门禁表每行必须带**自己的分母**，⛔ 渲染侧不许写死 `/65`。
+
+    2026-09-14 抓到：模板原本写死 `{ok}/65`，而门禁③（`oracle -k 3`）只在
+    过了①②的那 40 条上跑 ⇒ 渲染成「过 40/65、淘汰 0」，读起来像
+    **25 条被③拦下却没进归因表**（归因表合计 26 条，且一条 flaky 都没有）。
+    真相是 40/40 全过。一张用来自证数据可信度的表自己算不平，最伤可信度。
+
+    独立复算（从 gate.jsonl 直接数）：oracle 过 44/65、nop 过 61/65、
+    k3 过 40/40；①②无重叠（只挂① 21 条、只挂② 4 条），
+    归因表 7+12+4+2+1 = 26 = 65 − 39 闭合。
+    """
+    if not (c.MVP_META / "gate.jsonl").exists():
+        pytest.skip("没有 gate.jsonl —— 这条要真实门禁记录")
+
+    rep = _load("t7-report")
+    rows, attrib = rep.load_gate_rows()
+
+    # 每行必须是 5 元组（name, why, ok, total, bad），⛔ 不是 4 元组
+    for r in rows:
+        assert len(r) == 5, f"门禁行少了分母字段：{r}"
+        _name, _why, ok, tot, bad = r
+        assert ok + bad == tot, f"该行算不平：过 {ok} + 淘汰 {bad} ≠ 分母 {tot}（{_name}）"
+
+    gate = [json.loads(x) for x in
+            (c.MVP_META / "gate.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    k3 = [r for r in gate if r.get("oracle-k3")]
+    # ①② 的分母是全集，③ 的分母只是过了①②的那些
+    assert rows[0][3] == len(gate) and rows[1][3] == len(gate)
+    assert rows[2][3] == len(k3), f"门禁③ 分母该是 {len(k3)}，拿到 {rows[2][3]}"
+    assert rows[2][3] < len(gate), "门禁③ 的分母若等于全集，这条测试就失去意义了"
+
+    # 渲染侧不许再出现写死的 /65。
+    # ⚠️ 只看**代码行**，⛔ 不能整份文件 grep —— 注释里写着「原本写死 `{ok}/65`」
+    # 讲的正是这个缺陷本身，那样会永久红（我第一版就这么误报了一次）。
+    code = [ln.split("#", 1)[0] for ln in
+            Path(rep.__file__).read_text(encoding="utf-8").splitlines()]
+    hard = [ln for ln in code if "/65" in ln]
+    assert not hard, f"渲染模板仍写死 /65：{hard}"
+
+    # 归因表必须与「全集 − 存活」闭合（load_gate_rows 自己也会 SystemExit，这里再钉一次）
+    surv = json.loads(
+        (rep.RECHECK / "survivors.json").read_text(encoding="utf-8"))["survivors"]
+    assert sum(attrib.values()) == len(gate) - len(surv)

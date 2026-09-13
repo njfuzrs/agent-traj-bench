@@ -207,7 +207,7 @@ def load_funnel() -> list[tuple[str, int | str, str]]:
     ]
 
 
-def load_gate_rows() -> tuple[list[tuple[str, str, int, int]], dict[str, int]]:
+def load_gate_rows() -> tuple[list[tuple[str, str, int, int, int]], dict[str, int]]:
     """门禁记录：三道门禁各拦下多少，以及淘汰归因分布。
 
     归因分布来自 `t6-review.md` §6.3 的表（**含 T5 的 26 条一并归类**）——
@@ -218,13 +218,21 @@ def load_gate_rows() -> tuple[list[tuple[str, str, int, int]], dict[str, int]]:
     n_oracle_ok = sum(1 for r in gate if r["oracle"]["ok"])
     n_nop_ok = sum(1 for r in gate if r["nop"]["ok"])
     k3 = [r for r in gate if r.get("oracle-k3")]
+    # 🔴 每行**带自己的分母**，⛔ 不许让渲染侧写死 `/65`。
+    #
+    # 2026-09-14 抓到：模板原本写死 `{ok}/65`，而门禁③（`oracle -k 3`）只在
+    # 过了①②的那 40 条上跑 ⇒ 渲染成「过 40/65、淘汰 0」，读起来像
+    # **25 条被③拦下却没进归因表**（归因表合计 26 条，且一条 flaky 都没有）。
+    # 真相是 40/40 全过：③ 一条都没淘汰。分母混用让一张自证可信度的表自相矛盾。
     rows = [
         ("① `oracle`（参考解必须能解出）", "gold patch 打上后 F2P 仍红 ⇒ 反解或测试选取有偏差",
-         n_oracle_ok, len(gate) - n_oracle_ok),
+         n_oracle_ok, len(gate), len(gate) - n_oracle_ok),
         ("② `nop`（什么都不改必须解不出）", "nop 下 f2p=1 ⇒ 假 task，测试不改代码就绿",
-         n_nop_ok, len(gate) - n_nop_ok),
-        ("③ `oracle -k 3`（三次必须一致）", "三次结果不一致 ⇒ flaky，不可作为判分依据",
-         sum(1 for r in k3 if r["oracle-k3"]["ok"]), sum(1 for r in k3 if not r["oracle-k3"]["ok"])),
+         n_nop_ok, len(gate), len(gate) - n_nop_ok),
+        ("③ `oracle -k 3`（三次必须一致，**只在过了①②的那些上跑**）",
+         "三次结果不一致 ⇒ flaky，不可作为判分依据",
+         sum(1 for r in k3 if r["oracle-k3"]["ok"]), len(k3),
+         sum(1 for r in k3 if not r["oracle-k3"]["ok"])),
     ]
     # 淘汰归因（出处：t6-review.md §6.3）
     attrib = {
@@ -1015,7 +1023,8 @@ def build_report(res: dict, trials: list[lib.Trial],
         "",
         "| 门禁 | 拦的是什么 | 过 | 淘汰 |",
         "|---|---|---|---|",
-        *[f"| {name} | {why} | {ok}/65 | {bad} |" for name, why, ok, bad in gate_rows],
+        # ⛔ 分母用各行自己的（门禁③ 的分母是 40，不是 65）—— 见 load_gate_rows
+        *[f"| {name} | {why} | {ok}/{tot} | {bad} |" for name, why, ok, tot, bad in gate_rows],
         "",
         "淘汰归因（**含 T5 的 26 条一并归类**，出处 `t6-review.md` §6.3；"
         "合计已自检 = 65 − 39）：",
