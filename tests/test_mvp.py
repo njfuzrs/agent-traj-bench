@@ -3735,3 +3735,43 @@ def test_limitations_concurrency_matches_actual_run():
             Path(rep.__file__).read_text(encoding="utf-8").splitlines()]
     assert not [ln for ln in code if "enumerate(LIMITATIONS" in ln], \
         "渲染侧直接迭代 LIMITATIONS ⇒ 占位符会原样输出"
+
+
+def test_reproduce_command_and_denominator_follow_actual_batch(tmp_path):
+    """🔴 §13 的复算命令必须带 `--runs`，§12 的半宽分母必须写实际计分数。
+
+    2026-09-14 抓到两处：
+    - §13 原本是裸 `t7-report.py`，而默认取数源是 `baseline`（第一轮，已作废）
+      ⇒ 照本报告的复算命令跑，读的是**另一批**，复算出的数字与本文对不上。
+      而 §13 是本报告自称「可复算」的唯一入口 —— 它指错批次等于这份报告不可复算。
+      取数源那行同病（写死 `reports/baseline/summary.json`）。
+    - §12 写「半宽 ±16.7pp，**n=39** 下…」，而半宽是按 scored 算的；
+      中途或有 infra 排除时 scored 一定小于 39，两个数字并排会误导读者
+      以为区间是 39 条上的。
+    """
+    rep = _load("t7-report")
+    orig = (rep.RUNS, rep.REPORT, rep.SUMMARY)
+    try:
+        # ① 切到 t8-rerun ⇒ 命令与取数源都得跟着走
+        rep._retarget("t8-rerun")
+        src = Path(rep.__file__).read_text(encoding="utf-8")
+        assert '"机器可读取数源：`reports/baseline/summary.json`' not in src, \
+            "§13 取数源仍写死 baseline"
+        assert 'f" --runs {RUNS.name}"' in src, "§13 命令没按批次拼 --runs"
+
+        # ② 半宽那条必须引用 res['n']，⛔ 不许写死 n=39
+        code = [ln.split("#", 1)[0] for ln in src.splitlines()]
+        assert not [ln for ln in code if "n=39 下小于这个量级" in ln], \
+            "§12 半宽那条仍写死 n=39"
+        assert [ln for ln in code if "按参与计分的" in ln and "res['n']" in ln], \
+            "§12 半宽没引用实际计分条数"
+    finally:
+        rep.RUNS, rep.REPORT, rep.SUMMARY = orig
+
+    # ③ 端到端：真实产物的报告里，复算命令必须带上本批的 --runs
+    md = c.MVP_REPORTS / "baseline-v0.2-mini-t8-rerun.md"
+    if not md.exists():
+        pytest.skip("还没生成 t8-rerun 报告")
+    text = md.read_text(encoding="utf-8")
+    assert "t7-report.py --runs t8-rerun" in text, "报告里的复算命令没带 --runs"
+    assert "reports/t8-rerun/summary.json" in text, "报告里的取数源没指向本批"

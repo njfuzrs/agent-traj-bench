@@ -1076,18 +1076,28 @@ def build_report(res: dict, trials: list[lib.Trial],
         # 🔴 与 §2② 同源 —— 修复① 内联文档后这条反过来了：⛔ 不许写死
         f"- {_a2_dont_say(zd)}（见 §2②）。",
         "- **不能**报三档难度单调性（S 档为 0，见 §2④）。",
-        f"- **不能**跨批比 pass@1：半宽 ±{res['halfwidth_pp']:.1f}pp，"
-        "n=39 下小于这个量级的差异都在噪声里。",
+        # ⛔ 分母写实际计分数，不写死 39 —— 半宽是按 scored 算的，
+        # 两个数字并排（±16.7pp 与 n=39）会让读者以为区间是 39 条上的，
+        # 而中途/有 infra 排除时 scored 一定小于 39。
+        f"- **不能**跨批比 pass@1：半宽 ±{res['halfwidth_pp']:.1f}pp"
+        f"（按参与计分的 {res['n']} 条算），小于这个量级的差异都在噪声里。",
         "- **不能**说「已按题面承诺离线运行」—— 实际是 allowlist（见 §2③）。",
         "",
         "## 13. 复算方式",
         "",
         "```bash",
         "# 纯复算，不跑任何东西、不花钱",
-        "~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-report.py",
+        # 🔴 命令必须带 `--runs`，⛔ 不许写死默认值。
+        # 2026-09-14 抓到：这行原本是裸 `t7-report.py`，而默认取数源是
+        # `baseline`（第一轮，已作废）⇒ 照本报告的复算命令跑，读的是**另一批**，
+        # 复算出来的数字与本文对不上。而 §13 是本报告自称「可复算」的唯一入口，
+        # 它指错批次等于这份报告不可复算。
+        "~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-report.py"
+        + (f" --runs {RUNS.name}" if RUNS.name != "baseline" else ""),
         "```",
         "",
-        "机器可读取数源：`reports/baseline/summary.json`（⛔ 别抄本文的 markdown 数字）。",
+        # ⛔ 取数源路径同样随 `--runs` 变
+        f"机器可读取数源：`{_rel(SUMMARY)}`（⛔ 别抄本文的 markdown 数字）。",
         "",
     ]
     return "\n".join(L)
