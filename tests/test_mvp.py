@@ -3618,3 +3618,44 @@ def test_fp_split_separates_real_regression_from_grader_failure(tmp_path):
     sec2 = "\n".join(rep._fp_section(fp2))
     assert "模型压根没改文件" not in sec2, f"F2P 有满分却说模型没动手：\n{sec2}"
     assert "不可**读作" in sec2 or "不可读作" in sec2, sec2
+
+
+def test_error_code_note_does_not_contradict_zero_diag_verdicts():
+    """🔴 §5 关于 `error_code` 的注释不许与 §10 的实际判定打架。
+
+    2026-09-14 抓到的**跨节矛盾**：§5 原文写死「`error_code != 0` 就是判分侧
+    自己报错，与『模型答错』是两回事」。而本批那 2 条（T0039 / T0049，
+    都是 `error_code=4` = `xml_missing`）经 §10 逐条核实是
+    `true_zero_missing_symbol`：测试**跑起来了**，但 import 的 src 符号正是
+    gold patch 要创建的、模型没写出来 ⇒ 文件加载失败 ⇒ bun 不写 XML。
+
+    也就是说 `xml_missing` 的成因可以是模型没写出符号（真 0、能力信号）。
+    §10 判「是能力信号」而 §5 说「与答错是两回事」，同一份报告对同一批 task
+    给出两个相反的判定。
+    """
+    from collections import Counter
+    rep = _load("t7-report")
+
+    ec = Counter({4: 2})
+
+    # ① 有归因 ⇒ 必须交叉引用 §10 的实际判定，⛔ 不许说「与模型答错是两回事」
+    zd = {"verdicts": {"true_zero_missing_symbol": 4, "solved": 9}}
+    note = "\n".join(rep._error_code_note(ec, zd))
+    assert "与「模型答错」是两回事" not in note, f"仍与 §10 判定打架：\n{note}"
+    assert "true_zero_missing_symbol` 4 条" in note, f"没引用 §10 的判定：\n{note}"
+    assert "真 0" in note and "没写出" in note, note
+    assert "没有一条是判分缺陷" in note, f"grader_incomplete=0 时该说明：\n{note}"
+
+    # ② 有判分缺陷时 ⇒ 如实报条数，且⛔ 不许说「没有一条是判分缺陷」
+    zd2 = {"verdicts": {"grader_incomplete": 3, "true_zero_missing_symbol": 1}}
+    note2 = "\n".join(rep._error_code_note(ec, zd2))
+    assert "grader_incomplete` 3 条" in note2, note2
+    assert "没有一条是判分缺陷" not in note2, f"有 3 条判分缺陷却说没有：\n{note2}"
+
+    # ③ 没做归因 ⇒ 只能说「无法判定」，⛔ 不许替它下结论
+    note3 = "\n".join(rep._error_code_note(ec, None))
+    assert "无法判定" in note3, note3
+    assert "与「模型答错」是两回事" not in note3, note3
+
+    # ④ 全为 0 ⇒ 一句话说明即可
+    assert "没有自报错误" in "\n".join(rep._error_code_note(Counter(), zd))

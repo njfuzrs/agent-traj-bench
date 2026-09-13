@@ -291,6 +291,46 @@ def fp_split(trials: list[lib.Trial]) -> dict:
     }
 
 
+def _error_code_note(ec, zd: dict | None) -> list[str]:
+    """§5 `error_code` 分布下面那句注释 —— ⛔ 不许无条件说「与模型答错是两回事」。
+
+    🔴 2026-09-14 抓到的**跨节矛盾**：这句原文写死「`error_code != 0` 就是判分侧
+    自己报错，与『模型答错』是两回事」。而本批那 2 条（T0039 / T0049，都是
+    `error_code=4` = `xml_missing`）经 §10 逐条核实是 `true_zero_missing_symbol`：
+
+      测试**跑起来了**，但 import 的 src 符号正是 gold patch 要创建的、
+      模型没写出来 ⇒ 文件加载失败 ⇒ bun 不写 XML ⇒ error_code=4。
+
+    也就是说 `xml_missing` 的成因可以是**模型没写出符号**（真 0、能力信号），
+    ⛔ 不能一律读成判分缺陷。§10 判「是能力信号」而 §5 说「与答错是两回事」，
+    同一份报告对同一批 task 给出两个相反的判定。
+
+    所以这句改为：先说 error_code 的字面含义，再交叉引用 §10 的**实际判定**。
+    """
+    if not ec:
+        return ["> 全部 `error_code = 0` ⇒ 判分侧没有自报错误。"]
+
+    lines = [
+        "> `error_code != 0` 表示**判分侧没产出可读的 XML**"
+        "（4=`xml_missing` / 5=`xml_parse_error` / 3=`empty_file_list`）。",
+        "> ⛔ 但这**不等于**「判分缺陷、与模型答错无关」——"
+        "`xml_missing` 的成因也可能是**模型没写出被 import 的 src 符号**"
+        "（文件加载失败 ⇒ bun 不写 XML），那是**真 0**。",
+    ]
+    v = (zd or {}).get("verdicts") or {}
+    n_ms = v.get("true_zero_missing_symbol", 0)
+    n_gi = v.get("grader_incomplete", 0)
+    if zd is None:
+        lines.append("> → 本批未做真 0/假 0 归因 ⇒ **无法判定**这些条属于哪一类，见 §10。")
+    else:
+        lines.append(
+            f"> → 本批 §10 已逐条核实：`true_zero_missing_symbol` {n_ms} 条"
+            f"（**真 0**，模型没写出 gold patch 创建的符号）、"
+            f"`grader_incomplete` {n_gi} 条（**判分侧没看全**，⛔ 不可读作答错）。"
+            + ("" if n_gi else " ⇒ 本批没有一条是判分缺陷。"))
+    return lines
+
+
 def _fp_section(fp: dict | None) -> list[str]:
     """§6 F2P / P2P 分量表。"""
     if not fp:
@@ -951,8 +991,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         "",
         f"reward.json 的 error_code 分布：{dict(ec) or '全为 0（正常跑完）'}",
         "",
-        "> `error_code != 0` 的条数就是判分侧自己报错的条数（XML 缺失/解析失败等），"
-        "与「模型答错」是两回事。",
+        *_error_code_note(ec, zd),
         "",
         *_fp_section(fp),
         "## 7. 数据集是怎么来的（漏斗）",
