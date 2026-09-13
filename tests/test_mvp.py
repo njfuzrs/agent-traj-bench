@@ -3338,7 +3338,9 @@ def test_control_group_defers_verdict_until_fully_run(monkeypatch, tmp_path):
     def rows(*verdicts):
         return [{"task": t, "verdict": v, "n_write_tool_calls": 1,
                  "termination": {"subtype": "success"}}
-                for t, v in zip(["T0011", "T0012", "T0018", "T0028"], verdicts)]
+                # strict=False 是**刻意**的：传 1 个 verdict 就造 1/4 条的场景
+                for t, v in zip(["T0011", "T0012", "T0018", "T0028"], verdicts,
+                                strict=False)]
 
     # ① 只跑 1/4 条 ⇒ 判读暂缓，supports 必须为 False
     c = zd.control_group(rows("true_zero_wrong_fix"))
