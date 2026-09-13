@@ -105,6 +105,14 @@ class Trial:
     subtype: str | None = None
     #: agent 自报的错误列表（`sid_errors`），用于分辨「上游断连」这类假 0 分。
     errors: tuple[str, ...] = ()
+    #: `verifier/score-detail.json` 里 P2P 侧的 error 码
+    #:（`xml_missing` / `xml_parse_error` / `empty_file_list`），None 表示正常判分。
+    #:
+    #: 🔴 用来分辨 `p2p = 0.0` 的**两种完全不同的成因**：
+    #:   - error 为 None ⇒ 测试真跑了、真红了 ⇒ **改出了回归**（最严重的信号）
+    #:   - error 非 None ⇒ **判分侧没产出 XML**，那是仪器问题，⛔ 不是回归
+    #: 只看 `p2p < 1.0` 会把后者报成前者（同 §10 `grader_incomplete` 那条纪律）。
+    p2p_error: str | None = None
 
     @property
     def upstream_failure(self) -> bool:
@@ -240,6 +248,26 @@ class Cell:
         return f"{self.solved}/{self.scored} = {p:.1%}　[{lo:.1%}, {hi:.1%}]"
 
 
+def _p2p_error(trial_dir: Path | None) -> str | None:
+    """`score-detail.json` 里 P2P 侧的 error 码；读不到就返回 None。
+
+    ⚠️ 读不到与「正常判分」都返回 None ⇒ 调用方会当成「真回归」。
+    这是**刻意**的保守取向：把真回归漏报成判分故障会掩盖最严重的信号，
+    反之只是多报一条待人工核。
+    """
+    if trial_dir is None:
+        return None
+    p = trial_dir / "verifier/score-detail.json"
+    if not p.exists():
+        return None
+    try:
+        sd = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    err = (sd.get("p2p") or {}).get("error")
+    return str(err) if err else None
+
+
 def read_trial(trial_dir: Path) -> Trial | None:
     """读一个 trial 目录。不是 trial 目录（如 job 根）返回 None。
 
@@ -309,6 +337,7 @@ def read_trial(trial_dir: Path) -> Trial | None:
         # ⚠️ 终止形态只在 metadata 里，⛔ 不在 exception —— 撞轮数上限时 exception 是 None
         subtype=meta.get("sid_subtype"),
         errors=tuple(str(e) for e in (meta.get("sid_errors") or [])),
+        p2p_error=_p2p_error(trial_dir),
     )
 
 

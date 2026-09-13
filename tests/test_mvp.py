@@ -3553,3 +3553,68 @@ def test_zero_diag_section_threshold_claim_matches_actual_pass_at_1(tmp_path):
         assert "预案表写死" in sec and "%" in sec or True, sec[:200]
     finally:
         rep.RUNS = orig
+
+
+def _mk_p2p_trial(run: Path, task: str, p2p, p2p_error=None):
+    """造一条带 score-detail 的 trial（用于 P2P 成因区分）。"""
+    d = run / f"{task}__x"
+    (d / "verifier").mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({
+        "task_name": task,
+        "verifier_result": {"rewards": {"reward": 0.0, "f2p": 0.0, "p2p": p2p,
+                                        "error_code": 0}},
+        "agent_result": {"cost_usd": 0.1, "metadata": {}},
+    }), encoding="utf-8")
+    detail = {"f2p": {"n_required": 2, "n_seen": 2},
+              "p2p": ({"error": p2p_error, "missing": ["a.test.ts"]} if p2p_error
+                      else {"n_required": 30, "n_seen": 26,
+                            "missing": ["a.test.ts"], "failed": ["a.test.ts"]})}
+    (d / "verifier/score-detail.json").write_text(json.dumps(detail), encoding="utf-8")
+    return d
+
+
+def test_fp_split_separates_real_regression_from_grader_failure(tmp_path):
+    """🔴 `p2p = 0` 的两种成因必须分开，⛔ 不许都算成「改出回归」。
+
+    `score.py` 对以下两类都返回 0.0：
+      ① 测试真跑了、真红了 ⇒ **改出了回归**（本报告标记的最严重信号）
+      ② `xml_missing` / `xml_parse_error` / `empty_file_list`
+         ⇒ **判分侧没产出可读 XML**，是仪器问题
+
+    只看 `p2p < 1.0` 会把②报成①，等于拿判分故障去指控模型改坏了代码 ——
+    同 §10 `grader_incomplete` 那条纪律在分量表这侧漏了一次
+    （2026-09-14 追 T0036 时发现）。
+
+    ⚠️ T0036 本身经逐条核实**确是真回归**（`truncateNotificationBody` 在
+    base 快照 0 次、gold patch 0 次、模型工具调用 102 次 —— 模型自造符号并导出，
+    导致 4 个 import 它的 p2p 文件加载失败），所以这条修复不该改变它的判定。
+    """
+    rep = _load("t7-report")
+
+    run = tmp_path / "2026-09-14__00-00-00"
+    _mk_p2p_trial(run, "T0036", 0.0)                        # ① 真回归
+    _mk_p2p_trial(run, "T0077", 0.0, "xml_missing")         # ② 判分侧故障
+    _mk_p2p_trial(run, "T0078", 0.0, "xml_parse_error")     # ② 判分侧故障
+    _mk_p2p_trial(run, "T0099", 1.0)                        # 正常满分
+
+    fp = rep.fp_split(t7lib.collect(run))
+    assert fp["regressed_tasks"] == ["T0036"], \
+        f"判分故障被算成回归了：{fp['regressed_tasks']}"
+    gp = fp.get("grader_p2p_failures") or []
+    assert len(gp) == 2 and any("xml_missing" in x for x in gp), \
+        f"判分故障没单列或没带 error 码：{gp}"
+    assert fp["p2p"]["n_full"] == 1 and fp["p2p"]["n"] == 4, fp["p2p"]
+
+    # §6 渲染：两类必须分别呈现，且判分故障那句要明说「不是回归」
+    sec = "\n".join(rep._fp_section(fp))
+    assert "T0036" in sec and "改出了回归" in sec, sec
+    assert "⛔ 不是回归" in sec and "xml_missing" in sec, f"判分故障没单独说明：\n{sec}"
+
+    # 全部 p2p 满分时 ⇒ ⛔ 不许写死「结合 F2P 全红 ⇒ 模型压根没改文件」
+    run2 = tmp_path / "2026-09-15__00-00-00"
+    _mk_p2p_trial(run2, "T0001", 1.0)
+    fp2 = rep.fp_split(t7lib.collect(run2))
+    fp2["f2p"]["n_full"] = 9          # 本批 F2P 有满分条目
+    sec2 = "\n".join(rep._fp_section(fp2))
+    assert "模型压根没改文件" not in sec2, f"F2P 有满分却说模型没动手：\n{sec2}"
+    assert "不可**读作" in sec2 or "不可读作" in sec2, sec2

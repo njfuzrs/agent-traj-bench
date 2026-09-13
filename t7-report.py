@@ -256,9 +256,24 @@ def fp_split(trials: list[lib.Trial]) -> dict:
     scored = [t for t in trials if not t.infra_failure]
     f2p_vals = [t.f2p for t in scored if isinstance(t.f2p, (int, float))]
     p2p_vals = [t.p2p for t in scored if isinstance(t.p2p, (int, float))]
-    # P2P < 1.0 就是有回归（P2P 的定义是「base 时点本来全绿的测试」）
-    regressed = sorted(t.task for t in scored
-                       if isinstance(t.p2p, (int, float)) and t.p2p < 1.0)
+
+    # 🔴 P2P < 1.0 有**两种完全不同的成因**，⛔ 不许都算成「改出回归」：
+    #
+    #   ① score-detail 的 p2p.error 为空 ⇒ 测试真跑了、真红了 ⇒ **改出了回归**
+    #   ② p2p.error 是 `xml_missing` / `xml_parse_error` / `empty_file_list`
+    #      ⇒ **判分侧没产出可读 XML**，那是仪器问题
+    #
+    # `score.py` 两种都返回 0.0。只看 `p2p < 1.0` 会把②报成①，
+    # 而①是本报告标记的**最严重**信号（把本来绿的测试改红）——
+    # 拿判分故障去指控模型改出回归，是同 §10 `grader_incomplete` 那条纪律
+    # 在分量表这侧漏掉了一次（2026-09-14 追 T0036 时发现）。
+    #
+    # ⚠️ T0036 经逐条核实**确是真回归**：`truncateNotificationBody` 在 base 快照 0 次、
+    # gold patch 0 次、模型工具调用 102 次 —— 模型自造符号并导出，
+    # 导致 4 个 import 它的 p2p 文件加载失败。所以本条修复不改变它的判定。
+    low_p2p = [t for t in scored if isinstance(t.p2p, (int, float)) and t.p2p < 1.0]
+    regressed = sorted(t.task for t in low_p2p if not t.p2p_error)
+    grader_p2p = sorted(f"{t.task}({t.p2p_error})" for t in low_p2p if t.p2p_error)
     return {
         "n_scored": len(scored),
         "f2p": {"n": len(f2p_vals), "n_full": sum(1 for v in f2p_vals if v >= 1.0),
@@ -266,9 +281,13 @@ def fp_split(trials: list[lib.Trial]) -> dict:
         "p2p": {"n": len(p2p_vals), "n_full": sum(1 for v in p2p_vals if v >= 1.0),
                 "mean": round(statistics.mean(p2p_vals), 4) if p2p_vals else None},
         "regressed_tasks": regressed,
+        # 判分侧故障导致的 p2p=0 单列 —— ⛔ 不混进 regressed_tasks
+        "grader_p2p_failures": grader_p2p,
         "note": ("F2P 红 = 没修好目标缺陷；P2P 红 = **改出了回归**（更严重）。"
                  "⛔ 压进单个 reward 就丢了这个区分。"
-                 "None 不按 0 计入 —— 那会虚报「改出回归」。"),
+                 "None 不按 0 计入 —— 那会虚报「改出回归」。"
+                 "p2p=0 但 score-detail 有 error 码（xml_missing 等）的单列 "
+                 "grader_p2p_failures —— 那是判分侧没产出 XML，⛔ 不是回归。"),
     }
 
 
@@ -298,14 +317,35 @@ def _fp_section(fp: dict | None) -> list[str]:
     ]
     if reg:
         lines += [
-            f"🔴 **{len(reg)} 条 P2P 未满分 ⇒ 模型改出了回归**：{', '.join(reg)}。",
+            f"🔴 **{len(reg)} 条 P2P 未满分且判分正常 ⇒ 模型改出了回归**：{', '.join(reg)}。",
             "> 这比 F2P 红更值得看：说明改动破坏了原本通过的测试。",
         ]
     else:
         lines += [
-            "✅ **P2P 全数满分 ⇒ 没有任何一条改出回归。**",
-            "> 结合 F2P 全红，形态是「模型没能修好，但也没弄坏别的」——"
-            "与 §10 归因的「模型压根没改文件」一致（没改自然不会有回归）。",
+            "✅ **没有任何一条判分正常的 P2P 未满分 ⇒ 未观测到回归。**",
+        ]
+        # ⛔ 不许写死「结合 F2P 全红 ⇒ 模型压根没改文件」——
+        # 那是 baseline 批的形态。本批 F2P 有满分条目，那句话会与 §4 主表打架。
+        if f["n_full"] == 0:
+            lines += [
+                "> 结合 F2P 全红，形态是「模型没能修好，但也没弄坏别的」——"
+                "与 §10 归因的「模型压根没改文件」一致（没改自然不会有回归）。",
+            ]
+        else:
+            lines += [
+                f"> 注意 F2P 有 {f['n_full']}/{f['n']} 条满分 ⇒ ⛔ **不可**读作"
+                "「模型没动手」：它改了、改对了一部分，且没弄坏原本通过的测试。",
+            ]
+
+    # 判分侧故障导致的 p2p=0 单独说 —— ⛔ 混进「改出回归」是拿仪器问题指控模型
+    gp = fp.get("grader_p2p_failures") or []
+    if gp:
+        lines += [
+            "",
+            f"⚠️ 另有 **{len(gp)} 条 P2P = 0 源于判分侧故障，⛔ 不是回归**：{', '.join(gp)}。",
+            "> `score.py` 在 `xml_missing` / `xml_parse_error` / `empty_file_list` 时"
+            "同样返回 0.0（那是**没产出可读 XML**，不是「测试被改红」）。"
+            "把它算成回归等于拿仪器问题指控模型 —— 同 §10 `grader_incomplete` 的纪律。",
         ]
     return lines + [""]
 
