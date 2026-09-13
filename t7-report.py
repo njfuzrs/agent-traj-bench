@@ -43,10 +43,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common as c  # noqa: E402
 import t7_report_lib as lib  # noqa: E402
 
+#: 取数源目录。默认是第一轮（作废）的 `baseline/`；整改后那批用 `--runs t8-rerun`。
+#:
+#: 🔴 **为什么做成开关而不是直接改常量**：`baseline/` 那批 0/39 的数据要留着，
+#: 否则「整改前 vs 整改后」的对照就没有可执行的基线侧（同 t8-rerun 不改 t7-baseline 的理由）。
+#: ⚠️ 报告文件名跟着取数源走 —— 两批写同一个 .md 会**静默覆盖**，
+#: 而覆盖后文件里每张表都有数、看不出少了一批。
 RUNS = c.MVP_REPORTS / "baseline"
 REPORT = c.MVP_REPORTS / "baseline-v0.2-mini.md"
 SUMMARY = RUNS / "summary.json"
 RECHECK = c.MVP_REPORTS / "t6-recheck"
+
+
+def _retarget(runs_name: str) -> None:
+    """把取数源与产物路径整组切到另一批。
+
+    ⛔ 三个全局必须一起改：只改 RUNS 会让报告读新批的 trial、
+    却把 summary 写进旧批的目录，两侧都不报错。
+    """
+    global RUNS, REPORT, SUMMARY
+    RUNS = c.MVP_REPORTS / runs_name
+    SUMMARY = RUNS / "summary.json"
+    REPORT = c.MVP_REPORTS / (
+        "baseline-v0.2-mini.md" if runs_name == "baseline"
+        else f"baseline-v0.2-mini-{runs_name}.md"
+    )
 
 
 def _rel(p: Path) -> str:
@@ -289,6 +310,137 @@ def _fp_section(fp: dict | None) -> list[str]:
     return lines + [""]
 
 
+def _n_no_attempt(zd: dict) -> int:
+    """`true_zero_no_attempt` 的条数。**键缺失 ⇒ 0，⛔ 不是「未判定」**。
+
+    🔴 2026-09-14 抓到（我自己引入的）：`verdicts` 是 `dict(Counter(...))` ——
+    **计数为 0 的判定键根本不存在**。用 `.get(key)` 拿到 `None` 后当成
+    「缺 zero-diag.json」，报告就会写「无法断言 A2 低分是能力还是题面」，
+    而真相恰恰相反：该项为 0 正是「0 分的题全都改过文件」⇒ **A2 低分是真能力信号**
+    这条结论的关键证据。两个读法的结论完全相反。
+
+    `t7-zero-diag.py` 的 `_guard_text` 用的就是 `.get(..., 0)`，两侧必须同口径。
+    """
+    return (zd.get("verdicts") or {}).get("true_zero_no_attempt", 0)
+
+
+def _a2_dont_say(zd: dict | None) -> str:
+    """§12「这批数字不能用来说什么」里关于 A2 的那条 —— 与 §2② 同源。
+
+    🔴 修复① 内联文档后这条**方向反转**：原本「不能当能力证据」，
+    现在归因实测 `true_zero_no_attempt = 0` ⇒ 它就是能力读数，
+    反而「不能再用题面缺信息解释掉」。写死会让 §12 与 §2② 自相矛盾。
+    """
+    n_inl = 0
+    stage = RUNS / "tasks"
+    if stage.exists():
+        for d in sorted(stage.iterdir()):
+            ins = d / "instruction.md"
+            if ins.is_file() and "## 引用文档原文" in ins.read_text(
+                    encoding="utf-8", errors="replace"):
+                n_inl += 1
+    if not n_inl:
+        return "**不能**把 A2 档的低分当模型能力证据"
+    if zd is None:                       # ⚠️ 判据是**文件不存在**，⛔ 不是某个键缺失
+        return "**不能**断言 A2 档低分的性质（缺 `zero-diag.json`，判据是 true_zero_no_attempt）"
+    na = _n_no_attempt(zd)
+    if na == 0:
+        return ("**不能**再用「题面缺 `docs/`」解释 A2 档的低分 —— "
+                "本批已内联文档且 0 分的题全都改过文件")
+    return f"**不能**把 A2 档的低分全当能力证据（{na} 条是零仓库写 = 拒绝瞎改）"
+
+
+def _docs_gap_caveat(zd: dict | None) -> str:
+    """summary.json 里「题面缺 docs/」那条 caveat —— 与 §2② 同一判据，⛔ 不写死。
+
+    两处必须同源：markdown 说「已消除」而 summary.json 说「首先是题面缺信息」，
+    引用 summary.json 的下游就会拿到与报告相反的结论，且没人会发现。
+    """
+    n_inl = n_tasks = 0
+    stage = RUNS / "tasks"
+    if stage.exists():
+        for d in sorted(stage.iterdir()):
+            ins = d / "instruction.md"
+            if not ins.is_file():
+                continue
+            n_tasks += 1
+            if "## 引用文档原文" in ins.read_text(encoding="utf-8", errors="replace"):
+                n_inl += 1
+    if not n_inl:
+        return "35/39 题面点名容器内不存在的 docs/ —— A2 档低分首先是题面缺信息"
+    if zd is None:                       # ⚠️ 只有**文件不存在**才算未判定
+        tail = "；缺 zero-diag.json ⇒ A2 低分性质未判定"
+    else:
+        na = _n_no_attempt(zd)
+        tail = ("；true_zero_no_attempt=0 ⇒ A2 低分是真能力信号" if na == 0
+                else f"；true_zero_no_attempt={na} ⇒ A2 低分仍混有题面因素")
+    return (f"修复①已内联文档：{n_inl}/{n_tasks} 条题面含被点名文档原文，"
+            f"「题面缺 docs/」不再是低分解释{tail}")
+
+
+def _docs_gap_para(zd: dict | None) -> list[str]:
+    """§2② 「题面缺 docs/」这条 caveat —— ⛔ **不许写死**，按本批实际形态生成。
+
+    🔴 2026-09-14 抓到：这段原文写死「35/39 条题面点名 `docs/`，而容器里没有 `docs/`
+    ⇒ A2 档的低分不能读成模型能力差」。但**修复① 已把文档原文内联进题面**
+    （本批 33/39 条题面带「## 引用文档原文」段），那条 docs 不再缺失；
+    且归因实测 `true_zero_no_attempt = 0`（0 分的题全都改过文件），
+    ⇒ A2 的低分是**真能力信号**，不是题面缺信息。
+
+    写死的形态是「数据变了、结论没变」，与 `t7-zero-diag.py` 的 `conclusion_guard`
+    要拦的东西完全同类：报告看着完整，只有结论在撒谎。
+    ⛔ 尤其不能在内联生效的批次里还说「不可读作模型能力」——
+    那会把一个真实的能力读数解释掉。
+    """
+    # 本批题面是否内联了文档原文（stage 出来的题面现读，⛔ 不写死）
+    n_inl = n_tasks = 0
+    stage = RUNS / "tasks"
+    if stage.exists():
+        for d in sorted(stage.iterdir()):
+            ins = d / "instruction.md"
+            if not ins.is_file():
+                continue
+            n_tasks += 1
+            if "## 引用文档原文" in ins.read_text(encoding="utf-8", errors="replace"):
+                n_inl += 1
+
+    if not n_inl:
+        # 未内联（原 baseline 批）：T6 的核心发现仍然成立
+        return [
+            "**② 35/39 条题面点名 `docs/` 下的文档，而容器里没有 `docs/`。**",
+            "这是 T6 的核心发现，压着 A2 那 20 条的天花板 —— "
+            "**A2 档的低分不能读成「模型能力差」**，",
+            "它首先是「题面缺信息」。这也是为什么下面必须**分级分组**看，而不是只看总分。",
+        ]
+
+    # ⚠️ `zd is None` 才是「没做归因」；⛔ 键缺失 ≠ 没做 —— 见 _n_no_attempt
+    n_noattempt = None if zd is None else _n_no_attempt(zd)
+    lines = [
+        f"**② 题面缺 `docs/` 这条已被修复① 消除：本批 {n_inl}/{n_tasks} 条题面"
+        "内联了被点名文档的原文。**",
+        "原 baseline 批的核心 caveat 是「35/39 条题面点名 `docs/`，而容器里没有 `docs/`」，"
+        "它压着 A2 档的天花板。本批已把那些文档原文附在题面里 ⇒ **这条不再是低分的解释**。",
+    ]
+    if n_noattempt is not None:
+        lines += [
+            f"归因侧的判据也指向同一结论：`true_zero_no_attempt = {n_noattempt}` —— "
+            + ("0 分的题**全都改过文件**（读懂了题、动手改了、改错了），"
+               if n_noattempt == 0 else
+               f"其中 {n_noattempt} 条是「判断信息不足、拒绝瞎改」，仍需按题面缺信息读，"),
+            "⇒ " + ("A2 档的低分在本批是**真能力信号**，⛔ 不可再用「题面缺信息」解释掉。"
+                    if n_noattempt == 0 else
+                    "A2 档的低分仍混有题面因素，分级分组看。"),
+        ]
+    else:
+        lines += [
+            "⚠️ 但本批缺 `zero-diag.json` ⇒ **无法断言** A2 的低分是能力还是题面："
+            "判据是 `true_zero_no_attempt`（零仓库写 = 判断信息不足而拒绝瞎改）。",
+            "→ 跑 `scripts/mvp/t7-zero-diag.py`（$0）后重新生成本报告。",
+        ]
+    lines.append("无论哪种读法，下面都必须**分级分组**看，而不是只看总分。")
+    return lines
+
+
 def _zero_diag_section(zd: dict | None) -> list[str]:
     """§10 真 0 / 假 0 归因。**pass@1 低时这一节是预案要求的必答项。**
 
@@ -314,10 +466,19 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     ]
     if zd.get("stale"):
         st = zd["stale"]
+        who = st.get("unseen_tasks") or []
+        # 🔴 必须点名「哪几条没归因」，⛔ 不能只说条数差 ——
+        # 补跑重跑同一条题时条数一个不变（39 vs 39），只有 trial 目录换了。
+        # 光说条数的文案在那个形态下读起来像「没差」，而本节的判定其实是旧的。
         lines += [
             f"> ⚠️ **本节数据比主表旧**：归因跑的是 {st['n_diagnosed']} 条，"
-            f"而 run 里已有 {st['n_with_trial']} 条 —— 跑批仍在前进。"
-            "本节的绝对条数因此**小于**主表，不是矛盾。"
+            f"主表 {st['n_with_trial']} 条。"
+            + (f"其中 **{len(who)} 条未被本节归因**："
+               f"{'、'.join(f'`{t}`' for t in who[:12])}"
+               f"{' …' if len(who) > 12 else ''}"
+               "（新跑出的、或补跑换了 trial 目录的）。"
+               if who else "")
+            + "⛔ 本节判定**不可**与主表并读。"
             "重跑 `scripts/mvp/t7-zero-diag.py`（$0）即可对齐。",
             "",
         ]
@@ -417,26 +578,44 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     return lines
 
 
-def load_zero_diag(n_with_trial: int) -> dict | None:
+def load_zero_diag(trials: list) -> dict | None:
     """真 0 / 假 0 归因（`t7-zero-diag.py` 的产物）。没有就返回 None。
 
     🔴 方案预案表写死：pass@1 < 10% ⇒ **优先怀疑 grader，先分辨真 0 假 0**。
     所以 pass@1 低时报告**必须**带上这一节，否则等于跳过了预案要求的那一步。
 
-    ⚠️ **新鲜度校验**：`zero-diag.json` 是另一个脚本在**另一个时刻**跑出的快照。
-    跑批还在前进时，它会比 run 产物旧 —— 实测撞到过 §9 写「已判 5 条」而
-    主表已经是 6 条。⛔ 报告不许引用比自己旧的取数源：两个数字并排放在同一份
-    报告里而口径不同，读者无从判断哪个是真的。
-    过期就带上 `stale` 标记，由报告显式说明，⛔ 不静默使用。
+    ⚠️ **新鲜度校验按 trial 身份，⛔ 不按条数**。
+    `zero-diag.json` 是另一个脚本在**另一个时刻**跑出的快照，
+    跑批还在前进时它会比 run 产物旧 —— 实测撞到过 §9 写「已判 5 条」而主表已是 6 条。
+
+    🔴 为什么不能数条数：补跑（`t8-rerun.py --resume`）**重跑同一条题**，
+    条数一个不变（39 vs 39），但那条的 trial 目录换成了新随机后缀、判定也换了。
+    2026-09-14 的 T0022 就是这个形态：旧快照判 `infra_upstream_disconnect`，
+    补跑后是真实读数 —— 条数判据完全不响，报告带着**旧归因**发布，
+    §10 说「1 条上游断连」而主表已把它算进有效分母。两个数字并排且口径不同，
+    正是这道守卫要拦的东西。
+
+    所以拿 `trial_dir` 目录名（含随机后缀，重跑必变）做集合比对：
+    只要主表里有任何一条不在快照里，就是过期。
     """
     p = RUNS / "zero-diag.json"
     if not p.exists():
         return None
     zd = json.loads(p.read_text(encoding="utf-8"))
-    n_diag = zd.get("n_diagnosed", 0)
-    if n_diag < n_with_trial:
-        zd["stale"] = {"n_diagnosed": n_diag, "n_with_trial": n_with_trial,
-                       "note": "zero-diag.json 比 run 产物旧，需重跑 t7-zero-diag.py"}
+
+    # 主表这一轮实际用的 trial 目录名
+    now = {t.trial_dir.name for t in trials if getattr(t, "trial_dir", None)}
+    # 快照归因过的 trial 目录名
+    diagnosed = {r.get("trial_dir") for r in (zd.get("trials") or []) if r.get("trial_dir")}
+    unseen = sorted(now - diagnosed)
+    if unseen:
+        zd["stale"] = {
+            "n_diagnosed": zd.get("n_diagnosed", 0),
+            "n_with_trial": len(now),
+            "unseen_trials": unseen,
+            "unseen_tasks": sorted({d.split("__")[0] for d in unseen}),
+            "note": "zero-diag.json 未覆盖主表的全部 trial（含补跑换目录的那些），需重跑 t7-zero-diag.py",
+        }
     return zd
 
 
@@ -532,12 +711,27 @@ def table(cells: dict[str, lib.Cell], order: list[str]) -> list[str]:
     return out
 
 
+def _n_concurrent(run_dir: Path) -> int:
+    """从 run 产物读实际并发数（`config.json` 的 `n_concurrent_trials`）。
+
+    ⛔ 不写死：第一轮是 `-n 1`、整改后那批是 `-n 6`，硬编码等于**谎报必控变量**。
+    读不到时回落 1 并在报告里照实写 —— ⛔ 不编一个 6 出来。
+    """
+    p = run_dir / "config.json"
+    if not p.exists():
+        return 1
+    try:
+        return int(json.loads(p.read_text(encoding="utf-8")).get("n_concurrent_trials") or 1)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return 1
+
+
 def build_report(res: dict, trials: list[lib.Trial],
                  gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                  missing: list[str], n_surv: int,
                  funnel: list, gate_rows: list, attrib: dict, health: list,
                  fingerprint: str, zd: dict | None = None,
-                 fp: dict | None = None) -> str:
+                 fp: dict | None = None, n_conc: int = 1) -> str:
     """排报告。**只吃已经算好的格子**，自己不做任何统计。
 
     刻意不收 `grade` / `band` 原始分组：它们已经被 `lib.group()` 变成 cells 了，
@@ -551,7 +745,10 @@ def build_report(res: dict, trials: list[lib.Trial],
         "# Agent-Traj-Bench v0.2-mini — 基线评测报告",
         "",
         f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，由 `scripts/mvp/t7-report.py` 从 run 产物**纯复算**。",
-        f"> 取数源唯一：`bench/v0.2-mini/reports/baseline/`（{res['n'] + res['excluded']} 条 task × k={k}）。",
+        # ⛔ 取数源路径必须从 RUNS 现取，不能写死 `reports/baseline/` ——
+        # `--runs t8-rerun` 时报告会自称数据来自第一轮那批（已作废），
+        # 而报告里每个数字其实都是新批的。冒烟实测撞到（2026-09-13）。
+        f"> 取数源唯一：`{_rel(RUNS)}/`（{res['n'] + res['excluded']} 条 task × k={k}）。",
         "",
     ]
     if missing:
@@ -572,7 +769,11 @@ def build_report(res: dict, trials: list[lib.Trial],
         f"| **95% Wilson** | [{lo:.1%}, {hi:.1%}]，半宽 ±{res['halfwidth_pp']:.1f}pp |",
         f"| **分母** | `scored={res['n']}`，排除 {res['excluded']} 条 |",
         f"| 模型 | {', '.join(ctl['model_observed']) or '（产物里没有模型名）'} |",
-        f"| k | {k}（`-n 1`，并发是最大单一失真源） |",
+        # ⛔ 并发数从 run 产物的 config.json 现读，不写死「-n 1」——
+        # 整改后这批跑的是 `-n 6`（E1 实测判分零损伤），报告自称 `-n 1` 等于
+        # 谎报必控变量，而读者无从发现。冒烟实测撞到（2026-09-13）。
+        f"| k | {k}（`-n {n_conc}`"
+        f"{'，并发是最大单一失真源' if n_conc == 1 else '，E1 实测 39/39 oracle 判分零损伤'}） |",
         f"| **实付** | **${cost['total']}**（{cost['n_with_cost']}/{cost['n_trials']} 个 trial 有成本值） |",
         "",
         f"排除的 task：{res['excluded_tasks'] or '无'}",
@@ -585,9 +786,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         " 含提示词模板残留，而 T5 三道门禁全绿 —— 人工环节价值的实例）。",
         "方案原写「≥40 条」是目标值，实际交付 **39 条**（降量交付，见 `t6-review.md` §6.2）。",
         "",
-        "**② 35/39 条题面点名 `docs/` 下的文档，而容器里没有 `docs/`。**",
-        "这是 T6 的核心发现，压着 A2 那 20 条的天花板 —— **A2 档的低分不能读成「模型能力差」**，",
-        "它首先是「题面缺信息」。这也是为什么下面必须**分级分组**看，而不是只看总分。",
+        *_docs_gap_para(zd),
         "",
         "**③ 执行环境是 allowlist，不是题面写的 `--network none`。**",
         "39 条题面都写着「容器离线运行（`--network none`）」，但 `task.toml` 原先一条都没设"
@@ -691,7 +890,8 @@ def build_report(res: dict, trials: list[lib.Trial],
         "",
         f"- **不能**说「模型在真实软件任务上的通过率是 {p:.0%}」——"
         " 39 条全部来自单一仓库（`person/sid-code`）、两类任务（bug_fix / test_authoring）。",
-        "- **不能**把 A2 档的低分当模型能力证据（见 §2②）。",
+        # 🔴 与 §2② 同源 —— 修复① 内联文档后这条反过来了：⛔ 不许写死
+        f"- {_a2_dont_say(zd)}（见 §2②）。",
         "- **不能**报三档难度单调性（S 档为 0，见 §2④）。",
         f"- **不能**跨批比 pass@1：半宽 ±{res['halfwidth_pp']:.1f}pp，"
         "n=39 下小于这个量级的差异都在噪声里。",
@@ -716,12 +916,22 @@ def main() -> int:
     ap.add_argument("--partial", action="store_true",
                     help="允许用跑批**中途**的产物出报告（会在报告首屏标红「未跑齐」）。"
                          "⛔ 不加这个开关时，跑批没跑齐就直接拒绝出报告")
+    ap.add_argument("--runs", default="baseline", metavar="DIR",
+                    help="取数源目录名（reports/ 下）。默认 baseline（第一轮，已作废）；"
+                         "整改后那批传 t8-rerun。产物文件名跟着一起切，"
+                         "⛔ 两批不共用同一个 .md（会静默覆盖）")
     args = ap.parse_args()
+
+    if args.runs != "baseline":
+        _retarget(args.runs)
 
     run = lib.latest_run(RUNS)
     if run is None:
-        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/mvp/t7-baseline.py")
-    trials = lib.collect(run)
+        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/mvp/t8-rerun.py（或 t7-baseline.py）")
+    # 🔴 跨所有 run 目录收 —— `t8-rerun.py --resume` 会新建一个 run 目录，
+    # 只读最后那个会**静默漏掉**第一轮跑出的 trial（分母悄悄变小，每张表照样有数）。
+    # 单 run 目录时 collect_all 等价于 collect。
+    trials = lib.collect_all(RUNS)
     if not trials:
         raise SystemExit(f"{run} 里没有可读的 trial —— 看 run.log")
 
@@ -755,6 +965,11 @@ def main() -> int:
     if missing:
         print(f"⚠️ --partial：{len(missing)}/{len(surv)} 条未跑，报告首屏已标红，⛔ 不可作为终版结论")
 
+    funnel = load_funnel()
+    gate_rows, attrib = load_gate_rows()
+    # ⚠️ 传 trials 本身（不是条数）—— 过期判据按 trial 身份比对，见 load_zero_diag
+    zd = load_zero_diag(trials)
+
     SUMMARY.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY.write_text(json.dumps({
         "generated_at": datetime.now(UTC).isoformat(),
@@ -782,19 +997,21 @@ def main() -> int:
                          "report_pct": v.report_pct} for kk, v in bcells.items()},
         "caveats": [
             "分母 39（T6 淘汰 T0005），⛔ 不是 gate.jsonl 的 40",
-            "35/39 题面点名容器内不存在的 docs/ —— A2 档低分首先是题面缺信息",
+            # 🔴 这条**按本批实测生成**，⛔ 不写死 —— 修复① 内联文档后
+            # 「题面缺 docs/」不再成立，写死会让机器可读取数源与报告 §2② 打架。
+            _docs_gap_caveat(zd),
             "执行环境 allowlist（只放网关 IP），非题面写的 --network none",
             "S 档为 0 ⇒ 不构成三档单调性证据",
         ],
     }, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    funnel = load_funnel()
-    gate_rows, attrib = load_gate_rows()
-    zd = load_zero_diag(len(res["per_task_rate"]))
     if zd and zd.get("stale"):
         st = zd["stale"]
-        print(f"⚠️ zero-diag.json 已过期（判了 {st['n_diagnosed']} 条，run 里已有 "
-              f"{st['n_with_trial']} 条）—— 报告 §10 会标注；重跑 scripts/mvp/t7-zero-diag.py（$0）")
+        who = st.get("unseen_tasks") or []
+        print(f"⚠️ zero-diag.json 已过期（判了 {st['n_diagnosed']} 条，主表 "
+              f"{st['n_with_trial']} 条；未覆盖 {len(who)} 条："
+              f"{', '.join(who[:8])}{' …' if len(who) > 8 else ''}）"
+              " —— 报告 §10 会标注；重跑 scripts/mvp/t7-zero-diag.py（$0）")
     health = health_checks(res, bcells, zd)
     fingerprint = json.loads(
         (STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))["fingerprint"][:12]
@@ -806,7 +1023,8 @@ def main() -> int:
               "建议先跑 scripts/mvp/t7-zero-diag.py（$0）")
 
     REPORT.write_text(build_report(res, trials, gcells, bcells, cost, ctl, k, missing, len(surv),
-                                   funnel, gate_rows, attrib, health, fingerprint, zd, fp),
+                                   funnel, gate_rows, attrib, health, fingerprint, zd, fp,
+                                   n_conc=_n_concurrent(run)),
                       encoding="utf-8")
     print(f"pass@1 = {res['p']:.1%}（{res['passed']:g}/{res['n']}），排除 {res['excluded']}，实付 ${cost['total']}")
     print(f"  报告 {_rel(REPORT)}")

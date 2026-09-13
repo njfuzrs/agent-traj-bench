@@ -2252,6 +2252,156 @@ def test_pass_at_1_partial_infra_uses_usable_trials_only():
     assert r["per_task_rate"]["A"] == 0.5
 
 
+# ㊺b agent 超时是评测结果，不是仪器故障（E3 实测）
+
+def test_agent_timeout_with_reward_is_not_infra():
+    """🔴 **拿到分就不是仪器故障** —— 哪怕 agent 是被墙钟掐死的。
+
+    E3 实测的真实读数（2026-09-13，`exp-fix/E-contract`）：
+
+        T0011  reward=1.0（f2p 全 pass、p2p 30/30）  exception=AgentTimeoutError
+        T0029  reward=1.0（同上）                     exception=AgentTimeoutError
+
+    旧判据 `bool(self.exception) or reward is None` 把这两条排除出分母，
+    于是 6 条里 3 条解出被报成 **33.3%（1/3）**，真值是 **50%（3/6）**。
+
+    形态之所以危险：**它只会往低报，且不报错**。verifier 明明写了满分，
+    报告却说「这条是仪器故障」—— 越是修好了题、agent 越愿意长跑，
+    被吞掉的解出就越多。
+    """
+    t = _trial("T0011", 1.0, exception="AgentTimeoutError")
+    assert t.budget_exhausted is True
+    assert t.infra_failure is False, "拿到 reward=1.0 却被判 infra —— pass@1 会被静默低报"
+    assert t.solved is True
+
+    # 超时且没解出：算**答错**（进分母），不是排除
+    zero = _trial("T0028", 0.0, exception="AgentTimeoutError")
+    assert zero.infra_failure is False and zero.solved is False
+
+    r = t7lib.pass_at_1([t, zero])
+    assert (r["n"], r["excluded"]) == (2, 0), f"分母应是 2、排除 0，得到 {r['n']}/{r['excluded']}"
+    assert round(r["p"], 4) == 0.5
+
+
+def test_upstream_disconnect_is_fake_zero_not_wrong_answer():
+    """🔴 上游 LLM 断连 ⇒ **假 0 分**，排除出分母，⛔ 不记为答错。
+
+    2026-09-14 全量重跑实测（T0022）：第 61 轮 / 73 分钟时上游断连
+    （`The socket connection was closed unexpectedly`），agent 以
+    `error_during_execution` 终止，而 **verifier 照常打了分 ⇒ reward=0.0**。
+
+    形态之所以危险：它与「模型改了但改错」**逐字节一样** ——
+    都是 reward=0、Exceptions=0、有仓库写操作。不识别就等于
+    **把一次网络抖动记成模型能力不足**（模块 docstring 里 TZ 那次 R-4 假 0 分的同一个坑）。
+    """
+    t = t7lib.Trial(
+        task="T0022", reward=0.0, f2p=0.0, p2p=1.0, error_code=0, exception=None,
+        subtype="error_during_execution",
+        errors=("LLM 错误: The socket connection was closed unexpectedly.",))
+    assert t.upstream_failure is True
+    assert t.infra_failure is True, "上游断连没被排除 ⇒ 网络抖动会被记成模型答错"
+    assert t.solved is False
+
+    r = t7lib.pass_at_1([t, _trial("A", 1.0)])
+    assert (r["n"], r["excluded"]) == (1, 1), f"分母应是 1、排除 1，得到 {r['n']}/{r['excluded']}"
+    assert r["excluded_tasks"] == ["T0022"]
+
+
+def test_upstream_judgment_needs_both_subtype_and_signature():
+    """⛔ 两个条件都要满足 —— 只看 subtype 会把 agent 自身的崩溃也擦掉。
+
+    agent 自己崩了（TypeError、断言失败）**是真失败**，
+    排除出分母等于替模型擦屁股，方向与「假 0 分」正好相反。
+    """
+    # subtype 对但错误不是网络类 ⇒ 真失败，进分母
+    own = t7lib.Trial(task="X", reward=0.0, f2p=0.0, p2p=1.0, error_code=0, exception=None,
+                      subtype="error_during_execution",
+                      errors=("TypeError: undefined is not a function",))
+    assert own.upstream_failure is False and own.infra_failure is False
+
+    # 网络签名对但 subtype 不是 error_during_execution ⇒ 不算（撞轮数上限就是这种）
+    cap = t7lib.Trial(task="Y", reward=0.0, f2p=0.0, p2p=1.0, error_code=0, exception=None,
+                      subtype="error_max_turns", errors=("达到最大轮次限制: 120",))
+    assert cap.upstream_failure is False and cap.infra_failure is False
+
+    # 解出的题即使 subtype 异常也不该被判上游故障（它拿到分了）
+    assert _trial("Z", 1.0).upstream_failure is False
+
+
+def test_subtype_read_from_metadata_not_exception(tmp_path):
+    """🔴 终止形态在 `agent_result.metadata.sid_subtype`，⛔ 不在 exception。
+
+    2026-09-14 我实测取错过一次：读 `exception`（为 None）就报告「撞上限 0 条」，
+    真实是 **13/18 撞了 120 轮上限**。这条钉住取数位置。
+    """
+    d = tmp_path / "T0007__abc"
+    d.mkdir()
+    (d / "result.json").write_text(json.dumps({
+        "task_name": "T0007",
+        "verifier_result": {"rewards": {"reward": 0.0, "f2p": 0.0, "p2p": 1.0}},
+        "agent_result": {"metadata": {"sid_subtype": "error_max_turns",
+                                      "sid_errors": ["达到最大轮次限制: 120"]}},
+    }), encoding="utf-8")
+    t = t7lib.read_trial(d)
+    assert t is not None
+    assert t.exception is None, "前提：撞轮数上限时 exception 就是 None"
+    assert t.subtype == "error_max_turns", "没从 metadata 读到终止形态"
+    assert t.errors and "120" in t.errors[0]
+    assert t.infra_failure is False, "撞轮数上限是评测结果，不是仪器故障"
+
+
+def test_zero_diag_and_report_agree_on_upstream_failure():
+    """🔴 归因侧与报告侧对「上游断连」必须**同一个判据** —— 口径打架比判错更难查。
+
+    最初的形态：报告侧 `Trial.upstream_failure` 已把 T0022 按 infra 排除，
+    而归因侧仍判 `true_zero_missing_symbol`（真 0）⇒
+    归因表说「模型没写出符号」、主表说「仪器故障」，**读者无从判断哪个是真的**。
+
+    修法是归因侧复用 `t7_report_lib` 的判据与签名表，⛔ 不各存一份。
+    """
+    zd = _load("t7-zero-diag")
+
+    upstream = {"sid_subtype": "error_during_execution",
+                "sid_errors": ["LLM 错误: The socket connection was closed unexpectedly."]}
+    assert zd._is_upstream_failure(upstream) is True
+
+    # 与报告侧对同一份 metadata 必须给出一致结论
+    t = t7lib.Trial(task="T0022", reward=0.0, f2p=0.0, p2p=1.0, error_code=0, exception=None,
+                    subtype=upstream["sid_subtype"],
+                    errors=tuple(upstream["sid_errors"]))
+    assert zd._is_upstream_failure(upstream) == t.upstream_failure == t.infra_failure is True
+
+    # agent 自身崩溃 / 撞轮数上限都不是上游故障（两侧同样一致）
+    for md in ({"sid_subtype": "error_during_execution",
+                "sid_errors": ["TypeError: undefined is not a function"]},
+               {"sid_subtype": "error_max_turns", "sid_errors": ["达到最大轮次限制: 120"]},
+               {"sid_subtype": "success", "sid_errors": []}):
+        assert zd._is_upstream_failure(md) is False, md
+
+
+def test_real_infra_exceptions_still_excluded():
+    """⛔ 反向闸：别把「不算 infra」推广成「什么异常都不算 infra」。
+
+    环境构建失败、`RewardFileNotFoundError` 这些是**真**仪器故障，
+    必须继续排除 —— 算进分母等于把机器坏了记成模型答错。
+    """
+    for exc in ("RewardFileNotFoundError", "EnvironmentBuildError", "RuntimeError"):
+        assert _trial("X", None, exception=exc).infra_failure is True, exc
+    # reward=None 本身就够判 infra，不依赖异常类型（verifier 没写分）
+    assert _trial("Y", None, exception=None).infra_failure is True
+    # 非预算类异常 + 有分：仍按 infra 排除（分不可信，机器出过错）
+    assert _trial("Z", 1.0, exception="RuntimeError").infra_failure is True
+
+
+def test_budget_exception_set_is_narrow():
+    """预算类异常集合必须**窄** —— 往里多加一个就等于把真故障算进分母。
+
+    这条钉住的是「以后有人图省事把 RuntimeError 也塞进去」。
+    """
+    assert t7lib.AGENT_BUDGET_EXCEPTIONS == frozenset({"AgentTimeoutError"})
+    assert _trial("A", 0.0, exception=None).budget_exhausted is False
+
+
 # ㊻ 小格不许报百分比（交接 2b）
 
 def test_small_cell_reports_counts_not_percentage():
@@ -2548,6 +2698,241 @@ def test_zero_diag_control_group_only_from_survivors():
     assert n_docs == 35, f"点名 docs/ 的应是 35 条（T6 §3 的实测），实际 {n_docs}"
 
 
+# 51b 两批取数源必须能整组切换（报告 / 归因两个脚本口径一致）
+
+def _load(name: str):
+    import importlib.util as _u
+    spec = _u.spec_from_file_location(f"_ld_{name.replace('-', '_')}", MVP / f"{name}.py")
+    mod = _u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_retarget_switches_all_paths_as_a_group():
+    """🔴 切批次必须**整组**切：只改取数源、产物仍写旧目录 = 两侧都不报错。
+
+    第一轮 `baseline/` 的 0/39 要留着做对照，所以整改后那批走 `--runs t8-rerun`。
+    形态风险：报告读新批 trial、summary 写进旧批目录，
+    于是 `baseline/summary.json` 被**另一批的数字**覆盖，而文件里每张表都有数。
+    """
+    rep = _load("t7-report")
+    assert rep.RUNS.name == "baseline" and rep.SUMMARY.parent.name == "baseline"
+    assert rep.REPORT.name == "baseline-v0.2-mini.md"
+
+    rep._retarget("t8-rerun")
+    assert rep.RUNS.name == "t8-rerun", "取数源没切"
+    assert rep.SUMMARY.parent.name == "t8-rerun", "summary 仍写旧批目录 —— 会覆盖第一轮的取数源"
+    assert rep.REPORT.name == "baseline-v0.2-mini-t8-rerun.md", \
+        "报告文件名没跟着切 —— 两批共用一个 .md 会静默覆盖"
+
+    zd = _load("t7-zero-diag")
+    assert zd.RUNS.name == "baseline" and zd.OUT.parent.name == "baseline"
+    zd._retarget("t8-rerun")
+    assert zd.OUT.parent.name == "t8-rerun", \
+        "归因产物仍写旧批 —— 报告会去 RUNS/zero-diag.json 读到另一批的归因"
+
+
+def _mk_trial(run: Path, task: str, reward: float | None) -> Path:
+    """在 run 目录下造一条 trial 产物（只写 read_trial 需要的字段）。"""
+    d = run / f"{task}__abc{reward}"
+    d.mkdir(parents=True, exist_ok=True)
+    # ⚠️ `task_name` 必须有 —— read_trial 靠它区分 trial 目录与 job 根，缺了返回 None
+    doc = {"task_name": task,
+           "verifier_result": {"rewards": ({"reward": reward, "f2p": reward, "p2p": 1.0}
+                                           if reward is not None else {})}}
+    (d / "result.json").write_text(json.dumps(doc), encoding="utf-8")
+    return d
+
+
+def test_inlined_docs_never_carry_control_bytes():
+    """🔴 内联文档正文里的控制字符必须转可见记法 —— 否则容器起不来。
+
+    2026-09-13 全量重跑实测（T0009，39 条里**唯一**的 Exception）：
+    那份文档本身在讲「分隔符用 `\\x00`/`\\x01` 而非空格」，正文带了真的 NUL。
+    题面经命令行传给 `docker exec` ⇒ `subprocess.Popen` 抛
+    `ValueError: embedded null byte` ⇒ 容器还没起就炸、reward=None ⇒ 剔出分母。
+
+    形态之所以难查：traceback 满屏 `_fork_exec` / `Popen.__init__`，
+    **一个字都不提题面** ⇒ 归因会指向 harbor 或 docker 坏了。
+
+    ⛔ 修法是转记法不是删除：文档正文在**讨论**这些字节的语义，删掉等于改题面。
+    """
+    t8 = _load("t8-rerun")
+
+    raw = "分隔符用 \x00/\x01 而非空格\t保留制表\n保留换行\r\n"
+    got = t8._visible_ctrl(raw)
+    assert "\x00" not in got and "\x01" not in got, "控制字符没被转掉"
+    assert "\\x00" in got and "\\x01" in got, "应转成可见记法而不是删掉（会改变文档语义）"
+    assert "\t" in got and "\n" in got and "\r" in got, "⛔ \\t \\n \\r 必须原样保留"
+
+    # 闸的字符集与转换表必须同源，否则闸放过的正是转换漏掉的
+    assert 0 in t8._CTRL_MAP and 1 in t8._CTRL_MAP
+    for keep in (9, 10, 13):
+        assert keep not in t8._CTRL_MAP, f"{keep} 是 \\t/\\n/\\r，不该在映射表里"
+
+
+def test_resume_reruns_fake_zeros_not_just_missing_scores(tmp_path):
+    """🔴 `--resume` 必须重跑**假 0 分**，⛔ 不能只看「有没有分」。
+
+    2026-09-14 实测（T0022）：上游断连的题写了 `reward=0.0`，
+    光看有没有分会把它算成已完成 ⇒ 补跑跳过 ⇒ **那条永久是废数据**、
+    最终分母永远少一条。
+
+    ⚠️ 「报告侧排除出分母」不等于「修好了」—— 排除只是不把它记成答错，
+    要拿到真实读数仍必须重跑。
+    """
+    t8 = _load("t8-rerun")
+    jobs = tmp_path / "t8-rerun"
+    run = jobs / "2026-09-13__19-35-38"
+    run.mkdir(parents=True)
+
+    def mk(task: str, reward, md: dict | None = None):
+        d = run / f"{task}__x"
+        d.mkdir()
+        doc = {"task_name": task,
+               "verifier_result": {"rewards": {} if reward is None else {"reward": reward}},
+               "agent_result": {"metadata": md or {}}}
+        (d / "result.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    mk("T0008", 1.0, {"sid_subtype": "success"})                 # 真完成
+    mk("T0007", 0.0, {"sid_subtype": "error_max_turns"})         # 真答错，算完成
+    mk("T0009", None)                                            # 没写分 ⇒ 重跑
+    mk("T0022", 0.0, {"sid_subtype": "error_during_execution",   # 假 0 分 ⇒ 重跑
+                      "sid_errors": ["LLM 错误: The socket connection was closed unexpectedly."]})
+
+    done = t8.done_tasks(jobs)
+    assert set(done) == {"T0008", "T0007"}, f"done 判错了：{sorted(done)}"
+    assert "T0022" not in done, "假 0 分被算成已完成 ⇒ 补跑会跳过它，那条永久是废数据"
+    assert "T0009" not in done, "没写分的被算成已完成"
+
+
+def test_collect_all_spans_every_run_dir(tmp_path):
+    """🔴 续跑会新建 run 目录 —— 只读最后那个会**静默漏掉**第一轮的 trial。
+
+    形态：报告每张表都有数，只有分母悄悄小了一圈。完整性守卫只报「没跑齐」，
+    不会说「其实跑了、但你没读」⇒ 归因方向完全错（去查跑批，实际错在读取）。
+    """
+    jobs = tmp_path / "t8-rerun"
+    r1 = jobs / "2026-09-13__19-35-38"      # 第一轮：跑出 2 条
+    _mk_trial(r1, "T0001", 1.0)
+    _mk_trial(r1, "T0002", 0.0)
+    r2 = jobs / "2026-09-13__23-00-00"      # 续跑：又跑出 1 条
+    _mk_trial(r2, "T0003", 1.0)
+
+    only_last = t7lib.collect(t7lib.latest_run(jobs))
+    assert {t.task for t in only_last} == {"T0003"}, "前提变了，这条测试的判据要重写"
+
+    every = t7lib.collect_all(jobs)
+    assert {t.task for t in every} == {"T0001", "T0002", "T0003"}, \
+        f"collect_all 漏了 run 目录：{sorted(t.task for t in every)}"
+    r = t7lib.pass_at_1(every)
+    assert (r["n"], round(r["p"], 4)) == (3, round(2 / 3, 4)), \
+        f"分母应是 3（不是 1），得到 {r['n']}"
+
+
+def test_collect_all_prefers_newest_and_keeps_k_semantics(tmp_path):
+    """同一 task 跨目录重复时取**最新**，⛔ 不能两行都留。
+
+    被杀时正在跑的那条会在续跑里重跑 ⇒ 同名 task 出现两次。
+    两行都留的话 `pass_at_1` 会把 k=1 的批当成 k=2 取平均 ——
+    静默改变分母口径（一条 0 分 + 一条 1 分 ⇒ 0.5，而真值是续跑那次的结果）。
+    """
+    jobs = tmp_path / "t8-rerun"
+    _mk_trial(jobs / "2026-09-13__19-00-00", "T0001", 0.0)   # 被中断那次
+    _mk_trial(jobs / "2026-09-13__23-00-00", "T0001", 1.0)   # 续跑跑出 1.0
+
+    rows = t7lib.collect_all(jobs)
+    assert len(rows) == 1, f"同一 task 留了 {len(rows)} 行 —— 会被当成 k>1 平均"
+    assert rows[0].reward == 1.0, "取的不是最新那次的结果"
+
+    r = t7lib.pass_at_1(rows)
+    assert round(r["p"], 4) == 1.0, f"p={r['p']} —— 0.5 说明两行都留了"
+
+
+def test_collect_all_equals_collect_for_single_run(tmp_path):
+    """单 run 目录时必须与 `collect()` 等价 —— 别为了续跑改变正常路径的口径。"""
+    jobs = tmp_path / "t8-rerun"
+    run = jobs / "2026-09-13__19-35-38"
+    _mk_trial(run, "T0001", 1.0)
+    _mk_trial(run, "T0002", 0.0)
+    assert sorted(t.task for t in t7lib.collect_all(jobs)) == \
+           sorted(t.task for t in t7lib.collect(run))
+    assert t7lib.collect_all(tmp_path / "nope") == [], "目录不存在时应返回空，不该抛"
+
+
+def test_report_never_hardcodes_provenance_or_concurrency():
+    """🔴 报告不许**写死**取数源路径与并发数 —— 那是「自述与实际不符」。
+
+    2026-09-13 用 E3 产物做 $0 冒烟时实测撞到两处：
+
+      取数源唯一：`bench/v0.2-mini/reports/baseline/`   ← 实际读的是 t8-smoke/
+      | k | 1（`-n 1`，并发是最大单一失真源） |          ← 实际跑的是 -n 6
+
+    两处都会让读者以为数字来自另一批、另一套必控变量，而报告自己**不报错**。
+    并发数是必控变量：谎报它等于把「判分可能被并发扰动」这个风险藏起来。
+    """
+    src = (MVP / "t7-report.py").read_text(encoding="utf-8")
+
+    # 取数源那行必须用 RUNS 现取，⛔ 不许出现写死的 reports/baseline/ 字面量
+    prov = [ln for ln in src.splitlines() if "取数源唯一" in ln]
+    assert len(prov) == 1, f"取数源那行命中 {len(prov)} 条，判据失效"
+    assert "_rel(RUNS)" in prov[0], f"取数源写死了路径：{prov[0].strip()[:90]}"
+
+    # k 那行必须读实际并发，⛔ 不许写死 -n 1
+    krow = [ln for ln in src.splitlines() if '"| k |' in ln or "f\"| k |" in ln]
+    assert krow, "找不到 k 那行 —— 判据失效，先修这条测试"
+    assert "n_conc" in krow[0], f"并发数写死了：{krow[0].strip()[:90]}"
+    assert "`-n 1`" not in krow[0], f"仍写死 -n 1：{krow[0].strip()[:90]}"
+
+
+def test_n_concurrent_reads_run_config_and_never_invents():
+    """并发数从 run 产物读；读不到就回落 1 并照实写，⛔ 不许编一个 6 出来。"""
+    import tempfile
+
+    rep = _load("t7-report")
+    with tempfile.TemporaryDirectory() as td:
+        run = Path(td)
+        assert rep._n_concurrent(run) == 1, "没有 config.json 时应回落 1"
+
+        (run / "config.json").write_text(json.dumps({"n_concurrent_trials": 6}))
+        assert rep._n_concurrent(run) == 6, "没读出产物里的实际并发数"
+
+        # 坏 JSON / 缺字段都不许抛，回落 1（报告崩在渲染层最难查）
+        (run / "config.json").write_text("{not json")
+        assert rep._n_concurrent(run) == 1
+        (run / "config.json").write_text(json.dumps({"other": 1}))
+        assert rep._n_concurrent(run) == 1
+
+
+def test_both_scripts_expose_the_same_runs_switch():
+    """两个脚本的 `--runs` 必须同名同默认 —— 报告要去 `RUNS/zero-diag.json` 取归因。
+
+    一边有开关一边没有的形态：报告读 t8 的 trial，却引用 baseline 的归因结论，
+    §9 的判读对应的是**另一轮的数据**，且不报错。
+    """
+    import ast as _ast
+
+    def _flags(name: str) -> dict[str, str | None]:
+        src = (MVP / f"{name}.py").read_text(encoding="utf-8")
+        out: dict[str, str | None] = {}
+        for node in _ast.walk(_ast.parse(src)):
+            if not (isinstance(node, _ast.Call) and getattr(node.func, "attr", "") == "add_argument"):
+                continue
+            if not (node.args and isinstance(node.args[0], _ast.Constant)):
+                continue
+            kw = {k.arg: k.value for k in node.keywords}
+            default = kw.get("default")
+            out[node.args[0].value] = (
+                default.value if isinstance(default, _ast.Constant) else None)
+        return out
+
+    for name in ("t7-report", "t7-zero-diag"):
+        flags = _flags(name)
+        assert "--runs" in flags, f"{name} 缺 --runs 开关 —— 两批取数会串"
+        assert flags["--runs"] == "baseline", \
+            f"{name} 的 --runs 默认应是 baseline（保住第一轮复现），实际 {flags['--runs']!r}"
+
+
 # 52 metadata 在 agent_result 下，不是 agent_info 下
 
 def test_read_trial_finds_binary_sha_in_agent_result_metadata():
@@ -2594,3 +2979,161 @@ def test_read_trial_finds_binary_sha_in_agent_result_metadata():
         t2 = t7lib.read_trial(d2)
         assert t2 is not None and t2.binary_sha == "cafe" * 16, \
             "agent_info.metadata 的兜底读法坏了"
+
+
+def test_zero_diag_staleness_uses_trial_identity_not_count(tmp_path):
+    """🔴 zero-diag 过期判据必须按 **trial 身份**，⛔ 不能数条数。
+
+    2026-09-14 实测（T0022）：补跑**重跑同一条题**，
+    条数一个不变（快照 2 条、主表 2 条），但那条的 trial 目录换成了新随机后缀，
+    旧快照的判定还是 `infra_upstream_disconnect`（补跑后已是真实读数）。
+
+    条数判据在这个形态下**完全不响** ⇒ 报告 §10 带着旧归因发布，
+    说「1 条上游断连」而主表已把它算进有效分母 —— 两个数字并排、口径不同，
+    正是这道守卫要拦的东西。
+    """
+    rep = _load("t7-report")
+
+    class FakeTrial:
+        def __init__(self, name):
+            self.trial_dir = Path(name)
+
+    runs = tmp_path / "t8-rerun"
+    runs.mkdir()
+    (runs / "zero-diag.json").write_text(json.dumps({
+        "n_diagnosed": 2,
+        "trials": [{"task": "T0008", "trial_dir": "T0008__aaa", "verdict": "solved"},
+                   {"task": "T0022", "trial_dir": "T0022__jYTxhrW",
+                    "verdict": "infra_upstream_disconnect"}],
+    }), encoding="utf-8")
+
+    orig = rep.RUNS
+    try:
+        rep.RUNS = runs
+
+        # ① 快照与主表完全同一批 trial ⇒ 不该标过期
+        zd = rep.load_zero_diag([FakeTrial("T0008__aaa"), FakeTrial("T0022__jYTxhrW")])
+        assert not zd.get("stale"), f"同一批被误判过期：{zd.get('stale')}"
+
+        # ② 补跑换了目录、**条数不变** ⇒ 必须标过期并点名 T0022
+        zd = rep.load_zero_diag([FakeTrial("T0008__aaa"), FakeTrial("T0022__NEWdir")])
+        st = zd.get("stale")
+        assert st, "补跑换目录后没标过期 —— 报告会带着旧归因发布"
+        assert st["unseen_tasks"] == ["T0022"], f"没点名 T0022：{st}"
+        assert st["n_diagnosed"] == 2 and st["n_with_trial"] == 2, \
+            "这正是条数相等的形态，判据不能依赖条数差"
+
+        # ③ 新跑出的题也要认出来
+        zd = rep.load_zero_diag([FakeTrial("T0008__aaa"), FakeTrial("T0022__jYTxhrW"),
+                                 FakeTrial("T0034__bbb")])
+        assert zd["stale"]["unseen_tasks"] == ["T0034"], f"漏了新题：{zd.get('stale')}"
+
+        # ④ §10 的提示必须点名未归因的 task，⛔ 不能只说条数
+        sec = "\n".join(rep._zero_diag_section(zd))
+        assert "T0034" in sec, f"§10 没点名未归因的 task：{sec[:300]}"
+    finally:
+        rep.RUNS = orig
+
+
+def test_a2_conclusion_distinguishes_missing_key_from_missing_file(tmp_path):
+    """🔴 `verdicts` 缺键 ⇒ **该项 0 条**，⛔ 不是「没做归因」。
+
+    2026-09-14 抓到：`verdicts` 是 `dict(Counter(...))`，**计数为 0 的键不存在**。
+    用 `.get(k)` 拿到 None 后当成「缺 zero-diag.json」，报告写
+    「无法断言 A2 低分是能力还是题面」—— 而真相相反：
+    该项为 0 正是「0 分的题全都改过文件」⇒ **A2 低分是真能力信号** 的关键证据。
+
+    两个读法结论完全相反，且都「看着完整」，所以必须钉住。
+    """
+    rep = _load("t7-report")
+
+    runs = tmp_path / "t8-rerun"
+    stage = runs / "tasks"
+    for t in ("T0001", "T0002"):
+        (stage / t).mkdir(parents=True)
+        # 题面带内联文档段 ⇒ 走「修复①已生效」那一支
+        (stage / t / "instruction.md").write_text(
+            "做点事\n\n---\n\n## 引用文档原文\n\n```\nx\n```\n", encoding="utf-8")
+
+    orig = rep.RUNS
+    try:
+        rep.RUNS = runs
+
+        # ① 归因做过、该项恰好 0 条（键不存在）⇒ 必须读成「真能力信号」
+        zd_zero = {"n_diagnosed": 9, "verdicts": {"true_zero_wrong_fix": 7, "solved": 2}}
+        assert rep._n_no_attempt(zd_zero) == 0
+        para = "\n".join(rep._docs_gap_para(zd_zero))
+        assert "真能力信号" in para, f"缺键被误读成未判定：{para[:300]}"
+        assert "缺 `zero-diag.json`" not in para, f"文件在却说缺文件：{para[:300]}"
+        assert "true_zero_no_attempt = 0" in para, para[:300]
+        cav = rep._docs_gap_caveat(zd_zero)
+        assert "真能力信号" in cav and "未判定" not in cav, cav
+        say = rep._a2_dont_say(zd_zero)
+        assert "不能**再用" in say and "缺 `zero-diag.json`" not in say, say
+
+        # ② 真的没做归因（文件不存在 ⇒ zd is None）⇒ 才说「无法断言」
+        para = "\n".join(rep._docs_gap_para(None))
+        assert "无法断言" in para and "缺 `zero-diag.json`" in para, para[:300]
+        assert "未判定" in rep._docs_gap_caveat(None)
+        assert "不能**断言" in rep._a2_dont_say(None)
+
+        # ③ 该项 > 0 ⇒ 仍要按「混有题面因素」读，⛔ 不能说成纯能力信号
+        zd_some = {"n_diagnosed": 9, "verdicts": {"true_zero_no_attempt": 3}}
+        para = "\n".join(rep._docs_gap_para(zd_some))
+        assert "3" in para and "真能力信号" not in para, para[:300]
+        assert "拒绝瞎改" in rep._a2_dont_say(zd_some)
+
+        # ④ 题面未内联（原 baseline 批）⇒ T6 的原 caveat 必须保持不变
+        for t in ("T0001", "T0002"):
+            (stage / t / "instruction.md").write_text("做点事\n", encoding="utf-8")
+        assert "35/39" in "\n".join(rep._docs_gap_para(zd_zero))
+        assert "35/39" in rep._docs_gap_caveat(zd_zero)
+        assert rep._a2_dont_say(zd_zero) == "**不能**把 A2 档的低分当模型能力证据"
+    finally:
+        rep.RUNS = orig
+
+
+def _mk_summarize_trial(out, run, task, reward, cost=0.5):
+    """给 `summarize()` 造一条带 cost 的 trial。
+
+    ⚠️ 刻意**不叫** `_mk_trial` —— 那个名字已被 `collect_all` 那组测试占用
+    且签名不同（`(run, task, reward)`）。同名会静默覆盖，
+    形态是「三个毫不相关的既有测试一起 TypeError」。
+    """
+    d = out / run / f"{task}__x"
+    (d / "verifier").mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({
+        "task_name": task,
+        "verifier_result": {"rewards": {"reward": reward, "error_code": 0}},
+        "agent_result": {"cost_usd": cost, "metadata": {}},
+    }), encoding="utf-8")
+
+
+def test_summarize_spans_all_run_dirs_not_just_latest(tmp_path):
+    """🔴 `summarize()` 必须跨**所有** run 目录，⛔ 不能只读 `latest_run`。
+
+    2026-09-14 实测（造样本证实）：补跑（`--resume`）新建一个 run 目录，
+    只读最新那个 ⇒ 分母只剩补跑那几条。形态是**收尾打印 `pass@1 = 0.0%`**
+    而真实是 50%，成本也只算补跑那批 —— 这个数字直接出现在补跑结束的终端上，
+    与 `t7-report.py`（已跨目录）打架，且它看着完全正常，只是分母悄悄小了一圈。
+
+    `done_tasks()` 和 `t7_report_lib.collect_all()` 都已跨目录，`summarize()` 是漏网的那个。
+    """
+    t8 = _load("t8-rerun")
+
+    for t, r in [("T0001", 1.0), ("T0002", 1.0), ("T0003", 0.0)]:
+        _mk_summarize_trial(tmp_path, "2026-09-13__10-00-00", t, r)
+    _mk_summarize_trial(tmp_path, "2026-09-14__10-00-00", "T0004", 0.0)   # 补跑那一条
+
+    s = t8.summarize(tmp_path)
+    assert s["n"] == 4, f"分母漏了旧 run 的 trial：只读到 {s['n']} 条"
+    assert s["pass_at_1"] == 50.0, f"pass@1 算错：{s['pass_at_1']}（只读最新目录会得 0.0）"
+    assert sorted(s["solved_tasks"]) == ["T0001", "T0002"]
+    assert s["cost_usd"] == 2.0, f"成本只算了补跑那批：{s['cost_usd']}"
+    assert s["n_run_dirs"] == 2, "没记跨了几个 run 目录 —— run_dir 单值会让读者以为只有一个"
+
+    # 同一 task 在两个 run 里（补跑重试）⇒ 取**最新**，⛔ 不能算成两条
+    _mk_summarize_trial(tmp_path, "2026-09-14__10-00-00", "T0003", 1.0)
+    s2 = t8.summarize(tmp_path)
+    assert s2["n"] == 4, f"同名重跑被算成两条 ⇒ 分母虚增：{s2['n']}"
+    assert "T0003" in s2["solved_tasks"], "重跑后的新结果没覆盖旧的 0 分"

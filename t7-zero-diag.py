@@ -55,9 +55,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common as c  # noqa: E402
 import t7_report_lib as lib  # noqa: E402
 
+#: 取数源目录。默认第一轮 `baseline/`；整改后那批传 `--runs t8-rerun`。
+#: 🔴 必须与 `t7-report.py --runs` **同时切**：报告去 `RUNS/zero-diag.json` 取归因，
+#: 两边不一致的形态是**报告静默引用另一批的归因数据** —— §9 的结论对应的是
+#: 另一轮的 trial，而两侧都不报错。
 RUNS = c.MVP_REPORTS / "baseline"
 RECHECK = c.MVP_REPORTS / "t6-recheck"
 OUT = RUNS / "zero-diag.json"
+
+
+def _retarget(runs_name: str) -> None:
+    """把取数源与产物路径一起切到另一批（⛔ 只改 RUNS 会把结果写进旧批目录）。"""
+    global RUNS, OUT
+    RUNS = c.MVP_REPORTS / runs_name
+    OUT = RUNS / "zero-diag.json"
 
 
 def _rel(p: Path) -> str:
@@ -84,6 +95,26 @@ WRITE_TOOLS = {"write", "edit", "multi_edit", "multiedit", "str_replace",
 #: ⚠️ 这是个**近似**指标，用来量级说明而非精确计数，报告里要标明「约」。
 _FIND_DOC = re.compile(r"\b(find|ls)\b")
 _CJK = re.compile(r"[一-鿿]")
+
+#: 🔴 f2p 日志里的「整份测试文件加载失败」签名。命中 ⇒ 测试**跑到了**，
+#: 是被 import 的 src 符号不存在（而那正是 gold patch 要创建的）⇒ 模型没做到，**真 0**。
+#: ⛔ 没有这个判据，`missing` 会被一律误判成「判分侧没看全」，方向偏袒模型。
+_LOAD_FAIL = re.compile(r"Cannot find module|SyntaxError: Export named")
+
+
+def _is_upstream_failure(md: dict) -> bool:
+    """上游 LLM 链路断了 ⇒ 假 0 分。
+
+    🔴 判据与签名表**复用 `t7_report_lib`**，⛔ 不在这里另抄一份 ——
+    两处各存一份的形态是「报告说仪器故障、归因说模型没做到」，
+    而读者无从判断哪个是真的（口径打架比判错更难查）。
+    """
+    return lib.Trial(
+        task="", reward=0.0, f2p=None, p2p=None, error_code=0, exception=None,
+        subtype=md.get("sid_subtype"),
+        errors=tuple(str(e) for e in (md.get("sid_errors") or [])),
+    ).upstream_failure
+_RAN_LINE = re.compile(r"Ran \d+ tests? across \d+ files?")
 
 
 def iter_tool_uses(jsonl: Path):
@@ -175,17 +206,64 @@ def diagnose_one(trial_dir: Path, max_turns: int) -> dict:
         else:
             out["termination"]["attribution"] = "⚠️ 判据字段缺失，无法归因（先查 metadata 回填路径）"
 
+    # ── ①b missing 的两种成因必须分开（2026-09-13 实测纠正）──
+    #
+    # 🔴 「f2p 文件在 XML 里没有节点」有**两个完全相反**的成因：
+    #
+    #   (a) 判分链路自己的问题（verifier 没跑、XML 没生成…）⇒ 真的不能算模型答错
+    #   (b) **测试跑了，但 import 的 src 符号不存在** —— bun 报
+    #       `Cannot find module '../../src/x.ts'` 或
+    #       `SyntaxError: Export named 'foo' not found`，
+    #       整份文件加载失败 ⇒ XML 里自然没有节点。
+    #       而那些 src 文件/导出**正是 gold patch 创建的**（已逐条核对 T0031/T0039/T0064）
+    #       ⇒ **模型没写出来**，这是**真 0**。
+    #
+    # ⚠️ 最初只看 `missing` 就判 `grader_incomplete`，把 (b) 误判成 (a) ——
+    # 方向恰好**偏袒模型**（把「模型没做到」记成「判分有问题」），
+    # 3/7 条被误判。判据是 f2p 日志里的加载失败签名。
+    log = trial_dir / "verifier/f2p.log"
+    load_fail = 0
+    if log.exists():
+        txt = log.read_text(encoding="utf-8", errors="ignore")
+        load_fail = len(_LOAD_FAIL.findall(txt))
+        out["f2p_ran_line"] = (_RAN_LINE.findall(txt) or [None])[-1]
+    out["n_f2p_load_failures"] = load_fail
+
     # ── 合判 ──
     fd = out["f2p_detail"]
     judged_all = (fd["n_missing"] == 0 and fd["n_no_tests"] == 0
                   and fd["n_seen"] == fd["n_required"] and out.get("error_code") == 0)
     if out.get("reward") == 1.0:
         out["verdict"], out["why"] = "solved", "解出"
+    elif _is_upstream_failure(md):
+        # 🔴 上游 LLM 断连 ⇒ **假 0 分**，这一条根本没跑完，⛔ 不是任何能力信号。
+        #
+        # 2026-09-14 实测（T0022）：61 轮 / 73 分钟时上游断连，agent 以
+        # `error_during_execution` 收尾，verifier 照常打分 ⇒ reward=0.0。
+        # 最初这里把它判成 `true_zero_missing_symbol`（真 0），而报告侧
+        # `Trial.upstream_failure` 已按 infra 排除 ⇒ **两套口径打架**：
+        # 归因表说「模型没写出符号」，主表说「仪器故障」，读者无从判断哪个真。
+        #
+        # ⚠️ 这个分支必须排在 `load_fail` 前面：断连的题往往也有加载失败
+        # （模型没来得及写完），照顺序会先命中那条，把假 0 说成真 0。
+        out["verdict"] = "infra_upstream_disconnect"
+        out["why"] = ("🔴 **假 0 分**：上游 LLM 链路断开（"
+                      f"{(md.get('sid_errors') or ['?'])[0][:80]}…）⇒ "
+                      f"agent 在第 {md.get('sid_num_turns')} 轮被打断、题**没跑完**，"
+                      "而 verifier 照常打了分 ⇒ ⛔ 不计入分母，不是能力信号，需重跑")
+    elif not judged_all and load_fail:
+        # (b)：测试跑到了，是模型没写出被 import 的符号
+        out["verdict"] = "true_zero_missing_symbol"
+        out["why"] = (f"真 0：测试跑起来了（{out.get('f2p_ran_line') or '见 f2p.log'}）但有 "
+                      f"{load_fail} 处加载失败（`Cannot find module` / `Export named ... not found`）"
+                      "—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ "
+                      "⛔ 这**不是**判分缺陷")
     elif not judged_all:
         out["verdict"] = "grader_incomplete"
         out["why"] = (f"判分侧没看全 f2p（seen {fd['n_seen']}/{fd['n_required']}，"
                       f"missing {fd['n_missing']}，no_tests {fd['n_no_tests']}，"
-                      f"error_code {out.get('error_code')}）⇒ ⛔ 这一条**不能**读作「模型答错」")
+                      f"error_code {out.get('error_code')}）**且 f2p 日志无加载失败签名** ⇒ "
+                      "⛔ 这一条**不能**读作「模型答错」")
     elif out["n_write_tool_calls"] == 0:
         out["verdict"] = "true_zero_no_attempt"
         out["why"] = ("真 0，但模型**一次都没改文件**（写文件工具 0 次）⇒ "
@@ -206,14 +284,19 @@ def _guard_text(v: Counter, n_done: int) -> str:
     """
     n_wrong = v.get("true_zero_wrong_fix", 0)
     n_no_attempt = v.get("true_zero_no_attempt", 0)
+    n_missing_sym = v.get("true_zero_missing_symbol", 0)
     n_grader = v.get("grader_incomplete", 0)
     n_solved = v.get("solved", 0)
 
-    bits = [f"已判 {n_done} 条：解出 {n_solved}、"
-            f"改了但改错 {n_wrong}、未提交解法 {n_no_attempt}、判分未看全 {n_grader}。"]
+    bits = [f"已判 {n_done} 条：解出 {n_solved}、改了但改错 {n_wrong}、"
+            f"未提交解法 {n_no_attempt}、缺 src 符号 {n_missing_sym}、判分未看全 {n_grader}。"]
     if n_grader:
         bits.append(f"⛔ 那 {n_grader} 条 `grader_incomplete` **不能**读作模型答错"
-                    "（判分侧没拿全测试节点）。")
+                    "（判分侧没拿全测试节点，且 f2p 日志无加载失败签名）。")
+    if n_missing_sym:
+        bits.append(f"那 {n_missing_sym} 条 `true_zero_missing_symbol` 是**真 0**："
+                    "测试跑到了，但模型没写出被 import 的 src 符号"
+                    "（那些正是 gold patch 创建的）⇒ ⛔ **不是**判分缺陷。")
     if n_no_attempt:
         bits.append(f"⛔ 那 {n_no_attempt} 条 `true_zero_no_attempt` 是**模型没提交解法**，"
                     "不是解法不对 —— 它一次都没改文件。")
@@ -287,17 +370,33 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="只打印 JSON，不打人读表格")
     ap.add_argument("--max-turns", type=int, default=40,
-                    help="agent 的 --max-turns（sid_code_agent 的 CLI_FLAGS 默认 40）")
+                    help="agent 的 --max-turns（sid_code_agent 的 CLI_FLAGS 默认 40）。"
+                         "⚠️ 整改后那批显式传了 120，判读时必须跟着传 --max-turns 120，"
+                         "否则「撞上限」判据会用错的阈值比对")
+    ap.add_argument("--runs", default="baseline", metavar="DIR",
+                    help="取数源目录名（reports/ 下）。默认 baseline；整改后那批传 t8-rerun。"
+                         "🔴 必须与 t7-report.py --runs 取同一个值")
     args = ap.parse_args()
+
+    if args.runs != "baseline":
+        _retarget(args.runs)
 
     run = lib.latest_run(RUNS)
     if run is None:
-        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/mvp/t7-baseline.py")
+        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/mvp/t8-rerun.py（或 t7-baseline.py）")
 
     grade_groups = json.loads((RECHECK / "t7-grade-groups.json").read_text(encoding="utf-8"))
     grade = {t: g for g, ts in grade_groups.items() for t in ts}
 
-    rows = [diagnose_one(d, args.max_turns) for d in sorted(run.glob("T0*/")) if d.is_dir()]
+    # 🔴 跨所有 run 目录扫 —— 续跑（`t8-rerun.py --resume`）会新建 run 目录，
+    # 只扫最后那个会漏掉第一轮的 trial，而归因表看着完整（只是条数少了）。
+    # 同一 task 出现在多个目录时取**最新**那个（续跑结果比被中断的旧结果可信）。
+    trial_dirs: dict[str, Path] = {}
+    for r in sorted(p for p in RUNS.iterdir() if p.is_dir() and p.name[:2] == "20"):
+        for d in sorted(r.glob("T0*/")):
+            if d.is_dir():
+                trial_dirs[d.name.split("__")[0]] = d
+    rows = [diagnose_one(d, args.max_turns) for _, d in sorted(trial_dirs.items())]
     done = [r for r in rows if r["verdict"] != "running"]
     for r in done:
         r["grade"] = grade.get(r["task"])

@@ -50,6 +50,34 @@ from pathlib import Path
 #: 小样本阈值：格内条数 < 这个数就只报绝对条数、不报百分比（交接 2b）。
 SMALL_CELL = 5
 
+#: agent 侧**预算耗尽**类异常 —— 是评测结果，⛔ 不是仪器故障，不排除出分母。
+#:
+#: 只有一个成员，但刻意写成集合而不是 `== "AgentTimeoutError"`：
+#: harbor 未来若给「预算触顶」加新异常类（如 token 上限），加进这里一处即可，
+#: 而漏加的形态是**静默低报 pass@1**（见 `Trial.infra_failure` 的 T0011 实例）。
+#:
+#: ⛔ 不要往里加 `RewardFileNotFoundError` / 环境构建类异常 —— 那些是真 infra。
+AGENT_BUDGET_EXCEPTIONS = frozenset({"AgentTimeoutError"})
+
+#: 上游 LLM 链路故障的签名（小写匹配）。命中 ⇒ **假 0 分**，排除出分母。
+#:
+#: 🔴 T0022 实测（2026-09-14）：61 轮 / 73 分钟后上游断连，agent 以
+#: `error_during_execution` 收尾，而 verifier 照常打分 ⇒ `reward=0.0`
+#: ⇒ 一次网络抖动被记成「模型改错了」，两者形态**逐字节一样**。
+#:
+#: ⛔ 别往里加 agent 自身的崩溃签名（`TypeError`、`assertion` …）——
+#: 那些是真失败，排除掉等于替模型擦屁股。这里只放**链路**层面的。
+UPSTREAM_ERROR_SIGNS = (
+    "socket connection",        # T0022 实测原文：socket connection was closed unexpectedly
+    "closed unexpectedly",
+    "econnreset",
+    "etimedout",
+    "fetch failed",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway",
+)
+
 
 @dataclass
 class Trial:
@@ -70,16 +98,73 @@ class Trial:
     n_output_tokens: int | None = None
     n_cache_tokens: int | None = None
     trial_dir: Path | None = None
+    #: agent 自报的终止形态（`sid_subtype`）：success / error_max_turns /
+    #: error_max_budget_usd / error_during_execution。
+    #: ⚠️ 与 `exception` 是**两个不同的出口** —— 撞轮数上限时 exception 为 None，
+    #: 只有这里写着 `error_max_turns`（2026-09-14 我取错过一次，把 13 条报成 0 条）。
+    subtype: str | None = None
+    #: agent 自报的错误列表（`sid_errors`），用于分辨「上游断连」这类假 0 分。
+    errors: tuple[str, ...] = ()
+
+    @property
+    def upstream_failure(self) -> bool:
+        """上游 LLM 链路断了 ⇒ **假 0 分**，按 infra 排除出分母。
+
+        🔴 2026-09-14 全量重跑实测（T0022）：跑到第 61 轮、73 分钟时上游断连
+        （`The socket connection was closed unexpectedly`），
+        agent 以 `error_during_execution` 终止，**verifier 照常打了分 ⇒ reward=0.0**。
+
+        形态之所以危险：它与「模型改了但改错」**逐字节一样**（都是 reward=0、
+        Exceptions=0、有仓库写操作）。不识别就等于把**一次网络抖动记成模型能力不足** ——
+        这正是模块 docstring 里 TZ 那次「假 0 分」（R-4）的同一个坑，换了个出口。
+
+        ⛔ 判据必须同时满足「终止形态是 error_during_execution」与「错误里有网络签名」：
+        只看 subtype 会把 agent 自身的崩溃也排除掉（那不是仪器故障，是真失败）。
+        """
+        if self.subtype != "error_during_execution":
+            return False
+        joined = " ".join(self.errors).lower()
+        return any(sig in joined for sig in UPSTREAM_ERROR_SIGNS)
+
+    @property
+    def budget_exhausted(self) -> bool:
+        """agent 侧预算耗尽（墙钟）⇒ **是评测结果，不是仪器故障**。
+
+        与 `error_max_turns` / `error_max_budget_usd` 同族 —— 都是「给定预算内没做完」，
+        区别只在**哪个预算先触顶**。前两者 harbor 记成 `subtype` 干净终止，
+        而墙钟触顶是**抛异常**，于是会被 `bool(self.exception)` 误判成 infra。
+        """
+        return self.exception in AGENT_BUDGET_EXCEPTIONS
 
     @property
     def infra_failure(self) -> bool:
         """基础设施故障 ⇒ 排除出分母，**不记为答错**。
 
-        判据刻意只有两条硬的：抛异常、或 verifier 没写分。
+        判据只有两条硬的：**verifier 没写分**，或抛出**非预算类**异常。
         ⛔ 不把 `reward=0` 归到这里 —— 那是「答错」的正常形态；
         真要怀疑假 0 分得去读 test-stdout.txt（见模块 docstring）。
+
+        🔴 **`AgentTimeoutError` 刻意不算 infra** —— 这条是 E3 实测踩出来的，
+        写错的形态是**静默低报 pass@1**：
+
+          T0011  reward=1.0（f2p 全 pass、p2p 30/30）  exception=AgentTimeoutError
+          ⇒ 旧判据 `bool(self.exception)` 把它排除出分母
+          ⇒ 一条**真解出**的题被记成仪器故障，pass@1 从 1/1 变 0/0
+
+        根因是把「抛异常」当成了「没拿到分」的代理。但 verifier 跑在 agent 终止
+        **之后**，agent 超时不妨碍它打分 —— 判「有没有分」要直接看 `reward`，
+        ⛔ 不要拿异常去推断。
+
+        ⚠️ 反过来也不能一刀切成「只看 reward is None」：环境构建失败、
+        `RewardFileNotFoundError` 那些**真** infra 故障必须继续排除
+        （它们本来就 reward=None，但异常类型是唯一能区分「机器坏了」与
+        「预算用完了」的信号，丢掉它下一次就分不出来了）。
         """
-        return bool(self.exception) or self.reward is None
+        if self.reward is None:
+            return True
+        if self.upstream_failure:       # 假 0 分：上游断连，题根本没跑完（T0022）
+            return True
+        return bool(self.exception) and not self.budget_exhausted
 
     @property
     def solved(self) -> bool:
@@ -221,6 +306,9 @@ def read_trial(trial_dir: Path) -> Trial | None:
         n_output_tokens=ar.get("n_output_tokens"),
         n_cache_tokens=ar.get("n_cache_tokens"),
         trial_dir=trial_dir,
+        # ⚠️ 终止形态只在 metadata 里，⛔ 不在 exception —— 撞轮数上限时 exception 是 None
+        subtype=meta.get("sid_subtype"),
+        errors=tuple(str(e) for e in (meta.get("sid_errors") or [])),
     )
 
 
@@ -234,6 +322,36 @@ def collect(run_dir: Path) -> list[Trial]:
         if t is not None:
             out.append(t)
     return out
+
+
+def collect_all(jobs_dir: Path) -> list[Trial]:
+    """跨**所有** run 目录收 trial —— 续跑（`t8-rerun.py --resume`）用。
+
+    🔴 为什么不能只用 `latest_run`：harbor 每次调用新建一个带时间戳的目录，
+    续跑一次就多一个。只读最后那个的形态是**静默漏掉第一轮跑出的那些 trial** ——
+    报告每张表都有数，只有分母悄悄小了一圈，而完整性守卫只会报「没跑齐」，
+    不会说「其实跑了、但你没读」。归因方向完全错。
+
+    ⚠️ 同一 task 在多个目录里出现时（被杀时在跑的那条会重跑）取**最新**那个：
+    续跑的结果比被中断的旧结果可信。⛔ 不能像 `collect()` 那样全留 ——
+    那会让 k=1 的批次里某些 task 有两行，`pass_at_1` 把它当成 k=2 平均，
+    静默改变分母口径。
+    """
+    jobs_dir = Path(jobs_dir)
+    if not jobs_dir.exists():
+        return []
+    runs = sorted(p for p in jobs_dir.iterdir() if p.is_dir() and p.name[:2] == "20")
+    if len(runs) <= 1:
+        return collect(runs[0]) if runs else []
+
+    # 后面的 run 覆盖前面的同名 task；同一 run 内的多次尝试（k>1）全留
+    by_task: dict[str, list[Trial]] = {}
+    for run in runs:
+        seen_here: dict[str, list[Trial]] = {}
+        for t in collect(run):
+            seen_here.setdefault(t.task, []).append(t)
+        by_task.update(seen_here)
+    return [t for rows in by_task.values() for t in rows]
 
 
 def latest_run(jobs_dir: Path) -> Path | None:
