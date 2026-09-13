@@ -339,12 +339,31 @@ def control_group(done: list[dict]) -> dict:
     v = Counter(r["verdict"] for r in rows)
     n_attempted = sum(1 for r in rows if r.get("n_write_tool_calls", 0) > 0)
 
+    # 🔴 `supports` 是给下游的**结构化判据**，⛔ 下游不许再靠子串匹配
+    # （报告侧原来用 `"成立" in reading` ⇒ 新增的否定句「不许用部分样本宣布归因
+    # **成立**」也含这两个字，把「暂缓」读成了「支持」。2026-09-14 实测撞到。）
+    supports = False
     if not rows:
         read = "⏳ 对照组还没跑到 —— 跑到后本节自动给出判读"
+    elif len(rows) < len(ctrl_ids):
+        # 🔴 **跑齐才判读**，⛔ 不许用部分样本宣布归因成立。
+        #
+        # 2026-09-14 抓到：跑到 1/4 条时就输出「✅ 归因成立」，
+        # 而这个字符串是报告里 `ctrl_supports` 的判据 ⇒ **一条样本解锁了最强结论**
+        # （§10 那句「本批的 pass@1 不是模型解不动，而是题面缺陷叠加轮次上限」）。
+        # 对照组的全部价值在于「能推翻归因」，用它的第一条就宣布支持，
+        # 等于把反证做成了单向确认 —— 剩下 3 条无论什么结果都不会再改变结论。
+        #
+        # ⚠️ 且 n=4 < 5，本函数 docstring 的预注册纪律写死「只报绝对条数不报比例」。
+        read = (f"⏳ 对照组只跑了 {len(rows)}/{len(ctrl_ids)} 条 —— **判读暂缓**。"
+                f"已跑的形态：{dict(v)}（wrong_fix 进入了改代码阶段 / no_attempt 未提交解法）。"
+                "⛔ 不许用部分样本宣布归因成立：对照组的价值在于**能推翻**归因，"
+                "拿第一条就确认等于把反证做成单向确认。")
     elif v.get("true_zero_wrong_fix", 0) or v.get("solved", 0):
+        supports = True
         read = ("✅ 归因**成立**：对照组里有条目进入了「改代码」阶段"
                 f"（wrong_fix {v.get('true_zero_wrong_fix', 0)} / solved {v.get('solved', 0)}）"
-                " ⇒ 题面点名不存在文档确实是主因")
+                " ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数")
     elif n_attempted == 0 and all(
             (r.get("termination") or {}).get("subtype") == "error_max_turns" for r in rows):
         read = ("🔴 归因**不完整**：对照组也全是「零改动 + 轮次耗尽」 ⇒ "
@@ -355,6 +374,8 @@ def control_group(done: list[dict]) -> dict:
 
     return {
         "definition": "题面不含 `docs/` 引用的存活 task（天然对照组）",
+        # 🔴 报告侧必须读这个字段判断「对照组是否支持归因」，⛔ 不许 grep `reading`
+        "supports": supports,
         "control_tasks": ctrl_ids,
         "n_control": len(ctrl_ids),
         "n_control_done": len(rows),
@@ -408,7 +429,12 @@ def main() -> int:
     n_bash = sum(r.get("n_bash", 0) for r in done)
     n_hunt = sum(r.get("n_bash_hunting_doc", 0) for r in done)
     summary = {
+        # ⚠️ 归因本身**跨所有 run 目录**扫（见上面 trial_dirs 那段），
+        # 这里的 run_dir 只是**最新**那个 ⇒ 必须同时记 run_dirs，
+        # 否则补跑后读者会以为归因只覆盖了一个目录（同 t8-rerun.summarize 的处理）。
         "run_dir": _rel(run),
+        "run_dirs": [r.name for r in sorted(
+            q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20")],
         "max_turns": args.max_turns,
         "n_diagnosed": len(done),
         "verdicts": dict(verdicts),

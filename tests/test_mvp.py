@@ -2995,8 +2995,11 @@ def test_zero_diag_staleness_uses_trial_identity_not_count(tmp_path):
     rep = _load("t7-report")
 
     class FakeTrial:
-        def __init__(self, name):
+        # ⚠️ 必须带 reward：守卫只比对**已判分**的 trial
+        #（未判分的那些 zero-diag 判 running 并刻意排除，见下面那条测试）
+        def __init__(self, name, reward=0.0):
             self.trial_dir = Path(name)
+            self.reward = reward
 
     runs = tmp_path / "t8-rerun"
     runs.mkdir()
@@ -3190,8 +3193,12 @@ def test_zero_diag_final_branch_has_no_hardcoded_baseline_numbers():
 
     base = {"n_diagnosed": 24, "max_turns": 120,
             "conclusion_guard": "已判 24 条",
-            # 对照组跑完且判读支持归因 ⇒ 走终版那一支
+            # 对照组跑完且判读支持归因 ⇒ 走终版那一支。
+            # ⚠️ 判据是结构化的 `supports`，⛔ 不是 `reading` 里有没有「成立」二字
+            #（子串匹配会把否定句读成肯定，见
+            #  test_control_group_defers_verdict_until_fully_run）
             "control_group": {"n_control": 4, "control_tasks": ["T0011"], "n_control_done": 4,
+                              "supports": True,
                               "reading": "✅ 归因**成立**：对照组里有条目进入了「改代码」阶段"}}
 
     # ① 本批形态：wrong_fix > 0 ⇒ ⛔ 不许把低分整体归给题面缺陷
@@ -3253,3 +3260,110 @@ def test_freeze_artifacts_and_caveat_follow_runs_target():
         assert rep.SUMMARY.parent.name == "baseline", rep.SUMMARY
     finally:
         rep.RUNS, rep.REPORT, rep.SUMMARY = orig
+
+
+def test_zero_diag_staleness_ignores_unscored_trials(tmp_path):
+    """🔴 过期守卫只比对**已判分**的 trial —— 否则会永久假阳性。
+
+    2026-09-14 抓到（我自己引入这道守卫时的缺陷）：
+    `t7-zero-diag.py` 把没有 `verifier/reward.json` 的 trial 判成 `running`
+    并**刻意排除**出 `n_diagnosed`。守卫若拿全部 trial 比对，
+    一条还没判分的题（本批 T0009，整批唯一的 Exception）就会让它
+    **永久报「已过期」** —— 重跑 zero-diag 也消不掉，因为那条本来就不该归因。
+
+    假阳性守卫比没有守卫更糟：它训练读者忽略这行告警，
+    真正的过期（补跑换目录）就会跟着被忽略。
+    """
+    rep = _load("t7-report")
+
+    class FakeTrial:
+        def __init__(self, name, reward):
+            self.trial_dir = Path(name)
+            self.reward = reward
+
+    runs = tmp_path / "t8-rerun"
+    runs.mkdir()
+    (runs / "zero-diag.json").write_text(json.dumps({
+        "n_diagnosed": 1,
+        # 只归因了已判分的那条；T0009 无 reward.json ⇒ zero-diag 判 running 并排除
+        "trials": [{"task": "T0008", "trial_dir": "T0008__aaa", "verdict": "solved"}],
+    }), encoding="utf-8")
+
+    orig = rep.RUNS
+    try:
+        rep.RUNS = runs
+
+        # ① 未判分的 trial（reward=None）⇒ ⛔ 不许因此报过期
+        zd = rep.load_zero_diag([FakeTrial("T0008__aaa", 1.0),
+                                 FakeTrial("T0009__j8gdVFH", None)])
+        assert not zd.get("stale"), \
+            f"未判分的 trial 触发了假阳性：{zd.get('stale')}"
+
+        # ② 已判分却未归因 ⇒ 必须报过期（真阳性不能被这次修复弄丢）
+        zd = rep.load_zero_diag([FakeTrial("T0008__aaa", 1.0),
+                                 FakeTrial("T0022__NEW", 0.0)])
+        assert zd["stale"]["unseen_tasks"] == ["T0022"], \
+            f"真过期漏报了：{zd.get('stale')}"
+    finally:
+        rep.RUNS = orig
+
+
+def test_control_group_defers_verdict_until_fully_run(monkeypatch, tmp_path):
+    """🔴 对照组**跑齐才判读**，⛔ 不许用部分样本宣布归因成立。
+
+    2026-09-14 抓到：跑到 1/4 条时就输出「✅ 归因成立」，而那个字符串是报告侧
+    `ctrl_supports` 的判据 ⇒ **一条样本解锁了 §10 最强的结论**
+    （「本批的 pass@1 不是模型解不动，而是题面缺陷叠加轮次上限」）。
+
+    对照组的全部价值在于**能推翻**归因。拿它的第一条就宣布支持，
+    等于把反证做成单向确认 —— 剩下 3 条无论什么结果都不会再改变结论。
+    且 n=4 < 5，预注册纪律写死「只报绝对条数不报比例」。
+    """
+    zd = _load("t7-zero-diag")
+
+    surv = ["T0011", "T0012", "T0018", "T0028", "T0099"]
+    recheck = tmp_path / "recheck"
+    recheck.mkdir()
+    (recheck / "survivors.json").write_text(json.dumps({"survivors": surv}), encoding="utf-8")
+    tasks = tmp_path / "tasks"
+    for t in surv:
+        (tasks / t).mkdir(parents=True)
+        # T0099 题面引用 docs/ ⇒ 属实验组；其余 4 条是对照组
+        (tasks / t / "instruction.md").write_text(
+            "看 docs/x.md" if t == "T0099" else "修一下", encoding="utf-8")
+
+    monkeypatch.setattr(zd, "RECHECK", recheck)
+    monkeypatch.setattr(zd.c, "MVP_TASKS", tasks)
+
+    def rows(*verdicts):
+        return [{"task": t, "verdict": v, "n_write_tool_calls": 1,
+                 "termination": {"subtype": "success"}}
+                for t, v in zip(["T0011", "T0012", "T0018", "T0028"], verdicts)]
+
+    # ① 只跑 1/4 条 ⇒ 判读暂缓，supports 必须为 False
+    c = zd.control_group(rows("true_zero_wrong_fix"))
+    assert c["n_control_done"] == 1 and c["n_control"] == 4
+    assert c["supports"] is False, f"1/4 条就宣布支持归因：{c['reading']}"
+    assert "判读暂缓" in c["reading"], c["reading"]
+
+    # ② 报告侧必须读 supports 字段 —— ⛔ 不许靠 `"成立" in reading` 子串匹配。
+    #    新文案含否定句「不许用部分样本宣布归因**成立**」，子串匹配会读反。
+    assert "成立" in c["reading"], "文案前提变了，这条测试的判据要跟着更新"
+    rep = _load("t7-report")
+    src = Path(rep.__file__).read_text(encoding="utf-8")
+    assert '"成立" in str(ctrl.get("reading"' not in src, "报告侧仍在子串匹配 reading"
+    assert 'ctrl.get("supports")' in src, "报告侧没改读结构化字段"
+
+    # ③ 跑齐 4 条且有条目进入改代码阶段 ⇒ 才允许 supports=True
+    c = zd.control_group(rows("true_zero_wrong_fix", "solved",
+                              "true_zero_wrong_fix", "true_zero_wrong_fix"))
+    assert c["n_control_done"] == 4 and c["supports"] is True, c["reading"]
+
+    # ④ 跑齐但全是「零改动 + 轮次耗尽」⇒ 归因不完整，supports 仍为 False
+    r = rows(*["true_zero_no_attempt"] * 4)
+    for x in r:
+        x["n_write_tool_calls"] = 0
+        x["termination"] = {"subtype": "error_max_turns"}
+    c = zd.control_group(r)
+    assert c["supports"] is False, c["reading"]
+    assert "不完整" in c["reading"], c["reading"]

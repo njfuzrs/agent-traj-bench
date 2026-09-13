@@ -546,7 +546,12 @@ def _zero_diag_section(zd: dict | None) -> list[str]:
     # ⚠️ 结论强度必须跟证据强度对齐：对照组没跑完时只能说「已判的这些条不是能力信号」，
     # ⛔ 不许提前写成「本批的 0% 不是模型能力问题」—— 那是反证做完之后才成立的话。
     ctrl_done = bool(ctrl.get("n_control_done"))
-    ctrl_supports = "成立" in str(ctrl.get("reading", ""))
+    # 🔴 读结构化字段，⛔ 不许 `"成立" in reading` ——
+    # 2026-09-14 实测：判读加了否定句「不许用部分样本宣布归因**成立**」后，
+    # 子串匹配把「判读暂缓」读成了「对照组支持归因」，
+    # 于是 1/4 条样本解锁了 §10 最强的那句结论。
+    # 旧快照没有 supports 字段时**保守取 False**（宁可少下结论）。
+    ctrl_supports = bool(ctrl.get("supports"))
     lines += [
         "",
         f"> 🔴 **{zd.get('conclusion_guard', '')}**",
@@ -641,8 +646,15 @@ def load_zero_diag(trials: list) -> dict | None:
         return None
     zd = json.loads(p.read_text(encoding="utf-8"))
 
-    # 主表这一轮实际用的 trial 目录名
-    now = {t.trial_dir.name for t in trials if getattr(t, "trial_dir", None)}
+    # 主表这一轮实际用的 trial 目录名。
+    #
+    # ⚠️ 只算**已判分**的：`t7-zero-diag.py` 把没有 `verifier/reward.json` 的
+    # 判成 `running` 并**刻意排除**出 `n_diagnosed`。拿全部 trial 去比对，
+    # 一条还没判分的题（本批 T0009）就会让守卫**永久报过期** ——
+    # 重跑 zero-diag 也消不掉，因为它本来就不该归因那条。
+    # 假阳性守卫比没有守卫更糟：它会训练读者忽略这行告警。
+    now = {t.trial_dir.name for t in trials
+           if getattr(t, "trial_dir", None) and isinstance(t.reward, (int, float))}
     # 快照归因过的 trial 目录名
     diagnosed = {r.get("trial_dir") for r in (zd.get("trials") or []) if r.get("trial_dir")}
     unseen = sorted(now - diagnosed)
@@ -652,7 +664,8 @@ def load_zero_diag(trials: list) -> dict | None:
             "n_with_trial": len(now),
             "unseen_trials": unseen,
             "unseen_tasks": sorted({d.split("__")[0] for d in unseen}),
-            "note": "zero-diag.json 未覆盖主表的全部 trial（含补跑换目录的那些），需重跑 t7-zero-diag.py",
+            "note": "zero-diag.json 未覆盖主表的全部**已判分** trial"
+                    "（含补跑换目录的那些），需重跑 t7-zero-diag.py",
         }
     return zd
 
