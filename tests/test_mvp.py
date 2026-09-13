@@ -3065,9 +3065,22 @@ def test_a2_conclusion_distinguishes_missing_key_from_missing_file(tmp_path):
         {t: {"docs": [{"channel": "lake", "file": "d.md", "ref": "docs/d.md"}]}
          for t in ("T0001", "T0002")}), encoding="utf-8")
 
+    # ⚠️ 还要造该批的 run 产物：「是否内联」从 run 的 dataset 题面判定
+    #（⛔ 只造 docs-index 不够 —— 那个文件不随 --runs 变，会让 baseline 批
+    #  也被报成「已内联」，见 _batch_inlines）
+    runs = tmp_path / "t8-rerun"
+    ds = runs / "tasks"
+    (ds / "T0001").mkdir(parents=True)
+    (ds / "T0001" / "instruction.md").write_text(
+        "做点事\n\n## 引用文档原文\n\n```\nx\n```\n", encoding="utf-8")
+    run = runs / "2026-09-14__00-00-00"
+    run.mkdir(parents=True)
+    (run / "config.json").write_text(
+        json.dumps({"datasets": [{"path": str(ds)}]}), encoding="utf-8")
+
     orig = (rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS)
     try:
-        rep.RUNS = tmp_path / "t8-rerun"
+        rep.RUNS = runs
         rep.RECHECK = recheck
         rep.c.MVP_REPORTS = reports
 
@@ -3095,7 +3108,8 @@ def test_a2_conclusion_distinguishes_missing_key_from_missing_file(tmp_path):
         assert "3" in para and "真能力信号" not in para, para[:300]
         assert "拒绝瞎改" in rep._a2_dont_say(zd_some)
 
-        # ④ 没有可内联文档（原 baseline 批）⇒ T6 的原 caveat 必须保持不变
+        # ④ 该批题面没内联（原 baseline 批）⇒ T6 的原 caveat 必须保持不变
+        (ds / "T0001" / "instruction.md").write_text("做点事\n", encoding="utf-8")
         idx_p.write_text(json.dumps({}), encoding="utf-8")
         assert "35/39" in "\n".join(rep._docs_gap_para(zd_zero))
         assert "35/39" in rep._docs_gap_caveat(zd_zero)
@@ -3459,7 +3473,12 @@ def _build_freeze_fixture(dst: Path, *, n_solved_every: int = 3) -> list[str]:
         }), encoding="utf-8")
         (d / "verifier/reward.json").write_text(json.dumps(
             {"reward": rw, "f2p": rw, "p2p": 1.0, "error_code": 0}), encoding="utf-8")
-    (run / "config.json").write_text(json.dumps({"n_concurrent": 6}), encoding="utf-8")
+    # ⚠️ 必须带 datasets：「本批是否内联文档」从 run 的 dataset 题面判定
+    #（见 _batch_inlines）—— 缺了它 §2② / known_caveat 会回落成 baseline 措辞，
+    # 冒烟就测不到本批形态。
+    (run / "config.json").write_text(json.dumps(
+        {"n_concurrent": 6,
+         "datasets": [{"path": str(dst / "reports/t8-rerun/tasks")}]}), encoding="utf-8")
 
     # 题面两份都要：stage 的（含内联段，§2② 判据）+ 原始的（对照组判据）
     for t in surv:
@@ -3817,12 +3836,16 @@ def test_inlined_count_survives_resume_shrinking_stage(tmp_path):
         {t: {"docs": [{"channel": "lake", "file": "d.md", "ref": "docs/d.md"}]}
          for t in surv[:34]}), encoding="utf-8")
 
-    # stage 只剩 2 条（补跑后的形态）
+    # stage 只剩 2 条（补跑后的形态），并造出 run 的 config.json 指向它
     runs = tmp_path / "t8-rerun"
     for t in ("T0009", "T0022"):
         (runs / "tasks" / t).mkdir(parents=True)
         (runs / "tasks" / t / "instruction.md").write_text(
             "x\n\n## 引用文档原文\n", encoding="utf-8")
+    run = runs / "2026-09-14__00-00-00"
+    run.mkdir(parents=True)
+    (run / "config.json").write_text(
+        json.dumps({"datasets": [{"path": str(runs / "tasks")}]}), encoding="utf-8")
 
     orig = (rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS)
     try:
@@ -3843,5 +3866,24 @@ def test_inlined_count_survives_resume_shrinking_stage(tmp_path):
             {t: {"docs": [{"channel": "missing", "file": "d.md"}]} for t in surv}),
             encoding="utf-8")
         assert rep._n_inlined()[0] == 0, "channel 不是 lake/mirror 也算成内联了"
+
+        # ⚠️ 反向：该批题面根本没内联时（baseline 批）⇒ 必须回落成 0，
+        # ⛔ 不许因为 docs-index 存在就报「已内联」。
+        #
+        # 🔴 必须先把 docs-index **恢复成有效的**（上面那段把它改成了
+        # channel="missing"）—— 否则 `_n_inlined()` 会因为「index 里没有
+        # 可内联条目」返回 0，与 `_batch_inlines()` 是否生效**无关**，
+        # 这条反向断言就永远绿。2026-09-14 用变异测试实测撞到：
+        # 把 `_batch_inlines()` 短路成恒真（即旧的错误行为），这条仍 PASS。
+        (reports / "t8-fix/docs-index.json").write_text(json.dumps(
+            {t: {"docs": [{"channel": "lake", "file": "d.md", "ref": "docs/d.md"}]}
+             for t in surv[:34]}), encoding="utf-8")
+        assert rep._n_inlined() == (34, 39), "前提没恢复好，下面的反向断言会失去意义"
+
+        for t in ("T0009", "T0022"):
+            (runs / "tasks" / t / "instruction.md").write_text("x\n", encoding="utf-8")
+        assert rep._batch_inlines() is False, "题面无内联段却判成已内联"
+        assert rep._n_inlined() == (0, 39), \
+            f"该批没内联却报成已内联（跨批次回归）：{rep._n_inlined()}"
     finally:
         rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = orig

@@ -413,26 +413,89 @@ def _fp_section(fp: dict | None) -> list[str]:
     return lines + [""]
 
 
+_INLINE_MARK = "## 引用文档原文"
+
+
+def _dataset_dirs() -> list[Path]:
+    """本批各 run 实际用的题源目录（从 run 的 `config.json` 现读）。
+
+    ⚠️ 这是**批次特异**的：baseline 批指向 `reports/baseline/survivors`，
+    整改后那批指向 `reports/t8-rerun/tasks`。⛔ 不许写死任何一个。
+    """
+    out: list[Path] = []
+    if not RUNS.exists():
+        return out
+    for run in sorted(q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20"):
+        cfg = run / "config.json"
+        if not cfg.exists():
+            continue
+        try:
+            doc = json.loads(cfg.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for ds in doc.get("datasets") or []:
+            d = Path(ds.get("path") or "")
+            if d.is_dir() and d not in out:
+                out.append(d)
+    return out
+
+
+def _batch_inlines() -> bool:
+    """这一批的题面到底有没有内联文档原文 —— 从**该批自己的产物**判定。
+
+    🔴 2026-09-14 自查抓到我引入的回归：内联**条数**改从 `docs-index.json` 取
+    （见 `_n_inlined`）之后，那个文件不随 `--runs` 变 ⇒ `--runs baseline`
+    也会报「34/39 条已内联」，而 baseline 批跑在修复① **之前**，
+    题面实测 **0 条**内联。那份报告会声称与事实完全相反的结论。
+
+    判据两路，任一命中即算内联：
+      ① 该批 run 的 dataset 目录里现存的题面含内联段（便宜、直接）
+      ② 兜底扫 trial 的 agent 日志 —— `--resume` 会把 stage 重建成只剩待跑的
+         几条，万一那几条恰好都不内联，①会误判成「整批没内联」。
+         agent 日志是**每条 trial 各自的**，补跑不动已跑那些。
+    """
+    for d in _dataset_dirs():
+        for ins in sorted(d.glob("*/instruction.md")):
+            if _INLINE_MARK in ins.read_text(encoding="utf-8", errors="replace"):
+                return True
+
+    # ② 兜底：trial 的 agent 日志里找题面回显（逐行扫，命中即停）
+    if RUNS.exists():
+        for run in sorted(q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20"):
+            for jl in sorted(run.glob("T0*/agent/sid-code.jsonl")):
+                try:
+                    with jl.open(encoding="utf-8", errors="replace") as fh:
+                        for line in fh:
+                            if _INLINE_MARK in line:
+                                return True
+                except OSError:
+                    continue
+    return False
+
+
 def _n_inlined() -> tuple[int, int]:
     """本批有多少条题面内联了被点名文档的原文 ⇒ `(内联数, 存活数)`。
 
-    🔴 **判据取 `docs-index.json`，⛔ 不数 `RUNS/tasks` 下的题面。**
+    🔴 两个来源各管一半，⛔ 不许只用其中一个：
 
-    2026-09-14 自查抓到（我引入 §2② 现读时埋的坑）：
-    `t8-rerun.py --resume` 会把 stage **重建成只剩待跑的那几条**
-    （`stage(tasks)` 收的是被 `--resume` 削过的名单）。
-    补跑 T0009 + T0022 之后 stage 只有 2 个目录 ⇒ §2② 会说
-    「本批 **2/2** 条题面内联了文档」，而真实是 34/39。
-    形态是**终版报告带着一个凭空缩小的分母**，且它看着完全正常。
+      - **是否内联** → `_batch_inlines()`，从该批自己的 run 产物判定。
+        只看 `docs-index.json` 会让 baseline 批（跑在修复① 之前、题面 0 条内联）
+        也被报成「34/39 已内联」—— 那个文件不随 `--runs` 变。
+      - **内联条数** → `docs-index.json`（修复① 的输入）。
+        ⛔ 不数 `RUNS/tasks` 下的题面：`t8-rerun.py --resume` 会把 stage
+        **重建成只剩待跑的那几条**，补跑 T0009 + T0022 之后 stage 只有 2 个目录
+        ⇒ 会说「本批 **2/2** 条题面内联」，而真实是 34/39。
+        形态是**终版报告带着一个凭空缩小的分母**，且它看着完全正常。
 
-    `docs-index.json` 是 T8 修复① 的输入（哪条 task 有哪些可内联文档），
-    补跑不动它 —— 且已逐条核对与 stage 实际内联**完全一致**（34/39）。
+    已逐条核对：`docs-index.json` 判定可内联的 34 条与 stage 实际内联的 34 条完全一致。
 
-    ⚠️ 与 `t8-rerun.build_instruction()` 的判据必须同口径：
-    只认 `channel in ("lake", "mirror")` 的条目（那才是真取到了正文）。
+    ⚠️ 与 `t8-rerun.build_instruction()` 同口径：只认 `channel in ("lake", "mirror")`
+    的条目（那才是真取到了正文）。
     """
     surv = json.loads(
         (RECHECK / "survivors.json").read_text(encoding="utf-8"))["survivors"]
+    if not _batch_inlines():
+        return 0, len(surv)
     idx_p = c.MVP_REPORTS / "t8-fix/docs-index.json"
     if not idx_p.exists():
         return 0, len(surv)
