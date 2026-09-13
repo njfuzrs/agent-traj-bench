@@ -413,6 +413,36 @@ def _fp_section(fp: dict | None) -> list[str]:
     return lines + [""]
 
 
+def _n_inlined() -> tuple[int, int]:
+    """本批有多少条题面内联了被点名文档的原文 ⇒ `(内联数, 存活数)`。
+
+    🔴 **判据取 `docs-index.json`，⛔ 不数 `RUNS/tasks` 下的题面。**
+
+    2026-09-14 自查抓到（我引入 §2② 现读时埋的坑）：
+    `t8-rerun.py --resume` 会把 stage **重建成只剩待跑的那几条**
+    （`stage(tasks)` 收的是被 `--resume` 削过的名单）。
+    补跑 T0009 + T0022 之后 stage 只有 2 个目录 ⇒ §2② 会说
+    「本批 **2/2** 条题面内联了文档」，而真实是 34/39。
+    形态是**终版报告带着一个凭空缩小的分母**，且它看着完全正常。
+
+    `docs-index.json` 是 T8 修复① 的输入（哪条 task 有哪些可内联文档），
+    补跑不动它 —— 且已逐条核对与 stage 实际内联**完全一致**（34/39）。
+
+    ⚠️ 与 `t8-rerun.build_instruction()` 的判据必须同口径：
+    只认 `channel in ("lake", "mirror")` 的条目（那才是真取到了正文）。
+    """
+    surv = json.loads(
+        (RECHECK / "survivors.json").read_text(encoding="utf-8"))["survivors"]
+    idx_p = c.MVP_REPORTS / "t8-fix/docs-index.json"
+    if not idx_p.exists():
+        return 0, len(surv)
+    idx = json.loads(idx_p.read_text(encoding="utf-8"))
+    n = sum(1 for t in surv
+            if any(e.get("channel") in ("lake", "mirror")
+                   for e in ((idx.get(t) or {}).get("docs") or [])))
+    return n, len(surv)
+
+
 def _n_no_attempt(zd: dict) -> int:
     """`true_zero_no_attempt` 的条数。**键缺失 ⇒ 0，⛔ 不是「未判定」**。
 
@@ -434,14 +464,7 @@ def _a2_dont_say(zd: dict | None) -> str:
     现在归因实测 `true_zero_no_attempt = 0` ⇒ 它就是能力读数，
     反而「不能再用题面缺信息解释掉」。写死会让 §12 与 §2② 自相矛盾。
     """
-    n_inl = 0
-    stage = RUNS / "tasks"
-    if stage.exists():
-        for d in sorted(stage.iterdir()):
-            ins = d / "instruction.md"
-            if ins.is_file() and "## 引用文档原文" in ins.read_text(
-                    encoding="utf-8", errors="replace"):
-                n_inl += 1
+    n_inl, _ = _n_inlined()
     if not n_inl:
         return "**不能**把 A2 档的低分当模型能力证据"
     if zd is None:                       # ⚠️ 判据是**文件不存在**，⛔ 不是某个键缺失
@@ -459,16 +482,7 @@ def _docs_gap_caveat(zd: dict | None) -> str:
     两处必须同源：markdown 说「已消除」而 summary.json 说「首先是题面缺信息」，
     引用 summary.json 的下游就会拿到与报告相反的结论，且没人会发现。
     """
-    n_inl = n_tasks = 0
-    stage = RUNS / "tasks"
-    if stage.exists():
-        for d in sorted(stage.iterdir()):
-            ins = d / "instruction.md"
-            if not ins.is_file():
-                continue
-            n_tasks += 1
-            if "## 引用文档原文" in ins.read_text(encoding="utf-8", errors="replace"):
-                n_inl += 1
+    n_inl, n_tasks = _n_inlined()
     if not n_inl:
         return "35/39 题面点名容器内不存在的 docs/ —— A2 档低分首先是题面缺信息"
     if zd is None:                       # ⚠️ 只有**文件不存在**才算未判定
@@ -496,16 +510,7 @@ def _docs_gap_para(zd: dict | None) -> list[str]:
     那会把一个真实的能力读数解释掉。
     """
     # 本批题面是否内联了文档原文（stage 出来的题面现读，⛔ 不写死）
-    n_inl = n_tasks = 0
-    stage = RUNS / "tasks"
-    if stage.exists():
-        for d in sorted(stage.iterdir()):
-            ins = d / "instruction.md"
-            if not ins.is_file():
-                continue
-            n_tasks += 1
-            if "## 引用文档原文" in ins.read_text(encoding="utf-8", errors="replace"):
-                n_inl += 1
+    n_inl, n_tasks = _n_inlined()
 
     if not n_inl:
         # 未内联（原 baseline 批）：T6 的核心发现仍然成立

@@ -3051,17 +3051,25 @@ def test_a2_conclusion_distinguishes_missing_key_from_missing_file(tmp_path):
     """
     rep = _load("t7-report")
 
-    runs = tmp_path / "t8-rerun"
-    stage = runs / "tasks"
-    for t in ("T0001", "T0002"):
-        (stage / t).mkdir(parents=True)
-        # 题面带内联文档段 ⇒ 走「修复①已生效」那一支
-        (stage / t / "instruction.md").write_text(
-            "做点事\n\n---\n\n## 引用文档原文\n\n```\nx\n```\n", encoding="utf-8")
+    # ⚠️ 内联条数的判据是 `docs-index.json`（⛔ 不是扫 stage 题面）——
+    # 补跑会把 stage 重建成只剩待跑的子集，见 _n_inlined 的 docstring。
+    recheck = tmp_path / "t6-recheck"
+    recheck.mkdir(parents=True)
+    (recheck / "survivors.json").write_text(
+        json.dumps({"survivors": ["T0001", "T0002"]}), encoding="utf-8")
+    reports = tmp_path / "reports"
+    (reports / "t8-fix").mkdir(parents=True)
+    idx_p = reports / "t8-fix/docs-index.json"
+    # 两条都有可内联文档 ⇒ 走「修复①已生效」那一支
+    idx_p.write_text(json.dumps(
+        {t: {"docs": [{"channel": "lake", "file": "d.md", "ref": "docs/d.md"}]}
+         for t in ("T0001", "T0002")}), encoding="utf-8")
 
-    orig = rep.RUNS
+    orig = (rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS)
     try:
-        rep.RUNS = runs
+        rep.RUNS = tmp_path / "t8-rerun"
+        rep.RECHECK = recheck
+        rep.c.MVP_REPORTS = reports
 
         # ① 归因做过、该项恰好 0 条（键不存在）⇒ 必须读成「真能力信号」
         zd_zero = {"n_diagnosed": 9, "verdicts": {"true_zero_wrong_fix": 7, "solved": 2}}
@@ -3087,14 +3095,13 @@ def test_a2_conclusion_distinguishes_missing_key_from_missing_file(tmp_path):
         assert "3" in para and "真能力信号" not in para, para[:300]
         assert "拒绝瞎改" in rep._a2_dont_say(zd_some)
 
-        # ④ 题面未内联（原 baseline 批）⇒ T6 的原 caveat 必须保持不变
-        for t in ("T0001", "T0002"):
-            (stage / t / "instruction.md").write_text("做点事\n", encoding="utf-8")
+        # ④ 没有可内联文档（原 baseline 批）⇒ T6 的原 caveat 必须保持不变
+        idx_p.write_text(json.dumps({}), encoding="utf-8")
         assert "35/39" in "\n".join(rep._docs_gap_para(zd_zero))
         assert "35/39" in rep._docs_gap_caveat(zd_zero)
         assert rep._a2_dont_say(zd_zero) == "**不能**把 A2 档的低分当模型能力证据"
     finally:
-        rep.RUNS = orig
+        rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = orig
 
 
 def _mk_summarize_trial(out, run, task, reward, cost=0.5):
@@ -3425,6 +3432,12 @@ def _build_freeze_fixture(dst: Path, *, n_solved_every: int = 3) -> list[str]:
             (dst / rel).parent.mkdir(parents=True, exist_ok=True)
             (dst / rel).write_bytes((real / rel).read_bytes())
     shutil.copytree(real / "reports/t6-recheck", dst / "reports/t6-recheck")
+    # ⚠️ 内联条数的判据是 `reports/t8-fix/docs-index.json`（见 _n_inlined）——
+    # 不复制它，§2② / known_caveat 会回落成 baseline 措辞，冒烟就测不到本批形态。
+    idx = real / "reports/t8-fix/docs-index.json"
+    if idx.exists():
+        (dst / "reports/t8-fix").mkdir(parents=True, exist_ok=True)
+        (dst / "reports/t8-fix/docs-index.json").write_bytes(idx.read_bytes())
 
     surv = json.loads(
         (real / "reports/t6-recheck/survivors.json").read_text(encoding="utf-8"))["survivors"]
@@ -3775,3 +3788,60 @@ def test_reproduce_command_and_denominator_follow_actual_batch(tmp_path):
     text = md.read_text(encoding="utf-8")
     assert "t7-report.py --runs t8-rerun" in text, "报告里的复算命令没带 --runs"
     assert "reports/t8-rerun/summary.json" in text, "报告里的取数源没指向本批"
+
+
+def test_inlined_count_survives_resume_shrinking_stage(tmp_path):
+    """🔴 内联条数不许随 `--resume` 缩小的 stage 一起缩水。
+
+    2026-09-14 自查抓到（我引入 §2② 现读时埋的坑，⛔ 不是原有缺陷）：
+    `t8-rerun.py --resume` 把 stage **重建成只剩待跑的那几条**
+    （`stage(tasks)` 收的是被 --resume 削过的名单）。补跑 T0009 + T0022 之后
+    stage 只有 2 个目录 ⇒ §2② 会说「本批 **2/2** 条题面内联了文档」，
+    而真实是 34/39。终版报告就会带着一个**凭空缩小的分母**，且它看着完全正常。
+
+    所以判据取 `docs-index.json`（修复① 的输入，补跑不动它），
+    已逐条核对与 stage 实际内联完全一致。
+    """
+    rep = _load("t7-report")
+
+    recheck = tmp_path / "t6-recheck"
+    recheck.mkdir(parents=True)
+    surv = [f"T{i:04d}" for i in range(1, 40)]          # 39 条存活
+    (recheck / "survivors.json").write_text(
+        json.dumps({"survivors": surv}), encoding="utf-8")
+
+    reports = tmp_path / "reports"
+    (reports / "t8-fix").mkdir(parents=True)
+    # 34 条有可内联文档
+    (reports / "t8-fix/docs-index.json").write_text(json.dumps(
+        {t: {"docs": [{"channel": "lake", "file": "d.md", "ref": "docs/d.md"}]}
+         for t in surv[:34]}), encoding="utf-8")
+
+    # stage 只剩 2 条（补跑后的形态）
+    runs = tmp_path / "t8-rerun"
+    for t in ("T0009", "T0022"):
+        (runs / "tasks" / t).mkdir(parents=True)
+        (runs / "tasks" / t / "instruction.md").write_text(
+            "x\n\n## 引用文档原文\n", encoding="utf-8")
+
+    orig = (rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS)
+    try:
+        rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = runs, recheck, reports
+
+        n_inl, n_tasks = rep._n_inlined()
+        assert (n_inl, n_tasks) == (34, 39), \
+            f"内联条数随 stage 缩水了：{n_inl}/{n_tasks}（应为 34/39）"
+
+        zd = {"verdicts": {"solved": 10}}
+        para = "\n".join(rep._docs_gap_para(zd))
+        assert "34/39" in para, f"§2② 分母缩水：\n{para[:300]}"
+        assert "2/2" not in para, f"§2② 用了 stage 的条数：\n{para[:300]}"
+        assert "34/39" in rep._docs_gap_caveat(zd), rep._docs_gap_caveat(zd)
+
+        # 判据必须与 t8-rerun.build_instruction 同口径：只认 lake / mirror
+        (reports / "t8-fix/docs-index.json").write_text(json.dumps(
+            {t: {"docs": [{"channel": "missing", "file": "d.md"}]} for t in surv}),
+            encoding="utf-8")
+        assert rep._n_inlined()[0] == 0, "channel 不是 lake/mirror 也算成内联了"
+    finally:
+        rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = orig
