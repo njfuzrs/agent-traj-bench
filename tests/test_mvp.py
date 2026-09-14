@@ -4122,3 +4122,43 @@ def test_guard_text_counts_add_up_to_n_done(tmp_path):
     # 两类假 0 都为 0 时不许出现在句子里（否则读者以为发生过）
     g2 = zd._guard_text(Counter({"solved": 10, "true_zero_wrong_fix": 5}), 15)
     assert "上游断连" not in g2 and "agent 未启动" not in g2, g2
+
+
+def test_guard_blockquote_does_not_double_wrap_bold(tmp_path):
+    """🔴 §10 的 guard 引用块⛔ 不许再套一层 `**`。
+
+    guard 文案**自己带**加粗标记（「**假 0**」「**真 0**」…）。外面再包一对，
+    markdown 的强调配对就会错位：渲染出来是「假 0」那几个字变回正常体、
+    而周围本该正常的文字变粗 —— 形态**只在渲染后才看得见**，读源码时一切正常。
+
+    2026-09-14 抓到：新增 `infra_agent_not_launched` 让 guard 里的 `**`
+    个数由偶数变奇数，把后半段整句都染粗了。判据用「`**` 必须成对」，
+    ⛔ 不是「字符串里不许有 `**`」（guard 本来就该有）。
+    """
+    rep = _load("t7-report")
+    orig = rep.RUNS
+    try:
+        rep.RUNS = tmp_path / "t8-rerun"
+        guard = ("已判 39 条：…。🔴 那 1 条是**假 0**：…⇒ **不是**能力信号。"
+                 "✅ 能力信号共 23 条。")
+        zd = {"n_diagnosed": 39, "max_turns": 120,
+              "verdicts": {"solved": 14, "true_zero_wrong_fix": 18,
+                           "true_zero_missing_symbol": 5,
+                           "infra_upstream_disconnect": 1,
+                           "infra_agent_not_launched": 1},
+              "conclusion_guard": guard, "control_group": {}}
+        line = next(l for l in rep._zero_diag_section(zd, 0.378)
+                    if l.startswith("> 🔴") and "已判 39 条" in l)
+        # 🔴 判据是**逐字插入、外面不许多包一对 `**`**。
+        #
+        # ⛔ 别用「`**` 个数是偶数」当判据（我第一版就这么写，变异验证时它
+        # 绿着放过了 bug）：guard 自带偶数个 `**`，外面再包一对仍是偶数 ——
+        # **奇偶校验对这个缺陷完全不敏感**。真实损坏是**配对错位**：
+        # `**已判…是**假 0**…**` 里，`**已判…是**` 先配成一对，
+        # 于是「假 0」反而掉出加粗、后面整段被染粗。
+        # 同「判据必须与信号耦合」那条纪律：能过的判据 ≠ 正确的判据。
+        assert line == "> 🔴 " + guard, (
+            "guard 不是逐字插入（多包了一层 `**` 或被改写）⇒ 渲染后加粗范围错位：\n"
+            f"  实际：{line[:140]}\n  期望：{'> 🔴 ' + guard[:120]}")
+    finally:
+        rep.RUNS = orig

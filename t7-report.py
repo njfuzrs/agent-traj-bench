@@ -784,7 +784,13 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
     ctrl_supports = bool(ctrl.get("supports"))
     lines += [
         "",
-        f"> 🔴 **{zd.get('conclusion_guard', '')}**",
+        # ⛔ 不许再套一层 `**` —— guard 文案**自己带**加粗标记（「**假 0**」
+        # 「**真 0**」…），外面再包一对会让 markdown 的强调配对错位：
+        # 渲染出来是「假 0」那几个字变回正常体、而周围本该正常的文字变粗。
+        # 形态是**只在渲染后才看得见**，读源码时一切正常。
+        # 2026-09-14 抓到（新增 infra_agent_not_launched 使 guard 里的 `**`
+        # 由偶数变奇数，把后半段整句都染粗了）。
+        f"> 🔴 {zd.get('conclusion_guard', '')}",
         "",
     ]
     if ctrl_done and ctrl_supports:
