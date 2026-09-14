@@ -1,0 +1,306 @@
+{
+ "T0002": {
+  "n_syms": 3,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0003": {
+  "n_syms": 6,
+  "n_missing": 2,
+  "missing": [
+   "_resetIDEContextDeltaForTesting",
+   "drainIDEContextDelta"
+  ]
+ },
+ "T0007": {
+  "n_syms": 7,
+  "n_missing": 1,
+  "missing": [
+   "normalizeStrictNulls"
+  ]
+ },
+ "T0008": {
+  "n_syms": 3,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0009": {
+  "n_syms": 10,
+  "n_missing": 2,
+  "missing": [
+   "OPENAI_TOOL_ERROR_PREFIX",
+   "serializeToolResultContentForOpenAI"
+  ]
+ },
+ "T0010": {
+  "n_syms": 13,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0011": {
+  "n_syms": 1,
+  "n_missing": 1,
+  "missing": [
+   "patchSettingsFile"
+  ]
+ },
+ "T0012": {
+  "n_syms": 2,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0013": {
+  "n_syms": 1,
+  "n_missing": 1,
+  "missing": [
+   "NeedsAuthorizationError"
+  ]
+ },
+ "T0014": {
+  "n_syms": 7,
+  "n_missing": 1,
+  "missing": [
+   "isPythonFile"
+  ]
+ },
+ "T0018": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0020": {
+  "n_syms": 4,
+  "n_missing": 4,
+  "missing": [
+   "AskUserQuestionTool",
+   "askUserQuestion",
+   "hasAskUserQuestionHandler",
+   "setAskUserQuestionHandler"
+  ]
+ },
+ "T0022": {
+  "n_syms": 14,
+  "n_missing": 11,
+  "missing": [
+   "PathRuleContext",
+   "__resetModePolicy",
+   "extractLegacyPrefix",
+   "hasWildcards",
+   "isBypassDisabledByPolicy",
+   "isModeDisabledByPolicy",
+   "matchPathRule",
+   "matchShellRulePattern",
+   "matchWildcardPattern",
+   "resolvePathRulePattern",
+   "setModePolicy"
+  ]
+ },
+ "T0024": {
+  "n_syms": 23,
+  "n_missing": 14,
+  "missing": [
+   "CONTENT_TRACING_FLAG",
+   "MAX_CONTENT_BYTES",
+   "ReplayProvider",
+   "ReplayTurn",
+   "addRequestContent",
+   "addResponseContent",
+   "addToolContent",
+   "blocksToStreamEvents",
+   "clearContentTracingState",
+   "createReplayProvider",
+   "getSeenHashCount",
+   "isContentTracingEnabled",
+   "parseRawJsonl",
+   "truncateToBytes"
+  ]
+ },
+ "T0026": {
+  "n_syms": 5,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0028": {
+  "n_syms": 1,
+  "n_missing": 1,
+  "missing": [
+   "detectTruncation"
+  ]
+ },
+ "T0029": {
+  "n_syms": 3,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0031": {
+  "n_syms": 9,
+  "n_missing": 9,
+  "missing": [
+   "AutoThresholdInput",
+   "SearchableTool",
+   "checkAutoThreshold",
+   "compileTermPatterns",
+   "parseToolName",
+   "parseToolSearchConfig",
+   "parseToolSearchEnv",
+   "resolveToolSearchEnabled",
+   "searchToolsWithScoring"
+  ]
+ },
+ "T0033": {
+  "n_syms": 4,
+  "n_missing": 2,
+  "missing": [
+   "aggregateProviderHealth",
+   "aggregateProviderStats"
+  ]
+ },
+ "T0034": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0036": {
+  "n_syms": 3,
+  "n_missing": 2,
+  "missing": [
+   "NOTIFICATION_ERROR_MAX_CHARS",
+   "NOTIFICATION_OUTPUT_MAX_CHARS"
+  ]
+ },
+ "T0038": {
+  "n_syms": 7,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0039": {
+  "n_syms": 13,
+  "n_missing": 8,
+  "missing": [
+   "claimNextUnblockedTask",
+   "hasUnfinishedTasks",
+   "loadTeamTasks",
+   "persistTeamTasks",
+   "reconstructSidechainMessages",
+   "restoreStructuredTasks",
+   "serializeStructuredTasks",
+   "teamTasksPath"
+  ]
+ },
+ "T0040": {
+  "n_syms": 1,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0042": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0045": {
+  "n_syms": 2,
+  "n_missing": 1,
+  "missing": [
+   "detectDangerousSed"
+  ]
+ },
+ "T0047": {
+  "n_syms": 16,
+  "n_missing": 16,
+  "missing": [
+   "checkInjectionPatterns",
+   "extractQuotedContent",
+   "validateBackslashEscapedOperators",
+   "validateBraceExpansion",
+   "validateCarriageReturn",
+   "validateCommentQuoteDesync",
+   "validateControlCharacters",
+   "validateIFSInjection",
+   "validateMidWordHash",
+   "validateNewlines",
+   "validateObfuscatedFlags",
+   "validateProcEnvironAccess",
+   "validateProcessSubstitution",
+   "validateQuotedNewline",
+   "validateUnicodeWhitespace",
+   "validateZshDangerousCommands"
+  ]
+ },
+ "T0049": {
+  "n_syms": 3,
+  "n_missing": 1,
+  "missing": [
+   "toLegacyTool"
+  ]
+ },
+ "T0050": {
+  "n_syms": 6,
+  "n_missing": 2,
+  "missing": [
+   "STATEFUL_TOOL_NAMES",
+   "createStatefulTools"
+  ]
+ },
+ "T0051": {
+  "n_syms": 8,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0052": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0054": {
+  "n_syms": 1,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0055": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0056": {
+  "n_syms": 4,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0059": {
+  "n_syms": 4,
+  "n_missing": 1,
+  "missing": [
+   "getBuiltInAgentDefinitions"
+  ]
+ },
+ "T0062": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0063": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ },
+ "T0064": {
+  "n_syms": 14,
+  "n_missing": 9,
+  "missing": [
+   "SKILL_TOOL_NAME",
+   "SkillActivationCoordinator",
+   "SkillMetaTool",
+   "authorizeSkill",
+   "getPluginSkills",
+   "normalizeSkillEffort",
+   "registerSkillLifecycleHooks",
+   "resolveSkillAgentType",
+   "resolveSkillAsk"
+  ]
+ },
+ "T0065": {
+  "n_syms": 0,
+  "n_missing": 0,
+  "missing": []
+ }
+}

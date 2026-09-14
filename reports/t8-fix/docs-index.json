@@ -1,0 +1,479 @@
+{
+  "T0002": {
+    "source_unit_id": "0bfbfc8e-ac98-4d58-b623-758d3c196ae4",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260807-遥测落盘恒空-配置undefined覆盖默认值.md",
+        "channel": "lake",
+        "file": "T0002__ca008542.md",
+        "bytes": 6977,
+        "sha256": "5638024666cf9cd0"
+      }
+    ]
+  },
+  "T0003": {
+    "source_unit_id": "0cec5e10-d141-4120-adc0-c38b60df33fb",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/上下文注入作用域审计-发现清单.md",
+        "channel": "lake",
+        "file": "T0003__69f623b0.md",
+        "bytes": 54007,
+        "sha256": "6f9ed58ab2b42701"
+      }
+    ]
+  },
+  "T0007": {
+    "source_unit_id": "15e9d5dc-25fa-48a8-beff-9ec28ba22596",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/_template/gpt参数校验失败.txt",
+        "channel": "lake",
+        "file": "T0007__961aa74e.md",
+        "bytes": 5161,
+        "sha256": "d4187a9bf145a999"
+      }
+    ]
+  },
+  "T0008": {
+    "source_unit_id": "18c3d2b0-e756-43db-a934-c205beddff85",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/08-Hook系统-对齐claude-code-缺口修复方案.md",
+        "channel": "lake",
+        "file": "T0008__7665d194.md",
+        "bytes": 33403,
+        "sha256": "efc71b6ccaef0557"
+      }
+    ]
+  },
+  "T0009": {
+    "source_unit_id": "22b844ee-d1ea-43d1-89e9-c271154d6a5b",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/上下文注入作用域审计-发现清单.md",
+        "channel": "mirror",
+        "file": "T0009__69f623b0.md",
+        "bytes": 130285,
+        "sha256": "8f1338aca2328444"
+      }
+    ]
+  },
+  "T0010": {
+    "source_unit_id": "2701a72b-dc88-4a19-b5aa-6b9a6be2cd4e",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260803-单测污染用户遥测数据-隔离缺口根治方案.md",
+        "channel": "lake",
+        "file": "T0010__55b99658.md",
+        "bytes": 29589,
+        "sha256": "013236fc36c11c21"
+      }
+    ]
+  },
+  "T0011": {
+    "source_unit_id": "2a0247d1-ff27-4a3b-befc-d321077d7737",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/.sid-code/settings.json",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0012": {
+    "source_unit_id": "2b7c5bb4-3598-4471-9a5f-86b68664c5bd",
+    "docs": []
+  },
+  "T0013": {
+    "source_unit_id": "2db6858d-dafd-476a-b595-e504e44b6de7",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+        "channel": "lake",
+        "file": "T0013__1348bcff.md",
+        "bytes": 53635,
+        "sha256": "35562ade5900ed97"
+      },
+      {
+        "ref": "/Users/<USER>/Code/person/claude-code/src",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0014": {
+    "source_unit_id": "307d7cc7-c699-459a-956f-350b8a1d6d86",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/约束型误伤机制排查清单.md",
+        "channel": "mirror",
+        "file": "T0014__ad36f6a1.md",
+        "bytes": 30540,
+        "sha256": "7c54e052324d1df0"
+      }
+    ]
+  },
+  "T0018": {
+    "source_unit_id": "4b479469-4287-4b75-9c2a-188eba2d41a7",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/claude-code/src",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0020": {
+    "source_unit_id": "59bfa75f-70c1-4884-a0ea-37c8d42d80d6",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+        "channel": "lake",
+        "file": "T0020__1348bcff.md",
+        "bytes": 53635,
+        "sha256": "35562ade5900ed97"
+      },
+      {
+        "ref": "/Users/<USER>/Code/person/claude-code/src",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0022": {
+    "source_unit_id": "5df08a96-62a0-441c-9a62-13475aba465c",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/07-权限系统-对齐claude-code-缺口修复方案.md",
+        "channel": "lake",
+        "file": "T0022__79c610ac.md",
+        "bytes": 31908,
+        "sha256": "8044107f0923b860"
+      }
+    ]
+  },
+  "T0024": {
+    "source_unit_id": "6f7d912b-8fe5-4f5a-a0b3-b0b8843ec624",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260805-可观测性缺陷清单-埋点接线与OTLP出口.md",
+        "channel": "mirror",
+        "file": "T0024__234344a0.md",
+        "bytes": 59873,
+        "sha256": "ce1b9ffacf0f48c6"
+      },
+      {
+        "ref": "/Users/<USER>/Code/person/claude-code/src",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0026": {
+    "source_unit_id": "7276a2cc-cdec-4485-8a7b-86cd67bd2de0",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/可选优化/G7-G9-G10单元测试补全.md",
+        "channel": "lake",
+        "file": "T0026__981c2a50.md",
+        "bytes": 6829,
+        "sha256": "8dd5af3d55eb9247"
+      }
+    ]
+  },
+  "T0028": {
+    "source_unit_id": "81d030c9-1b26-46af-a09f-d4cb6b68c18f",
+    "docs": []
+  },
+  "T0029": {
+    "source_unit_id": "867bd2d3-de5b-49a0-9599-a464d24b4347",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/Token与费用统计-客观性审计与修复方案.md",
+        "channel": "lake",
+        "file": "T0029__5ada1fb0.md",
+        "bytes": 18580,
+        "sha256": "e6f88a6edfe1dd9d"
+      }
+    ]
+  },
+  "T0031": {
+    "source_unit_id": "86eddd3a-8621-4ba5-a2d1-f008e4c7297d",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+        "channel": "lake",
+        "file": "T0031__1348bcff.md",
+        "bytes": 53635,
+        "sha256": "35562ade5900ed97"
+      }
+    ]
+  },
+  "T0033": {
+    "source_unit_id": "929e62ef-cab5-45ce-a37d-de7eeaa31d0a",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/provider-optimization-roadmap.md",
+        "channel": "lake",
+        "file": "T0033__7afbe230.md",
+        "bytes": 9035,
+        "sha256": "6a3e45771563d7ff"
+      }
+    ]
+  },
+  "T0034": {
+    "source_unit_id": "93c4aa03-e2e8-4e12-8958-f825e41cf444",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/Dynamic Workflows",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0036": {
+    "source_unit_id": "9d69d342-3c14-474b-aded-bbecfd682cab",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/_template/tui.txt",
+        "channel": "lake",
+        "file": "T0036__c9876472.md",
+        "bytes": 36608,
+        "sha256": "66503259d9fb1939"
+      }
+    ]
+  },
+  "T0038": {
+    "source_unit_id": "a4fe9b4e-cdd2-4da4-a169-f4930bbb5282",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/重复注入根因-system附件与user-reminder双通道.md",
+        "channel": "lake",
+        "file": "T0038__6a1dcb1e.md",
+        "bytes": 62347,
+        "sha256": "af22ba4bfe7c36c4"
+      }
+    ]
+  },
+  "T0039": {
+    "source_unit_id": "a5735a7d-e621-410d-991b-0062e6054226",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/11-子代理系统-对齐claude-code-缺口修复方案.md",
+        "channel": "lake",
+        "file": "T0039__98d59d05.md",
+        "bytes": 35188,
+        "sha256": "753ce2dcd67712f2"
+      }
+    ]
+  },
+  "T0040": {
+    "source_unit_id": "a6cb5ed8-1889-4720-9caf-2a106f5010ce",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/Anthropic代理流式挂死-三层超时失效根因分析.md",
+        "channel": "mirror",
+        "file": "T0040__ec6db00f.md",
+        "bytes": 10073,
+        "sha256": "02af0ecefc6f1193"
+      }
+    ]
+  },
+  "T0042": {
+    "source_unit_id": "ab358ff5-e15f-4c32-a528-5f517d4c6887",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/_template/评估hypothesis_challenge的真实的作用到底有多大到底有没有用.txt",
+        "channel": "lake",
+        "file": "T0042__a1b7bf6f.md",
+        "bytes": 49511,
+        "sha256": "5f7f1255eda2f01e"
+      }
+    ]
+  },
+  "T0045": {
+    "source_unit_id": "b78ff72c-309a-41f2-a25f-9682e2d18b52",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md",
+        "channel": "lake",
+        "file": "T0045__1b7e4f91.md",
+        "bytes": 31120,
+        "sha256": "e58f3370adc38dff"
+      }
+    ]
+  },
+  "T0047": {
+    "source_unit_id": "b9e05955-096f-4520-aefb-b199f390f410",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-模块级对标分析.md",
+        "channel": "lake",
+        "file": "T0047__1348bcff.md",
+        "bytes": 53635,
+        "sha256": "35562ade5900ed97"
+      },
+      {
+        "ref": "/Users/<USER>/Code/person/claude-code/src",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0049": {
+    "source_unit_id": "bd969d9a-be0d-4877-8ce8-af410e50dcec",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/claude-code-vs-sid-code-第二轮差距分析.md",
+        "channel": "lake",
+        "file": "T0049__1b7e4f91.md",
+        "bytes": 31120,
+        "sha256": "e58f3370adc38dff"
+      }
+    ]
+  },
+  "T0050": {
+    "source_unit_id": "be4c5624-e4ec-4aee-941f-b7a059d16562",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/子代理委托机制-现状对照与缺口修复方案.md",
+        "channel": "mirror",
+        "file": "T0050__2fdb88ca.md",
+        "bytes": 25423,
+        "sha256": "bcb98bb3b174368f"
+      }
+    ]
+  },
+  "T0051": {
+    "source_unit_id": "c1096559-a66b-4d9e-9cb2-1f78b2ae3c1d",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/系统级查漏补缺方案.md",
+        "channel": "lake",
+        "file": "T0051__0650dae1.md",
+        "bytes": 13765,
+        "sha256": "81744dc8e263ea47"
+      },
+      {
+        "ref": "/Users/<USER>/.sid-code/trajectories",
+        "channel": "skip-not-a-doc"
+      }
+    ]
+  },
+  "T0052": {
+    "source_unit_id": "c312a069-57e5-412c-89cc-b903118a4626",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md",
+        "channel": "lake",
+        "file": "T0052__acb0fd22.md",
+        "bytes": 28630,
+        "sha256": "518a713beb69d239"
+      }
+    ]
+  },
+  "T0054": {
+    "source_unit_id": "ced0c251-54e6-4e4d-ac10-4292d9000d29",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/_template/language命令缺少选项.txt",
+        "channel": "lake",
+        "file": "T0054__f40a0d6c.md",
+        "bytes": 4158,
+        "sha256": "390492eca2cd9291"
+      }
+    ]
+  },
+  "T0055": {
+    "source_unit_id": "ced42578-72ff-448d-bc4d-b2623a307d81",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/goal执行过程问题排查-glm5.2会话20260707.md",
+        "channel": "lake",
+        "file": "T0055__acb0fd22.md",
+        "bytes": 25653,
+        "sha256": "6729a61841c53079"
+      }
+    ]
+  },
+  "T0056": {
+    "source_unit_id": "d361ff3f-de08-40ac-9214-33b39bbb34ec",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/20260808-Prompt-Cache-闭环-实测提升命中率与度量根治.md",
+        "channel": "lake",
+        "file": "T0056__296a3908.md",
+        "bytes": 45213,
+        "sha256": "566ed9b61859817f"
+      },
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/cache-bench-20260808.md",
+        "channel": "lake",
+        "file": "T0056__69748b7c.md",
+        "bytes": 7154,
+        "sha256": "7dc4a6ac3823dbc5"
+      },
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/prefix-break-分布-20260808.md",
+        "channel": "lake",
+        "file": "T0056__006f4562.md",
+        "bytes": 8840,
+        "sha256": "fd96a3066dc6106d"
+      }
+    ]
+  },
+  "T0059": {
+    "source_unit_id": "d6895607-d792-4657-91a3-23d514ec2df5",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/harness-llm-可见性缺口-6项缺口改造方案.md",
+        "channel": "lake",
+        "file": "T0059__c31d5419.md",
+        "bytes": 30184,
+        "sha256": "bbf844f61293706a"
+      }
+    ]
+  },
+  "T0062": {
+    "source_unit_id": "e47f283e-fd2d-4713-a070-dae6fd824202",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/05-CLI命令与参数-对齐claude-code-缺口实施方案.md",
+        "channel": "mirror",
+        "file": "T0062__af549ba8.md",
+        "bytes": 35642,
+        "sha256": "8beb38fc77d5c3cb"
+      }
+    ]
+  },
+  "T0063": {
+    "source_unit_id": "e92e1d48-be4f-4765-bdce-f1d17647fbe3",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/_template/好端端执行任务报错弹窗不显示.txt",
+        "channel": "lake",
+        "file": "T0063__8bc58b5b.md",
+        "bytes": 32695,
+        "sha256": "e6e5b5e167cec585"
+      }
+    ]
+  },
+  "T0064": {
+    "source_unit_id": "ea287781-779e-45ec-b1b5-c29ec5445dff",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/对齐claude-code-缺口修复方案/18-Skills系统-对齐claude-code-缺口修复方案.md",
+        "channel": "lake",
+        "file": "T0064__50dd2a26.md",
+        "bytes": 35369,
+        "sha256": "12cb177d9e53131a"
+      }
+    ]
+  },
+  "T0065": {
+    "source_unit_id": "ec36214a-ad30-45ef-922d-3dc205936fa8",
+    "docs": [
+      {
+        "ref": "/Users/<USER>/Code/person/sid-code/docs/bugfixes/todo/builtin-skill附属文件不释放+delegate读不到references-排查与方案.md",
+        "channel": "lake",
+        "file": "T0065__8c457102.md",
+        "bytes": 13132,
+        "sha256": "224f9ce63a51dcba"
+      }
+    ]
+  }
+}

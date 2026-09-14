@@ -1,0 +1,334 @@
+{
+ "T0002": {
+  "n_missing_import": 0,
+  "n_missing_method": 1,
+  "missing": [
+   "getConfigSnapshot"
+  ]
+ },
+ "T0003": {
+  "n_missing_import": 2,
+  "n_missing_method": 0,
+  "missing": [
+   "_resetIDEContextDeltaForTesting",
+   "drainIDEContextDelta"
+  ]
+ },
+ "T0007": {
+  "n_missing_import": 1,
+  "n_missing_method": 1,
+  "missing": [
+   "normalizeStrictNulls",
+   "getKnownModelNames"
+  ]
+ },
+ "T0008": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0009": {
+  "n_missing_import": 2,
+  "n_missing_method": 0,
+  "missing": [
+   "OPENAI_TOOL_ERROR_PREFIX",
+   "serializeToolResultContentForOpenAI"
+  ]
+ },
+ "T0010": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0011": {
+  "n_missing_import": 1,
+  "n_missing_method": 0,
+  "missing": [
+   "patchSettingsFile"
+  ]
+ },
+ "T0012": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0013": {
+  "n_missing_import": 1,
+  "n_missing_method": 9,
+  "missing": [
+   "NeedsAuthorizationError",
+   "clearOAuthEntry",
+   "getOAuthEntry",
+   "hasDiscoveryButNoToken",
+   "saveClientInformation",
+   "saveDiscoveryState",
+   "saveTokens",
+   "updateOAuthEntry",
+   "waitForCode",
+   "writeHead"
+  ]
+ },
+ "T0014": {
+  "n_missing_import": 1,
+  "n_missing_method": 0,
+  "missing": [
+   "isPythonFile"
+  ]
+ },
+ "T0018": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0020": {
+  "n_missing_import": 4,
+  "n_missing_method": 0,
+  "missing": [
+   "AskUserQuestionTool",
+   "askUserQuestion",
+   "hasAskUserQuestionHandler",
+   "setAskUserQuestionHandler"
+  ]
+ },
+ "T0022": {
+  "n_missing_import": 11,
+  "n_missing_method": 1,
+  "missing": [
+   "PathRuleContext",
+   "__resetModePolicy",
+   "extractLegacyPrefix",
+   "hasWildcards",
+   "isBypassDisabledByPolicy",
+   "isModeDisabledByPolicy",
+   "matchPathRule",
+   "matchShellRulePattern",
+   "matchWildcardPattern",
+   "resolvePathRulePattern",
+   "setModePolicy",
+   "setFlagRules"
+  ]
+ },
+ "T0024": {
+  "n_missing_import": 14,
+  "n_missing_method": 3,
+  "missing": [
+   "CONTENT_TRACING_FLAG",
+   "MAX_CONTENT_BYTES",
+   "ReplayProvider",
+   "ReplayTurn",
+   "addRequestContent",
+   "addResponseContent",
+   "addToolContent",
+   "blocksToStreamEvents",
+   "clearContentTracingState",
+   "createReplayProvider",
+   "getSeenHashCount",
+   "isContentTracingEnabled",
+   "parseRawJsonl",
+   "truncateToBytes",
+   "getReceivedParams",
+   "getReplayedCount",
+   "getTotalTurns"
+  ]
+ },
+ "T0026": {
+  "n_missing_import": 0,
+  "n_missing_method": 1,
+  "missing": [
+   "skipIf"
+  ]
+ },
+ "T0028": {
+  "n_missing_import": 1,
+  "n_missing_method": 0,
+  "missing": [
+   "detectTruncation"
+  ]
+ },
+ "T0029": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0031": {
+  "n_missing_import": 9,
+  "n_missing_method": 0,
+  "missing": [
+   "AutoThresholdInput",
+   "SearchableTool",
+   "checkAutoThreshold",
+   "compileTermPatterns",
+   "parseToolName",
+   "parseToolSearchConfig",
+   "parseToolSearchEnv",
+   "resolveToolSearchEnabled",
+   "searchToolsWithScoring"
+  ]
+ },
+ "T0033": {
+  "n_missing_import": 2,
+  "n_missing_method": 1,
+  "missing": [
+   "aggregateProviderHealth",
+   "aggregateProviderStats",
+   "writeRetryTelemetry"
+  ]
+ },
+ "T0034": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0036": {
+  "n_missing_import": 2,
+  "n_missing_method": 0,
+  "missing": [
+   "NOTIFICATION_ERROR_MAX_CHARS",
+   "NOTIFICATION_OUTPUT_MAX_CHARS"
+  ]
+ },
+ "T0038": {
+  "n_missing_import": 0,
+  "n_missing_method": 1,
+  "missing": [
+   "resetReminderDedupKeys"
+  ]
+ },
+ "T0039": {
+  "n_missing_import": 8,
+  "n_missing_method": 0,
+  "missing": [
+   "claimNextUnblockedTask",
+   "hasUnfinishedTasks",
+   "loadTeamTasks",
+   "persistTeamTasks",
+   "reconstructSidechainMessages",
+   "restoreStructuredTasks",
+   "serializeStructuredTasks",
+   "teamTasksPath"
+  ]
+ },
+ "T0040": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0042": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0045": {
+  "n_missing_import": 1,
+  "n_missing_method": 0,
+  "missing": [
+   "detectDangerousSed"
+  ]
+ },
+ "T0047": {
+  "n_missing_import": 16,
+  "n_missing_method": 0,
+  "missing": [
+   "checkInjectionPatterns",
+   "extractQuotedContent",
+   "validateBackslashEscapedOperators",
+   "validateBraceExpansion",
+   "validateCarriageReturn",
+   "validateCommentQuoteDesync",
+   "validateControlCharacters",
+   "validateIFSInjection",
+   "validateMidWordHash",
+   "validateNewlines",
+   "validateObfuscatedFlags",
+   "validateProcEnvironAccess",
+   "validateProcessSubstitution",
+   "validateQuotedNewline",
+   "validateUnicodeWhitespace",
+   "validateZshDangerousCommands"
+  ]
+ },
+ "T0049": {
+  "n_missing_import": 1,
+  "n_missing_method": 0,
+  "missing": [
+   "toLegacyTool"
+  ]
+ },
+ "T0050": {
+  "n_missing_import": 2,
+  "n_missing_method": 0,
+  "missing": [
+   "STATEFUL_TOOL_NAMES",
+   "createStatefulTools"
+  ]
+ },
+ "T0051": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0052": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0054": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0055": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0056": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0059": {
+  "n_missing_import": 1,
+  "n_missing_method": 0,
+  "missing": [
+   "getBuiltInAgentDefinitions"
+  ]
+ },
+ "T0062": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0063": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ },
+ "T0064": {
+  "n_missing_import": 9,
+  "n_missing_method": 7,
+  "missing": [
+   "SKILL_TOOL_NAME",
+   "SkillActivationCoordinator",
+   "SkillMetaTool",
+   "authorizeSkill",
+   "getPluginSkills",
+   "normalizeSkillEffort",
+   "registerSkillLifecycleHooks",
+   "resolveSkillAgentType",
+   "resolveSkillAsk",
+   "drainListingDelta",
+   "getListableSkills",
+   "getListingEntries",
+   "getSentNames",
+   "isGated",
+   "onToolResults",
+   "setPermissionRules"
+  ]
+ },
+ "T0065": {
+  "n_missing_import": 0,
+  "n_missing_method": 0,
+  "missing": []
+ }
+}
