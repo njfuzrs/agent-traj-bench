@@ -3572,6 +3572,83 @@ def test_final_report_and_freeze_run_end_to_end(tmp_path):
     assert (fake / "version.json").read_bytes() == before, "拒绝冻结时仍改了 version.json"
 
 
+def test_frozen_gate_string_never_carries_two_denominators(tmp_path):
+    """🔴 `progress.T7.gate` 是**永久冻进** version.json 的一句验收结论 ——
+    ⛔ 不许在同一句里出现两个分母。
+
+    2026-09-14 真冻结那一刻抓到：原写法渲染成
+
+        pass@1=37.8%（14/**37**），分母 **39** 条，排除 2 条
+
+    括号里分母 37、紧接着说「分母 39 条」—— **同一句话自相矛盾**，
+    而 `frozen_at` 一写就不可改，日后回看只能看到这句矛盾。
+
+    根因是 remediation §七-8 记的那个坑复发：**40 / 39 / 37 是三个数**
+    （T5 门禁存活 / 交付题集 / 参与计分），各有用途。
+    题集条数已经有 `task_count` 字段承载，gate 里只该写 scored。
+
+    ⚠️ 判据落在**渲染后的字符串**上，不是源码 —— 换个写法照样可能塞进两个数。
+    """
+    if not (c.MVP_DIR / "reports/t6-recheck/survivors.json").exists():
+        pytest.skip("没有 T6 产物（survivors.json）—— 这条要真实取数源")
+
+    fake = tmp_path / "bench/v0.2-mini"
+    surv = _build_freeze_fixture(fake)
+
+    # 🔴 **必须先造出 infra 排除，否则这条测试是「绿着坏掉」的**。
+    #
+    # 2026-09-14 实测：不造排除时 `scored == len(surv) == 39`，
+    # 于是「括号里的分母」与「分母 N 条」**恰好相等** ——
+    # 把代码改回有缺陷的写法，判据照样全绿（变异验证不报红）。
+    # 这正是本仓 §五 那条纪律「写了测试就以为拦住了」的又一例：
+    # 判据要拦「两个分母不一致」，就必须让那两个数**在夹具里真的不一致**。
+    #
+    # 造法：把一条 trial 的 reward 置为 null ⇒ `infra_failure`（verifier 未写分）
+    # ⇒ 它被排除出分母 ⇒ scored = 38、题集仍是 39。
+    run = fake / "reports/t8-rerun/2026-09-14__00-00-00"
+    victim = next(d for d in sorted(run.iterdir())
+                  if d.is_dir() and d.name.startswith(surv[1]))
+    rj = victim / "result.json"
+    doc0 = json.loads(rj.read_text(encoding="utf-8"))
+    doc0["verifier_result"]["rewards"]["reward"] = None
+    rj.write_text(json.dumps(doc0), encoding="utf-8")
+    (victim / "verifier/reward.json").unlink()      # verifier 没写分才是真 infra
+
+    env = {**os.environ, "MVP_DIR": str(fake)}
+    proc = subprocess.run([sys.executable, str(MVP / "t7-report.py"),
+                           "--runs", "t8-rerun", "--freeze"],
+                          capture_output=True, text=True, cwd=REPO_ROOT, env=env)
+    out = proc.stdout + proc.stderr
+    if str(fake) not in out:
+        pytest.skip(f"MVP_DIR 覆盖不生效：{out[-300:]}")
+    assert proc.returncode == 0, f"冻结失败：\n{out[-1200:]}"
+
+    doc = json.loads((fake / "version.json").read_text(encoding="utf-8"))
+    gate = doc["progress"]["T7"]["gate"]
+
+    # 前置自检：夹具真的造出了「两个数不相等」的局面，否则本测试无判别力
+    assert f"（{len(surv)} 条" in gate or str(len(surv)) in gate, \
+        f"夹具没让题集条数进 gate，判据失效：{gate}"
+
+    # ① 括号里的 x/n 与「分母 …」必须是**同一个 n**
+    m = re.search(r"（[\d.]+/(\d+)）", gate)
+    assert m, f"gate 里找不到「（解出/分母）」形态：{gate}"
+    n_paren = int(m.group(1))
+    dens = [int(x) for x in re.findall(r"分母\D{0,12}?(\d+)", gate)]
+    assert dens, f"gate 没写分母：{gate}"
+    for d in dens:
+        assert d == n_paren, \
+            f"gate 同一句里两个分母（括号 {n_paren} vs 分母 {d}）—— 会被永久冻结：{gate}"
+
+    # ② 题集条数由 task_count 承载，⛔ 不靠 gate 里那句话
+    assert doc["task_count"] == len(surv), \
+        f"task_count 不是题集条数：{doc['task_count']} vs {len(surv)}"
+    # ③ 题集条数若出现在 gate 里，必须**明确标注是题集**，不能裸着叫「分母」
+    if str(len(surv)) in gate and len(surv) != n_paren:
+        assert "题集" in gate, \
+            f"gate 提到题集条数 {len(surv)} 却没说明它是题集 ⇒ 会被读成分母：{gate}"
+
+
 def test_card_and_report_share_one_limitations_source():
     """🔴 card 的 Limitations 必须与报告 §11 **同源**，⛔ 不许各写一份。
 

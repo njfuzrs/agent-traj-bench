@@ -1717,8 +1717,17 @@ def main() -> int:
             # 写死会把**另一批**的产物路径永久冻进 version.json，
             # 而日后照它去复现只会读到 baseline 那批（或根本不存在的文件）。
             "artifacts": [_rel(REPORT), _rel(SUMMARY), _rel(run)],
+            # 🔴 2026-09-14 抓到（就在真冻结那一刻）：这里原写
+            #   f"...（{passed}/{n}），分母 {len(surv)} 条，排除 {excluded} 条"
+            # ⇒ 渲染成「pass@1=37.8%（14/**37**），分母 **39** 条」——
+            # **同一句话里两个分母**，而它要被**永久冻进** version.json。
+            # 37 是 pass@1 的分母（scored），39 是题集条数（task_count，本文档另有其字段）。
+            # 这正是 remediation §七-8 记的那个坑（40 / 39 / 37 三个数各有用途）的复发，
+            # 且冻结后不可改 —— 日后回看只会看到一句自相矛盾的验收结论。
+            # ⇒ 分母只写 scored，题集条数交给 task_count，⛔ 不在同一句里塞两个。
             "gate": (f"pass@1={res['p']:.1%}（{res['passed']:g}/{res['n']}），"
-                     f"分母 {len(surv)} 条，排除 {res['excluded']} 条，"
+                     f"分母 scored={res['n']}（题集 {len(surv)} 条，"
+                     f"infra 排除 {res['excluded']} 条不计分），"
                      f"实付 ${cost['total']}"),
             "model": ctl["model_observed"],
             "k": k,
