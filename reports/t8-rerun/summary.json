@@ -1,0 +1,164 @@
+{
+ "generated_at": "2026-09-14T02:47:45.391166+00:00",
+ "run_dir": "bench/v0.2-mini/reports/t8-rerun/2026-09-14__09-46-52",
+ "k": 1,
+ "complete": true,
+ "coverage": {
+  "n_survivors": 39,
+  "n_with_trial": 37,
+  "n_missing": 0,
+  "missing_tasks": []
+ },
+ "ci": {
+  "n": 37,
+  "passed": 14.0,
+  "p": 0.3783783783783784,
+  "lo": 0.24063999175798265,
+  "hi": 0.5389956956078235,
+  "halfwidth_pp": 14.917785192492039,
+  "method": "wilson-score-95",
+  "excluded": 2,
+  "excluded_tasks": [
+   "T0009",
+   "T0022"
+  ],
+  "denominator_note": "分母是 scored（参与计分的 task）。基础设施故障（抛异常 / verifier 未写分）排除出分母 —— 算进去等于把它记成答错。⛔ 不是 40（那是 T5 门禁的结论，含 T0005）。"
+ },
+ "per_task_rate": {
+  "T0002": 0.0,
+  "T0003": 0.0,
+  "T0007": 0.0,
+  "T0008": 1.0,
+  "T0010": 0.0,
+  "T0011": 0.0,
+  "T0012": 0.0,
+  "T0013": 0.0,
+  "T0014": 0.0,
+  "T0018": 1.0,
+  "T0020": 1.0,
+  "T0024": 1.0,
+  "T0026": 1.0,
+  "T0028": 0.0,
+  "T0029": 1.0,
+  "T0031": 1.0,
+  "T0033": 0.0,
+  "T0034": 1.0,
+  "T0036": 0.0,
+  "T0038": 0.0,
+  "T0039": 0.0,
+  "T0040": 1.0,
+  "T0042": 0.0,
+  "T0045": 1.0,
+  "T0047": 1.0,
+  "T0049": 0.0,
+  "T0050": 0.0,
+  "T0051": 0.0,
+  "T0052": 0.0,
+  "T0054": 1.0,
+  "T0055": 0.0,
+  "T0056": 0.0,
+  "T0059": 0.0,
+  "T0062": 1.0,
+  "T0063": 1.0,
+  "T0064": 0.0,
+  "T0065": 0.0
+ },
+ "cost_usd": {
+  "total": 26.214353,
+  "n_with_cost": 38,
+  "n_trials": 39,
+  "mean": 0.689851,
+  "median": 0.698114,
+  "p90": 1.032901,
+  "max": 1.173698,
+  "note": "⛔ None 未按 0 计入（那会低报）。n_with_cost < n_trials 时差额就是没拿到成本的 trial 数。"
+ },
+ "f2p_p2p": {
+  "n_scored": 37,
+  "f2p": {
+   "n": 37,
+   "n_full": 15,
+   "mean": 0.4054
+  },
+  "p2p": {
+   "n": 37,
+   "n_full": 35,
+   "mean": 0.9459
+  },
+  "regressed_tasks": [
+   "T0003",
+   "T0036"
+  ],
+  "grader_p2p_failures": [],
+  "note": "F2P 红 = 没修好目标缺陷；P2P 红 = **改出了回归**（更严重）。⛔ 压进单个 reward 就丢了这个区分。None 不按 0 计入 —— 那会虚报「改出回归」。p2p=0 但 score-detail 有 error 码（xml_missing 等）的单列 grader_p2p_failures —— 那是判分侧没产出 XML，⛔ 不是回归。"
+ },
+ "controlled_variables": {
+  "model_observed": [
+   "origin-deepseek-v4-1-flash"
+  ],
+  "n_model_missing": 0,
+  "sid_binary_sha256_observed": [
+   "56203ccef6afc2403ca3e1fb0cfcce59d2460a68f12b7dbac78b33b0c92cf453"
+  ],
+  "n_binary_missing": 0,
+  "note": "多于一个值 ⇒ 这批混了不同模型/二进制，pass@1 不可作为单一臂的结论"
+ },
+ "by_grade": {
+  "C": {
+   "n": 4,
+   "solved": 1,
+   "scored": 4,
+   "missing": 0,
+   "excluded": 0,
+   "report_pct": false
+  },
+  "B": {
+   "n": 4,
+   "solved": 3,
+   "scored": 4,
+   "missing": 0,
+   "excluded": 0,
+   "report_pct": false
+  },
+  "A1": {
+   "n": 11,
+   "solved": 6,
+   "scored": 10,
+   "missing": 0,
+   "excluded": 1,
+   "report_pct": true
+  },
+  "A2": {
+   "n": 20,
+   "solved": 4,
+   "scored": 19,
+   "missing": 0,
+   "excluded": 1,
+   "report_pct": true
+  }
+ },
+ "by_band": {
+  "M": {
+   "n": 12,
+   "solved": 7,
+   "scored": 12,
+   "missing": 0,
+   "excluded": 0,
+   "report_pct": true
+  },
+  "L": {
+   "n": 27,
+   "solved": 7,
+   "scored": 25,
+   "missing": 0,
+   "excluded": 2,
+   "report_pct": true
+  }
+ },
+ "caveats": [
+  "分母 39（T6 淘汰 T0005），⛔ 不是 gate.jsonl 的 40",
+  "修复①已内联文档：34/39 条题面含被点名文档原文，「题面缺 docs/」不再是低分解释；true_zero_no_attempt=0 ⇒ A2 低分是真能力信号",
+  "执行环境 allowlist（只放网关 IP），非题面写的 --network none",
+  "S 档为 0 ⇒ 不构成三档单调性证据"
+ ]
+}

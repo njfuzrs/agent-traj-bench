@@ -1,0 +1,1568 @@
+{
+ "run_dir": "bench/v0.2-mini/reports/t8-rerun/2026-09-14__09-46-52",
+ "run_dirs": [
+  "2026-09-13__19-35-38",
+  "2026-09-14__09-46-52"
+ ],
+ "max_turns": 120,
+ "n_diagnosed": 39,
+ "verdicts": {
+  "true_zero_wrong_fix": 18,
+  "solved": 14,
+  "infra_agent_not_launched": 1,
+  "infra_upstream_disconnect": 1,
+  "true_zero_missing_symbol": 5
+ },
+ "n_write_tool_calls_total": 860,
+ "bash_hunting_doc": {
+  "n_hunting": 549,
+  "n_bash": 3447,
+  "share": 0.1593,
+  "note": "近似指标（find/ls 且提到 docs 或带中文名），用于量级说明，报告里须写「约」"
+ },
+ "termination_subtypes": {
+  "success": 8,
+  "error_max_turns": 26,
+  "null": 4,
+  "error_during_execution": 1
+ },
+ "conclusion_guard": "已判 39 条：解出 14、改了但改错 18、未提交解法 0、缺 src 符号 5、判分未看全 0、上游断连 1、agent 未启动 1。🔴 那 1 条 `infra_agent_not_launched` 是**假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。那 5 条 `true_zero_missing_symbol` 是**真 0**：测试跑到了，但模型没写出被 import 的 src 符号（那些正是 gold patch 创建的）⇒ ⛔ **不是**判分缺陷。✅ 能力信号共 23 条：18 条 `true_zero_wrong_fix`（改了但改错） + 5 条 `true_zero_missing_symbol`（没写出 gold patch 创建的符号）。",
+ "control_group": {
+  "definition": "题面不含 `docs/` 引用的存活 task（天然对照组）",
+  "supports": true,
+  "control_tasks": [
+   "T0011",
+   "T0012",
+   "T0018",
+   "T0028"
+  ],
+  "n_control": 4,
+  "n_control_done": 4,
+  "verdicts": {
+   "true_zero_wrong_fix": 3,
+   "solved": 1
+  },
+  "n_with_write_calls": 4,
+  "prereg_note": "预注册：写下判读时这 4 条都还没跑（2026-09-13），不是事后挑的。n=4 < 5 ⇒ 只报绝对条数不报比例",
+  "reading": "✅ 归因**成立**：对照组里有条目进入了「改代码」阶段（wrong_fix 3 / solved 1） ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数"
+ },
+ "trials": [
+  {
+   "task": "T0002",
+   "trial_dir": "T0002__3TXciek",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 43,
+    "grep": 23,
+    "read": 20,
+    "edit": 7,
+    "todo_write": 4,
+    "glob": 2,
+    "write": 2,
+    "ls": 1
+   },
+   "n_write_tool_calls": 9,
+   "n_bash": 43,
+   "n_bash_hunting_doc": 7,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 60,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 11 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（9 次）⇒ 改动不对",
+   "grade": "B",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0003",
+   "trial_dir": "T0003__hcngGfg",
+   "reward": 0.0,
+   "f2p": 1.0,
+   "p2p": 0.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 2,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 108,
+    "read": 41,
+    "edit": 29,
+    "ls": 3,
+    "todo_write": 3,
+    "read_many": 2,
+    "glob": 1,
+    "write": 1
+   },
+   "n_write_tool_calls": 30,
+   "n_bash": 108,
+   "n_bash_hunting_doc": 32,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 27 tests across 2 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（0 个 fail）且模型改过文件（30 次）⇒ 改动不对",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0007",
+   "trial_dir": "T0007__SuVFjQW",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 3,
+    "n_seen": 3,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 136,
+    "read": 29,
+    "edit": 15,
+    "todo_write": 5,
+    "write": 5,
+    "grep": 3,
+    "web_search": 2
+   },
+   "n_write_tool_calls": 20,
+   "n_bash": 136,
+   "n_bash_hunting_doc": 25,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 158 tests across 3 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（20 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0008",
+   "trial_dir": "T0008__ZGLoGnu",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 68,
+    "read": 49,
+    "edit": 45,
+    "todo_write": 2,
+    "grep": 2,
+    "write": 1
+   },
+   "n_write_tool_calls": 46,
+   "n_bash": 68,
+   "n_bash_hunting_doc": 2,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 10 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0009",
+   "trial_dir": "T0009__LbChbg3",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 3,
+    "n_seen": 2,
+    "n_failed": 3,
+    "n_missing": 1,
+    "n_no_tests": 0
+   },
+   "tool_calls": {},
+   "n_write_tool_calls": 0,
+   "n_bash": 0,
+   "n_bash_hunting_doc": 0,
+   "termination": {
+    "subtype": null,
+    "num_turns": null,
+    "num_turns_without_model_interaction": null
+   },
+   "f2p_ran_line": "Ran 9 tests across 3 files",
+   "n_f2p_load_failures": 1,
+   "verdict": "infra_agent_not_launched",
+   "why": "🔴 **假 0 分**：agent 进程**一次都没启动**（`agent/sid-code.jsonl` 缺失或为空）⇒ 题**根本没跑**，而 verifier 照常打了分 ⇒ ⛔ 不计入分母，不是能力信号。本批实测成因：题面超 Linux `MAX_ARG_STRLEN`（131,072 B），`bash -c` 拒绝 exec（`Argument list too long`，退出码 255）",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0010",
+   "trial_dir": "T0010__UCgTGTt",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 11,
+    "n_seen": 11,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 100,
+    "read": 41,
+    "edit": 19,
+    "ls": 9,
+    "todo_write": 8,
+    "sub_agent": 3,
+    "grep": 2,
+    "write": 2,
+    "web_search": 1,
+    "think": 1
+   },
+   "n_write_tool_calls": 21,
+   "n_bash": 100,
+   "n_bash_hunting_doc": 19,
+   "termination": {
+    "subtype": null,
+    "num_turns": 370,
+    "num_turns_without_model_interaction": null
+   },
+   "f2p_ran_line": "Ran 91 tests across 11 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0011",
+   "trial_dir": "T0011__gJBXDQz",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 83,
+    "read": 52,
+    "edit": 22,
+    "grep": 8,
+    "write": 8,
+    "todo_write": 6,
+    "glob": 1,
+    "think": 1
+   },
+   "n_write_tool_calls": 30,
+   "n_bash": 83,
+   "n_bash_hunting_doc": 21,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 5 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（30 次）⇒ 改动不对",
+   "grade": "C",
+   "instruction_names_docs": false
+  },
+  {
+   "task": "T0012",
+   "trial_dir": "T0012__f7JQWAU",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 106,
+    "read": 45,
+    "edit": 26,
+    "grep": 12,
+    "todo_write": 4,
+    "glob": 2,
+    "web_search": 2,
+    "write": 2,
+    "ls": 1,
+    "read_many": 1
+   },
+   "n_write_tool_calls": 28,
+   "n_bash": 106,
+   "n_bash_hunting_doc": 29,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 7 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（28 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": false
+  },
+  {
+   "task": "T0013",
+   "trial_dir": "T0013__KXGW7st",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 3,
+    "n_seen": 3,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 111,
+    "read": 43,
+    "edit": 15,
+    "write": 6,
+    "todo_write": 3,
+    "ls": 2,
+    "glob": 1,
+    "grep": 1
+   },
+   "n_write_tool_calls": 21,
+   "n_bash": 111,
+   "n_bash_hunting_doc": 26,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 25 tests across 3 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0014",
+   "trial_dir": "T0014__a2dPJsN",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 6,
+    "n_seen": 6,
+    "n_failed": 2,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 97,
+    "read": 53,
+    "edit": 30,
+    "todo_write": 4,
+    "ls": 3,
+    "glob": 2,
+    "write": 2,
+    "web_search": 1,
+    "web_fetch": 1
+   },
+   "n_write_tool_calls": 32,
+   "n_bash": 97,
+   "n_bash_hunting_doc": 19,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 117 tests across 6 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（2 个 fail）且模型改过文件（32 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0018",
+   "trial_dir": "T0018__MSEn3RR",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 41,
+    "read": 27,
+    "grep": 15,
+    "edit": 9,
+    "ls": 3,
+    "glob": 1,
+    "write": 1
+   },
+   "n_write_tool_calls": 10,
+   "n_bash": 41,
+   "n_bash_hunting_doc": 8,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 57,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 48 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "C",
+   "instruction_names_docs": false
+  },
+  {
+   "task": "T0020",
+   "trial_dir": "T0020__utYsBxp",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 3,
+    "n_seen": 3,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 127,
+    "read": 54,
+    "edit": 20,
+    "grep": 11,
+    "todo_write": 5,
+    "glob": 3,
+    "write": 2,
+    "ls": 1
+   },
+   "n_write_tool_calls": 22,
+   "n_bash": 127,
+   "n_bash_hunting_doc": 21,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 27 tests across 3 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0022",
+   "trial_dir": "T0022__fGkpRL8",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 8,
+    "n_seen": 5,
+    "n_failed": 7,
+    "n_missing": 3,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 29,
+    "read": 21,
+    "todo_write": 2,
+    "ls": 1
+   },
+   "n_write_tool_calls": 0,
+   "n_bash": 29,
+   "n_bash_hunting_doc": 1,
+   "termination": {
+    "subtype": "error_during_execution",
+    "num_turns": 24,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 78 tests across 8 files",
+   "n_f2p_load_failures": 3,
+   "verdict": "infra_upstream_disconnect",
+   "why": "🔴 **假 0 分**：上游 LLM 链路断开（LLM 错误: The socket connection was closed unexpectedly. For more information, pas…）⇒ agent 在第 24 轮被打断、题**没跑完**，而 verifier 照常打了分 ⇒ ⛔ 不计入分母，不是能力信号，需重跑",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0024",
+   "trial_dir": "T0024__SvE25Je",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 3,
+    "n_seen": 3,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 116,
+    "read": 22,
+    "edit": 14,
+    "todo_write": 7,
+    "write": 5,
+    "ls": 2
+   },
+   "n_write_tool_calls": 19,
+   "n_bash": 116,
+   "n_bash_hunting_doc": 11,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 77 tests across 3 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0026",
+   "trial_dir": "T0026__aFXf3Jt",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 36,
+    "read": 24,
+    "edit": 12,
+    "todo_write": 8,
+    "grep": 4,
+    "write": 4,
+    "ls": 1,
+    "think": 1,
+    "save_memory": 1
+   },
+   "n_write_tool_calls": 16,
+   "n_bash": 36,
+   "n_bash_hunting_doc": 12,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 68,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 7 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0028",
+   "trial_dir": "T0028__Q7HzVrj",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 2,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 92,
+    "read": 29,
+    "write": 19,
+    "edit": 13,
+    "grep": 11,
+    "ls": 4,
+    "todo_write": 4,
+    "think": 3,
+    "glob": 1
+   },
+   "n_write_tool_calls": 32,
+   "n_bash": 92,
+   "n_bash_hunting_doc": 21,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 46 tests across 2 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（32 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": false
+  },
+  {
+   "task": "T0029",
+   "trial_dir": "T0029__UTAbqqs",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 116,
+    "read": 41,
+    "write": 12,
+    "edit": 11,
+    "grep": 5,
+    "todo_write": 2,
+    "glob": 1
+   },
+   "n_write_tool_calls": 23,
+   "n_bash": 116,
+   "n_bash_hunting_doc": 13,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 120,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 9 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0031",
+   "trial_dir": "T0031__4FXugvb",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 2,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 116,
+    "read": 39,
+    "edit": 20,
+    "todo_write": 6,
+    "grep": 3,
+    "write": 2
+   },
+   "n_write_tool_calls": 22,
+   "n_bash": 116,
+   "n_bash_hunting_doc": 5,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 47 tests across 2 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0033",
+   "trial_dir": "T0033__4XFcPBx",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 1,
+    "n_failed": 2,
+    "n_missing": 1,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "read": 100,
+    "edit": 48,
+    "grep": 22,
+    "bash": 13,
+    "ls": 10,
+    "sub_agent": 4,
+    "write": 4,
+    "todo_write": 2,
+    "web_search": 2
+   },
+   "n_write_tool_calls": 52,
+   "n_bash": 13,
+   "n_bash_hunting_doc": 0,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 6 tests across 2 files",
+   "n_f2p_load_failures": 1,
+   "verdict": "true_zero_missing_symbol",
+   "why": "真 0：测试跑起来了（Ran 6 tests across 2 files）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0034",
+   "trial_dir": "T0034__em2wvLE",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 146,
+    "read": 43,
+    "edit": 9,
+    "write": 6,
+    "todo_write": 4,
+    "read_many": 3,
+    "grep": 1,
+    "think": 1
+   },
+   "n_write_tool_calls": 15,
+   "n_bash": 146,
+   "n_bash_hunting_doc": 20,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 24 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0036",
+   "trial_dir": "T0036__WuggyWu",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 0.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 2,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 97,
+    "read": 60,
+    "grep": 21,
+    "edit": 13,
+    "write": 4,
+    "glob": 3,
+    "web_search": 1
+   },
+   "n_write_tool_calls": 17,
+   "n_bash": 97,
+   "n_bash_hunting_doc": 12,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 40 tests across 2 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（17 次）⇒ 改动不对",
+   "grade": "C",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0038",
+   "trial_dir": "T0038__vyvUnRk",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 5,
+    "n_seen": 5,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "read": 70,
+    "bash": 59,
+    "grep": 49,
+    "edit": 22,
+    "ls": 6,
+    "todo_write": 5,
+    "glob": 1,
+    "write": 1
+   },
+   "n_write_tool_calls": 23,
+   "n_bash": 59,
+   "n_bash_hunting_doc": 6,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 64 tests across 5 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（23 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0039",
+   "trial_dir": "T0039__duxfGin",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 4,
+   "f2p_detail": {
+    "n_required": null,
+    "n_seen": null,
+    "n_failed": 0,
+    "n_missing": 2,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 65,
+    "read": 48,
+    "edit": 39,
+    "ls": 6,
+    "todo_write": 3,
+    "write": 2,
+    "think": 1
+   },
+   "n_write_tool_calls": 41,
+   "n_bash": 65,
+   "n_bash_hunting_doc": 3,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 2 tests across 2 files",
+   "n_f2p_load_failures": 2,
+   "verdict": "true_zero_missing_symbol",
+   "why": "真 0：测试跑起来了（Ran 2 tests across 2 files）但有 2 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0040",
+   "trial_dir": "T0040__CApE9MM",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 69,
+    "read": 50,
+    "edit": 34,
+    "write": 7,
+    "todo_write": 3,
+    "grep": 1
+   },
+   "n_write_tool_calls": 41,
+   "n_bash": 69,
+   "n_bash_hunting_doc": 6,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 5 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "B",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0042",
+   "trial_dir": "T0042__qHgDUh3",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 2,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 131,
+    "read": 39,
+    "edit": 7,
+    "todo_write": 4,
+    "glob": 3,
+    "think": 2,
+    "grep": 1
+   },
+   "n_write_tool_calls": 7,
+   "n_bash": 131,
+   "n_bash_hunting_doc": 45,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 100 tests across 2 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（7 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0045",
+   "trial_dir": "T0045__Ko9BZS7",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 96,
+    "read": 66,
+    "edit": 9,
+    "read_many": 5,
+    "todo_write": 4,
+    "grep": 4,
+    "write": 2,
+    "web_search": 1
+   },
+   "n_write_tool_calls": 11,
+   "n_bash": 96,
+   "n_bash_hunting_doc": 25,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 9 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0047",
+   "trial_dir": "T0047__DJcKn8e",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 93,
+    "read": 30,
+    "edit": 7,
+    "ls": 3,
+    "write": 3,
+    "todo_write": 2,
+    "glob": 1,
+    "grep": 1
+   },
+   "n_write_tool_calls": 10,
+   "n_bash": 93,
+   "n_bash_hunting_doc": 22,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 92,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 56 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0049",
+   "trial_dir": "T0049__s6VLqxh",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 4,
+   "f2p_detail": {
+    "n_required": null,
+    "n_seen": null,
+    "n_failed": 0,
+    "n_missing": 1,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 112,
+    "read": 48,
+    "edit": 27,
+    "todo_write": 3,
+    "sub_agent": 3,
+    "write": 3,
+    "think": 1
+   },
+   "n_write_tool_calls": 30,
+   "n_bash": 112,
+   "n_bash_hunting_doc": 5,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 1 test across 1 file",
+   "n_f2p_load_failures": 1,
+   "verdict": "true_zero_missing_symbol",
+   "why": "真 0：测试跑起来了（Ran 1 test across 1 file）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "grade": "A1",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0050",
+   "trial_dir": "T0050__QdZfgyK",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 4,
+   "f2p_detail": {
+    "n_required": null,
+    "n_seen": null,
+    "n_failed": 0,
+    "n_missing": 1,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 106,
+    "read": 47,
+    "edit": 41,
+    "write": 5,
+    "todo_write": 4,
+    "grep": 1
+   },
+   "n_write_tool_calls": 46,
+   "n_bash": 106,
+   "n_bash_hunting_doc": 5,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 1 test across 1 file",
+   "n_f2p_load_failures": 1,
+   "verdict": "true_zero_missing_symbol",
+   "why": "真 0：测试跑起来了（Ran 1 test across 1 file）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0051",
+   "trial_dir": "T0051__R4B64Au",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 2,
+    "n_seen": 2,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "read": 64,
+    "bash": 58,
+    "edit": 17,
+    "ls": 11,
+    "grep": 8,
+    "todo_write": 5,
+    "write": 4,
+    "sub_agent": 1
+   },
+   "n_write_tool_calls": 21,
+   "n_bash": 58,
+   "n_bash_hunting_doc": 9,
+   "termination": {
+    "subtype": null,
+    "num_turns": 342,
+    "num_turns_without_model_interaction": null
+   },
+   "f2p_ran_line": "Ran 17 tests across 2 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对",
+   "grade": "C",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0052",
+   "trial_dir": "T0052__vLWMUxm",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 4,
+    "n_seen": 4,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 98,
+    "read": 34,
+    "edit": 10,
+    "todo_write": 7,
+    "grep": 3,
+    "glob": 2,
+    "write": 1
+   },
+   "n_write_tool_calls": 11,
+   "n_bash": 98,
+   "n_bash_hunting_doc": 6,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 87,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 58 tests across 4 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（11 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0054",
+   "trial_dir": "T0054__g4VxF3R",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 134,
+    "read": 40,
+    "edit": 12,
+    "write": 9,
+    "grep": 2,
+    "todo_write": 2,
+    "think": 1
+   },
+   "n_write_tool_calls": 21,
+   "n_bash": 134,
+   "n_bash_hunting_doc": 31,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 13 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "B",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0055",
+   "trial_dir": "T0055__Gw7HLi2",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "read": 96,
+    "edit": 31,
+    "grep": 25,
+    "bash": 18,
+    "ls": 7,
+    "todo_write": 6,
+    "glob": 1,
+    "write": 1
+   },
+   "n_write_tool_calls": 32,
+   "n_bash": 18,
+   "n_bash_hunting_doc": 1,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 120,
+    "num_turns_without_model_interaction": 1,
+    "attribution": "轮次真的用尽（120 + 1 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 23 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（32 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0056",
+   "trial_dir": "T0056__92urbJk",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 3,
+    "n_seen": 3,
+    "n_failed": 3,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 125,
+    "read": 45,
+    "edit": 18,
+    "todo_write": 4,
+    "ls": 3,
+    "glob": 2,
+    "write": 2
+   },
+   "n_write_tool_calls": 20,
+   "n_bash": 125,
+   "n_bash_hunting_doc": 10,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 70 tests across 3 files",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（3 个 fail）且模型改过文件（20 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0059",
+   "trial_dir": "T0059__og4Rmuy",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "read": 101,
+    "bash": 36,
+    "edit": 36,
+    "grep": 21,
+    "write": 15,
+    "ls": 6,
+    "todo_write": 3
+   },
+   "n_write_tool_calls": 51,
+   "n_bash": 36,
+   "n_bash_hunting_doc": 4,
+   "termination": {
+    "subtype": null,
+    "num_turns": 436,
+    "num_turns_without_model_interaction": null
+   },
+   "f2p_ran_line": "Ran 7 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（51 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0062",
+   "trial_dir": "T0062__NAJKX5r",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 137,
+    "read": 27,
+    "edit": 13,
+    "sub_agent": 4,
+    "ls": 2,
+    "todo_write": 2,
+    "web_search": 1,
+    "write": 1
+   },
+   "n_write_tool_calls": 14,
+   "n_bash": 137,
+   "n_bash_hunting_doc": 15,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 41 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0063",
+   "trial_dir": "T0063__CwRCAGt",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 0,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 89,
+    "read": 24,
+    "grep": 16,
+    "glob": 5,
+    "todo_write": 5,
+    "edit": 4,
+    "ls": 2,
+    "write": 2
+   },
+   "n_write_tool_calls": 6,
+   "n_bash": 89,
+   "n_bash_hunting_doc": 34,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 90,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 21 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "solved",
+   "why": "解出",
+   "grade": "B",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0064",
+   "trial_dir": "T0064__u5RcKfo",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 5,
+    "n_seen": 2,
+    "n_failed": 5,
+    "n_missing": 3,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 185,
+    "read": 72,
+    "todo_write": 4,
+    "edit": 3,
+    "think": 1
+   },
+   "n_write_tool_calls": 3,
+   "n_bash": 185,
+   "n_bash_hunting_doc": 5,
+   "termination": {
+    "subtype": "error_max_turns",
+    "num_turns": 121,
+    "num_turns_without_model_interaction": 0,
+    "attribution": "轮次真的用尽（121 + 0 = max_turns 120 + 1，每轮都换来了模型交互）⇒ 抬 --max-turns 才有意义"
+   },
+   "f2p_ran_line": "Ran 11 tests across 5 files",
+   "n_f2p_load_failures": 7,
+   "verdict": "true_zero_missing_symbol",
+   "why": "真 0：测试跑起来了（Ran 11 tests across 5 files）但有 7 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "grade": "A2",
+   "instruction_names_docs": true
+  },
+  {
+   "task": "T0065",
+   "trial_dir": "T0065__zCcQttZ",
+   "reward": 0.0,
+   "f2p": 0.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "f2p_detail": {
+    "n_required": 1,
+    "n_seen": 1,
+    "n_failed": 1,
+    "n_missing": 0,
+    "n_no_tests": 0
+   },
+   "tool_calls": {
+    "bash": 55,
+    "grep": 29,
+    "read": 28,
+    "todo_write": 13,
+    "edit": 5,
+    "write": 2,
+    "glob": 1
+   },
+   "n_write_tool_calls": 7,
+   "n_bash": 55,
+   "n_bash_hunting_doc": 13,
+   "termination": {
+    "subtype": "success",
+    "num_turns": 64,
+    "num_turns_without_model_interaction": 0
+   },
+   "f2p_ran_line": "Ran 14 tests across 1 file",
+   "n_f2p_load_failures": 0,
+   "verdict": "true_zero_wrong_fix",
+   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（7 次）⇒ 改动不对",
+   "grade": "A2",
+   "instruction_names_docs": true
+  }
+ ]
+}
