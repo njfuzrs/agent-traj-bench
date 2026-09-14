@@ -3938,9 +3938,12 @@ def test_zero_diag_verdict_table_lists_every_verdict(tmp_path):
     orig = rep.RUNS
     try:
         rep.RUNS = tmp_path / "t8-rerun"
+        # 🔴 键**全列**（含 2026-09-14 新增的 infra_agent_not_launched）——
+        # 判定表漏行的形态是「conclusion_guard 讲了 N 条，表里找不到它们」。
         v = {"grader_incomplete": 0, "true_zero_no_attempt": 0,
              "true_zero_wrong_fix": 15, "true_zero_missing_symbol": 5,
-             "infra_upstream_disconnect": 1, "solved": 10}
+             "infra_upstream_disconnect": 1, "infra_agent_not_launched": 1,
+             "solved": 10}
         zd = {"n_diagnosed": sum(v.values()), "max_turns": 120, "verdicts": v,
               "conclusion_guard": "x", "control_group": {}}
         sec = "\n".join(rep._zero_diag_section(zd, 0.33))
@@ -3950,7 +3953,12 @@ def test_zero_diag_verdict_table_lists_every_verdict(tmp_path):
         # 表格里的条数相加必须等于 n_diagnosed
         import re as _re2
         rows = _re2.findall(r"^\| `(\w+)` \| (\d+) \|", sec, _re2.M)
-        assert {k for k, _ in rows} == set(v), f"行不齐：{sorted(k for k, _ in rows)}"
+        # ⚠️ 判据是**每一种出现在数据里的判定都要有行**（子集方向），
+        # ⛔ 不是等号：等号会在**新增判定时**逼着改这一行断言，
+        # 而新增判定恰恰是最该被表格盖住的时刻（本次 infra_agent_not_launched
+        # 就是这么撞上来的）。表里多一行 0 条不伤害读者，少一行才会。
+        missing_rows = set(v) - {k for k, _ in rows}
+        assert not missing_rows, f"判定表漏行：{sorted(missing_rows)}"
         assert sum(int(n) for _, n in rows) == zd["n_diagnosed"], \
             f"各行相加 {sum(int(n) for _, n in rows)} ≠ 已归因 {zd['n_diagnosed']}"
         # ⛔ 排他措辞不许出现（会与 guard 的「能力信号共 N 条」打架）
@@ -4015,3 +4023,102 @@ def test_bash_hunting_wording_follows_whether_docs_were_inlined(tmp_path):
         assert "白费功夫" not in sec2, sec2[-400:]
     finally:
         rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = orig
+
+
+def _mk_zd_trial(d: Path, *, reward, n_required, n_seen, missing, f2p_log,
+              jsonl: str | None, md: dict | None = None) -> Path:
+    """造一个 trial 目录（zero-diag 的输入形态）。jsonl=None ⇒ agent 没启动。"""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "verifier").mkdir(exist_ok=True)
+    (d / "verifier/reward.json").write_text(json.dumps(
+        {"reward": reward, "f2p": 0.0, "p2p": 1.0, "error_code": 0}), encoding="utf-8")
+    (d / "verifier/score-detail.json").write_text(json.dumps(
+        {"f2p": {"n_required": n_required, "n_seen": n_seen,
+                 "failed": ["x"], "missing": missing, "no_tests": []}}), encoding="utf-8")
+    (d / "verifier/f2p.log").write_text(f2p_log, encoding="utf-8")
+    (d / "agent").mkdir(exist_ok=True)
+    if jsonl is not None:
+        (d / "agent/sid-code.jsonl").write_text(jsonl, encoding="utf-8")
+    (d / "result.json").write_text(json.dumps(
+        {"task_name": d.name.split("__")[0],
+         "agent_result": {"metadata": md or {}}}), encoding="utf-8")
+    return d
+
+
+def test_agent_never_launched_is_fake_zero_not_capability_signal(tmp_path):
+    """🔴 agent **一次都没启动**的题是假 0，⛔ 不许记成能力信号。
+
+    2026-09-14 实测抓到（T0009，全量重跑 39 条里唯一一条）：
+    题面 131,498 B 超过 Linux `MAX_ARG_STRLEN`（实测 131,000 过 /
+    131,060 起 `Argument list too long`）⇒ `bash -c` **拒绝 exec**，
+    agent 一个字没跑、退出码 255，而 verifier 照常跑测试照常打分 ⇒ reward=0.0。
+
+    危险形态：判分侧读数与「模型改了但改错」**一模一样**（reward=0 且 f2p 有
+    加载失败签名 —— 源码一字未改，被 import 的符号当然不存在）⇒ 旧口径判成
+    `true_zero_missing_symbol`，而那一档在报告里明写「**也是能力信号**」。
+    ⇒ 一次「题面装不进命令行」的工程故障，被记成「模型没写出 gold patch 的符号」，
+    方向恰好**指向我们更差**。实测能力信号因此虚报 24（真值 23）。
+
+    ⛔ 判据不许读 `result.json` 的 metadata：agent 没跑 ⇒ metadata 整体缺失，
+    拿缺失去判「有没有跑」是循环论证（同 `agent-started-fourth-form-of-fake-zero`
+    那条教训：判据必须取一个**不依赖被怀疑那条链路**的源）。
+    """
+    zd = _load("t7-zero-diag")
+    LOAD_FAIL = "Cannot find module '../../src/x.ts'\nRan 9 tests across 3 files\n"
+
+    # ① agent 没启动（无 sid-code.jsonl）+ 判分侧有加载失败 ⇒ 必须判假 0
+    d = _mk_zd_trial(tmp_path / "T0009__LbChbg3", reward=0.0, n_required=3, n_seen=2,
+                  missing=["a"], f2p_log=LOAD_FAIL, jsonl=None,
+                  md={})                       # ⚠️ metadata 全空 —— 真实形态
+    out = zd.diagnose_one(d, 120)
+    assert out["verdict"] == "infra_agent_not_launched", \
+        f"agent 没启动却判成 {out['verdict']}（旧缺陷判 true_zero_missing_symbol）"
+    assert "假 0" in out["why"] and "不是能力信号" in out["why"], out["why"]
+
+    # ② 空文件也算没启动（写了个 0 字节的壳）
+    d2 = _mk_zd_trial(tmp_path / "T0099__empty", reward=0.0, n_required=3, n_seen=2,
+                   missing=["a"], f2p_log=LOAD_FAIL, jsonl="")
+    assert zd.diagnose_one(d2, 120)["verdict"] == "infra_agent_not_launched"
+
+    # ③ 🔴 反向：agent **跑了**、同样有加载失败 ⇒ 仍必须是能力信号，
+    #    否则这次修复会把整档 true_zero_missing_symbol 一起吞掉（比原缺陷更坏）
+    d3 = _mk_zd_trial(tmp_path / "T0033__ran", reward=0.0, n_required=3, n_seen=2,
+                   missing=["a"], f2p_log=LOAD_FAIL,
+                   jsonl='{"type":"assistant"}\n')
+    assert zd.diagnose_one(d3, 120)["verdict"] == "true_zero_missing_symbol", \
+        "跑过的题被误判成没启动 —— 修复吞掉了真能力信号"
+
+    # ④ 🔴 分支顺序：没启动的题必然也有加载失败，若 load_fail 分支排在前面
+    #    就会先命中它。①③ 用的是同一份 f2p.log，区别**只有**有没有 jsonl，
+    #    所以 ①≠③ 这件事本身就把顺序钉死了。
+    assert zd.diagnose_one(d, 120)["verdict"] != zd.diagnose_one(d3, 120)["verdict"]
+
+    # ⑤ 解出的题不受影响（reward=1.0 分支在最前）
+    d5 = _mk_zd_trial(tmp_path / "T0008__ok", reward=1.0, n_required=3, n_seen=3,
+                   missing=[], f2p_log="Ran 3 tests across 1 files\n", jsonl=None)
+    assert zd.diagnose_one(d5, 120)["verdict"] == "solved"
+
+
+def test_guard_text_counts_add_up_to_n_done(tmp_path):
+    """🔴 结论护栏里列的条数必须能加平到 `n_done`。
+
+    2026-09-14 抓到：两类**假 0**（`infra_upstream_disconnect` /
+    `infra_agent_not_launched`）不在句子里出现 ⇒ 读者拿
+    「解出 + 改错 + 未提交 + 缺符号 + 判分未看全」去凑 39 会差 2 条，
+    而差掉的恰好是**不该算进能力分母**的那两条 —— 最需要说清的两条反而没提。
+    """
+    from collections import Counter
+    zd = _load("t7-zero-diag")
+
+    g = zd._guard_text(Counter({"solved": 14, "true_zero_wrong_fix": 18,
+                                "true_zero_missing_symbol": 5,
+                                "infra_upstream_disconnect": 1,
+                                "infra_agent_not_launched": 1}), 39)
+    assert "上游断连 1" in g, f"漏了上游断连：{g}"
+    assert "agent 未启动 1" in g, f"漏了 agent 未启动：{g}"
+    # 能力信号 = wrong_fix + missing_symbol，⛔ 不含两类假 0
+    assert "能力信号共 23 条" in g, f"能力信号算错（把假 0 也算进去了）：{g}"
+
+    # 两类假 0 都为 0 时不许出现在句子里（否则读者以为发生过）
+    g2 = zd._guard_text(Counter({"solved": 10, "true_zero_wrong_fix": 5}), 15)
+    assert "上游断连" not in g2 and "agent 未启动" not in g2, g2

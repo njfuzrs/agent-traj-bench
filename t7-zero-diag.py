@@ -114,6 +114,34 @@ def _is_upstream_failure(md: dict) -> bool:
         subtype=md.get("sid_subtype"),
         errors=tuple(str(e) for e in (md.get("sid_errors") or [])),
     ).upstream_failure
+def _agent_started(trial_dir: Path) -> bool:
+    """agent 进程**真的跑起来了吗** —— 判据刻意不依赖 metadata。
+
+    🔴 2026-09-14 抓到（T0009，本批唯一）：题面 131,498 B 超过 Linux
+    `MAX_ARG_STRLEN`（实测 131,000 过 / 131,060 起 `Argument list too long`），
+    `bash -c` **拒绝 exec** ⇒ agent 一个字都没跑，退出码 255。
+    而 verifier 照常跑测试、照常打分 ⇒ `reward=0.0`。
+
+    形态之所以危险：它与「模型改了但改错」在判分侧**读数一样**（都是 reward=0、
+    f2p 有加载失败），于是被判成 `true_zero_missing_symbol` —— 那是**能力信号**。
+    ⇒ 一次「题面装不进命令行」的工程故障，被记成「模型没写出 gold patch 的符号」。
+
+    ⛔ **判据不能读 `result.json` 的 metadata**：agent 没跑 ⇒ 那份 metadata
+    整体缺失（`sid_subtype` / `sid_num_turns` 全 None），拿缺失去判「有没有跑」
+    是循环论证 —— 这正是 `agent-started-fourth-form-of-fake-zero` 那条教训：
+    **判据必须取一个不依赖被怀疑那条链路的源**。
+
+    所以判据取 agent 侧的**落盘产物**：`agent/sid-code.jsonl` 非空
+    （agent 一启动就往它写事件流）。全批 39 条实测：启动 38 / 未启动 1，
+    唯一那条正是 T0009。
+    """
+    j = trial_dir / "agent/sid-code.jsonl"
+    try:
+        return j.stat().st_size > 0
+    except OSError:
+        return False
+
+
 _RAN_LINE = re.compile(r"Ran \d+ tests? across \d+ files?")
 
 
@@ -251,6 +279,19 @@ def diagnose_one(trial_dir: Path, max_turns: int) -> dict:
                       f"{(md.get('sid_errors') or ['?'])[0][:80]}…）⇒ "
                       f"agent 在第 {md.get('sid_num_turns')} 轮被打断、题**没跑完**，"
                       "而 verifier 照常打了分 ⇒ ⛔ 不计入分母，不是能力信号，需重跑")
+    elif not _agent_started(trial_dir):
+        # 🔴 **假 0 分**：agent 进程根本没启动起来（题面超 MAX_ARG_STRLEN，exec 被拒）。
+        #
+        # ⚠️ 这个分支必须排在 `load_fail` 前面 —— 没启动的题 f2p 必然有加载失败
+        # （源码一个字没改，import 的符号当然不存在），照顺序会先命中那条，
+        # 把一次工程故障说成「模型没写出 gold patch 的符号」（= 能力信号）。
+        # 与 `infra_upstream_disconnect` 同理：先排除没跑完的，再谈能力。
+        out["verdict"] = "infra_agent_not_launched"
+        out["why"] = ("🔴 **假 0 分**：agent 进程**一次都没启动**"
+                      "（`agent/sid-code.jsonl` 缺失或为空）⇒ 题**根本没跑**，"
+                      "而 verifier 照常打了分 ⇒ ⛔ 不计入分母，不是能力信号。"
+                      "本批实测成因：题面超 Linux `MAX_ARG_STRLEN`（131,072 B），"
+                      "`bash -c` 拒绝 exec（`Argument list too long`，退出码 255）")
     elif not judged_all and load_fail:
         # (b)：测试跑到了，是模型没写出被 import 的符号
         out["verdict"] = "true_zero_missing_symbol"
@@ -287,9 +328,21 @@ def _guard_text(v: Counter, n_done: int) -> str:
     n_missing_sym = v.get("true_zero_missing_symbol", 0)
     n_grader = v.get("grader_incomplete", 0)
     n_solved = v.get("solved", 0)
+    # 🔴 两类**假 0**（题没跑完 / 没跑起来）必须在句子里出现，否则条数加不平：
+    # 读者拿「解出 + 改错 + 未提交 + 缺符号 + 判分未看全」去凑 n_done 会差几条，
+    # 而差掉的恰好是不该算进能力分母的那几条。
+    n_disc = v.get("infra_upstream_disconnect", 0)
+    n_nolaunch = v.get("infra_agent_not_launched", 0)
 
     bits = [f"已判 {n_done} 条：解出 {n_solved}、改了但改错 {n_wrong}、"
-            f"未提交解法 {n_no_attempt}、缺 src 符号 {n_missing_sym}、判分未看全 {n_grader}。"]
+            f"未提交解法 {n_no_attempt}、缺 src 符号 {n_missing_sym}、判分未看全 {n_grader}"
+            + (f"、上游断连 {n_disc}" if n_disc else "")
+            + (f"、agent 未启动 {n_nolaunch}" if n_nolaunch else "")
+            + "。"]
+    if n_nolaunch:
+        bits.append(f"🔴 那 {n_nolaunch} 条 `infra_agent_not_launched` 是**假 0**："
+                    "agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），"
+                    "verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。")
     if n_grader:
         bits.append(f"⛔ 那 {n_grader} 条 `grader_incomplete` **不能**读作模型答错"
                     "（判分侧没拿全测试节点，且 f2p 日志无加载失败签名）。")

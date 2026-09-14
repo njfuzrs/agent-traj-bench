@@ -704,6 +704,14 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
         "（那些正是 gold patch 要创建的）⇒ **也是能力信号**，⛔ 不是判分缺陷 |",
         f"| `infra_upstream_disconnect` | {v.get('infra_upstream_disconnect', 0)} | "
         "**假 0**：上游 LLM 链路断连，verifier 照常打了分 ⇒ 已按 infra 排除出分母 |",
+        # 🔴 2026-09-14 抓到的第二类假 0：agent **一次都没启动**（题面超
+        # Linux MAX_ARG_STRLEN，`bash -c` 拒绝 exec）。判分侧读数与「改错」
+        # 一模一样（reward=0 + f2p 加载失败）⇒ 旧口径把它判成
+        # `true_zero_missing_symbol`，即**能力信号**。⛔ 一次工程故障不许
+        # 记成模型没写出符号。
+        f"| `infra_agent_not_launched` | {v.get('infra_agent_not_launched', 0)} | "
+        "**假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒，"
+        "退出码 255），verifier 照常打了分 ⇒ 已按 infra 排除出分母 |",
         f"| `solved` | {v.get('solved', 0)} | 解出 |",
         "",
         f"**写文件工具调用合计：{zd.get('n_write_tool_calls_total')} 次**"
