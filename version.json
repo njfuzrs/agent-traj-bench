@@ -1,9 +1,9 @@
 {
   "version": "v0.2-mini",
-  "status": "in_progress",
-  "frozen_at": null,
+  "status": "frozen",
+  "frozen_at": "2026-09-14T04:43:44.885926+00:00",
   "schema_version": "harbor-1.4",
-  "task_count": null,
+  "task_count": 39,
   "plan": "docs-research/trajectory-platform/bench-mvp-plan.md@v1.2",
   "execution_base": "harbor 0.22.0（sid-code/evals/external-benchmarks/harbor，只调用不修改）",
   "note": "与 bench/（v0.1，844 条已冻结）平级，不覆盖、不迁移。task_count 与 frozen_at 由 T7 冻结时写入。",
@@ -90,7 +90,20 @@
       "note": "🔴 淘汰 T0005 后存活 39 条，已跌破方案「≥40」底线，处置权交 T7（t6-review.md §6.2）；🔴 35/40 题面指向容器内不存在且含标准答案的文档，20 条剥掉路径后只剩一句祈使句 —— T7 的基线必须按 A2/A1/B/C 分级分组报，dataset card 须写明（见 t6-review.md §3、§7）"
     },
     "T7": {
-      "state": "todo"
+      "state": "done",
+      "date": "2026-09-14",
+      "artifacts": [
+        "bench/v0.2-mini/reports/baseline-v0.2-mini-t8-rerun.md",
+        "bench/v0.2-mini/reports/t8-rerun/summary.json",
+        "bench/v0.2-mini/reports/t8-rerun/2026-09-14__09-46-52"
+      ],
+      "gate": "pass@1=37.8%（14/37），分母 scored=37（题集 39 条，infra 排除 2 条不计分），实付 $26.214353",
+      "model": [
+        "origin-deepseek-v4-1-flash"
+      ],
+      "k": 1,
+      "network_policy": "allowlist（只放宿主网关 IP），**非题面写的 --network none**；对被测模型而言 github/npm 全不可达（实测 SSL EOF），证据 reports/t7-regate/netpolicy-probe.json",
+      "known_caveat": "修复①已内联文档：34/39 条题面含被点名文档原文，「题面缺 docs/」不再是低分解释；true_zero_no_attempt=0 ⇒ A2 低分是真能力信号"
     }
   }
 }
