@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — 基线评测报告
 
-> 生成于 2026-09-14 02:47 UTC，由 `scripts/mvp/t7-report.py` 从 run 产物**纯复算**。
+> 生成于 2026-09-14 03:35 UTC，由 `scripts/mvp/t7-report.py` 从 run 产物**纯复算**。
 > 取数源唯一：`bench/v0.2-mini/reports/t8-rerun/`（39 条 task × k=1）。
 
 ## 1. 主结果
@@ -183,7 +183,7 @@ pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」
 
 **v0.3 的两个动作**（本轮无法自救，如实记下）：① T1 筛选链排除「题面主体是引用本地不可见文档」的会话，或引入指令重写；② `--max-turns` 显式写进跑批命令而不是用 agent 默认值 —— 方案原就要求「`task.toml` 与 CLI 的 timeout 都显式写」，轮次上限是同一类隐式约束。
 
-## 11. 局限（15 条，主动披露）
+## 11. 局限（16 条，主动披露）
 
 > 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。
 
@@ -198,10 +198,11 @@ pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」
 9. **base 快照不带 git 历史**：容器内是 `git init` 的单 commit，agent 看不到真实提交历史。副作用是消除了「翻 git log 找答案」的泄漏路径，但也偏离真实开发环境。
 10. **继承 harbor 的六类静默失效**（verifier 恒返值、双层超时互掩、并发失真等）。已按其判据设门禁（`-n 6`、reward 双源核对），但**不能声称已全部排除**。
 11. **单一执行环境**：只在本机 colima + arm64 上验证过。换 x64 或换 Docker 后端须重跑门禁，结果不保证可比。
-12. **5 条 task 因私有 registry 被排除**：`ruijie/iam-studio-fe` 的 `@ruijie/*` 依赖只存在于内网私服，公网 404，装它必须把 `_authToken` 烤进镜像 —— 违反「不在容器里配私钥」。🔴 这是**纪律决定而非技术障碍**（内网当时可达）。后果就是第 2 条的单仓库；将来有内网镜像或 vendored 方案时这 5 条可回归。
-13. **7 条 task 因 `src/ink/` 从未入库而不可复现**（T5 门禁① 淘汰）。这是**采集侧**问题：轨迹引用了从未提交进仓库的路径，反解出的 base 里自然没有它。v0.3 的动作是在 T1 筛选链里排除「引用未入库路径」的会话。
-14. 🔴 **4 条题面的文件名点出了修法所需机制，这 4 条得分可能偏高**（`T0002` / `T0038` / `T0040` / `T0065`，取数 `meta.json` 的 `leakage.filename_specificity == "mechanism"`）。⛔ **不是 8 条** —— `reports/t6-recheck/filename-leak.json` 只做了「带信息 8 条 vs 仅主题 27 条」的粗二分，**没有 mechanism/symptom 这一层**；照它取会把 T6 明确判为「正常题面」的另 4 条 symptom 也算进来（T6 §4.2 的原话）。另有 4 条无文件名可判，回写为 `null`（**不是 `false`**）。
-15. **快照内有两处刻意保留的残余泄漏面**：① 62 条 external 分支在容器 `/eval-framework`（**`/repo` 之外**）放了 name/version/private 三键的 stub，用于闭合 `file:../eval-framework` 依赖；② 3 条 monorepo base 保留了 `packages/eval-framework/package.json`。**可证不参与判分**：两者都不含判分逻辑与测试代码，且容器内泄漏扫描零违规（扫描器另有 5/5 反向自证）。⛔ 不能只写「已剔除泄漏面」了事。
+12. 🔴 **2 条按 infra 排除出分母 ⇒ 分母是 37，不是 39**（`T0009`, `T0022`）。「39 条 benchmark」与「37 条参与计分」是**两个数** ——⛔ 别拿 39 当 pass@1 的分母（那会把仪器故障记成答错）。　· `T0009`（`infra_agent_not_launched`）：**结构性**：题面超 Linux `MAX_ARG_STRLEN`（131,072 B，容器内实测 131,000 过 / 131,060 起 `Argument list too long`）⇒ `bash -c` 拒绝 exec，agent **一个字没跑**（退出码 255），而 verifier 照常打分 ⇒ 假 0。🔴 **换模型重跑必然复现** —— 与模型能力无关，是题面装不进命令行。本批成因：单份内联文档 130,285 B（第二大的 2.1 倍，孤立离群）　· `T0022`（`infra_upstream_disconnect`）：**偶发但本批两次都中**：上游 LLM 链路断连（`socket connection was closed unexpectedly`），verifier 照常打分 ⇒ 假 0。首轮 61 轮时断、补跑 24 轮又断
+13. **5 条 task 因私有 registry 被排除**：`ruijie/iam-studio-fe` 的 `@ruijie/*` 依赖只存在于内网私服，公网 404，装它必须把 `_authToken` 烤进镜像 —— 违反「不在容器里配私钥」。🔴 这是**纪律决定而非技术障碍**（内网当时可达）。后果就是第 2 条的单仓库；将来有内网镜像或 vendored 方案时这 5 条可回归。
+14. **7 条 task 因 `src/ink/` 从未入库而不可复现**（T5 门禁① 淘汰）。这是**采集侧**问题：轨迹引用了从未提交进仓库的路径，反解出的 base 里自然没有它。v0.3 的动作是在 T1 筛选链里排除「引用未入库路径」的会话。
+15. 🔴 **4 条题面的文件名点出了修法所需机制，这 4 条得分可能偏高**（`T0002` / `T0038` / `T0040` / `T0065`，取数 `meta.json` 的 `leakage.filename_specificity == "mechanism"`）。⛔ **不是 8 条** —— `reports/t6-recheck/filename-leak.json` 只做了「带信息 8 条 vs 仅主题 27 条」的粗二分，**没有 mechanism/symptom 这一层**；照它取会把 T6 明确判为「正常题面」的另 4 条 symptom 也算进来（T6 §4.2 的原话）。另有 4 条无文件名可判，回写为 `null`（**不是 `false`**）。
+16. **快照内有两处刻意保留的残余泄漏面**：① 62 条 external 分支在容器 `/eval-framework`（**`/repo` 之外**）放了 name/version/private 三键的 stub，用于闭合 `file:../eval-framework` 依赖；② 3 条 monorepo base 保留了 `packages/eval-framework/package.json`。**可证不参与判分**：两者都不含判分逻辑与测试代码，且容器内泄漏扫描零违规（扫描器另有 5/5 反向自证）。⛔ 不能只写「已剔除泄漏面」了事。
 
 ## 12. 这批数字**不能**用来说什么
 
