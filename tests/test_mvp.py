@@ -3519,8 +3519,8 @@ def test_final_report_and_freeze_run_end_to_end(tmp_path):
     env = {**os.environ, "MVP_DIR": str(fake)}
     script = str(MVP / "t7-report.py")
 
-    # ① 39 条跑齐 ⇒ 报告与冻结都该成功
-    proc = subprocess.run([sys.executable, script, "--runs", "t8-rerun", "--freeze"],
+    # ① 39 条跑齐 ⇒ 报告、card 与冻结都该成功
+    proc = subprocess.run([sys.executable, script, "--runs", "t8-rerun", "--card", "--freeze"],
                           capture_output=True, text=True, cwd=REPO_ROOT, env=env)
     out = proc.stdout + proc.stderr
     # ⚠️ 只在 MVP_DIR 覆盖**确实不生效**时跳过（报告写回了真实目录而非 tmp），
@@ -3545,14 +3545,132 @@ def test_final_report_and_freeze_run_end_to_end(tmp_path):
     assert "reports/baseline/zero-diag.json" not in rep, "§10 仍写死 baseline 路径"
     assert "pass@1 < 10%" not in rep, "§10 阈值仍与实际判据（0.20）打架"
 
-    # ④ 未跑齐时必须拒绝冻结，且 ⛔ 不许动 version.json
+    # ③b card 必须真写出来，且不许把「某一批的读数」讲成数据集的固有属性
+    card = (fake / "DATASET_CARD.md").read_text(encoding="utf-8")
+    assert "t8-rerun" in card, "card 没写明基线读数出自哪一批"
+    assert "不是数据集的固有属性" in card, "card 把某批 pass@1 讲成了数据集属性"
+
+    # ④ 未跑齐时必须拒绝冻结**和 card**，且 ⛔ 不许动 version.json / 覆盖 card
     before = (fake / "version.json").read_bytes()
+    card_before = (fake / "DATASET_CARD.md").read_bytes()
     shutil.rmtree(fake / "reports/t8-rerun/2026-09-14__00-00-00" / f"{surv[0]}__smoke0")
+    proc = subprocess.run([sys.executable, script, "--runs", "t8-rerun", "--partial",
+                           "--card", "--freeze"],
+                          capture_output=True, text=True, cwd=REPO_ROOT, env=env)
+    out = proc.stdout + proc.stderr
+    # ⚠️ card 闸在冻结闸**之前**，所以这一跑先撞 card ——
+    # 判据写「两条之一」会让任一条失效时静默变绿，故两条都要各自断言。
+    assert "拒绝写 dataset card" in out, f"未跑齐却放行了 card：\n{out[-800:]}"
+    assert (fake / "DATASET_CARD.md").read_bytes() == card_before, \
+        "拒绝写 card 时仍覆盖了 DATASET_CARD.md —— 中途读数会盖掉定稿"
+    assert (fake / "version.json").read_bytes() == before, "拒绝时仍改了 version.json"
+    # ⑤ 不带 --card 时仍必须拒绝冻结（⛔ 别让 card 闸把冻结闸挡掉、看着像绿了）
     proc = subprocess.run([sys.executable, script, "--runs", "t8-rerun", "--partial", "--freeze"],
                           capture_output=True, text=True, cwd=REPO_ROOT, env=env)
     out = proc.stdout + proc.stderr
     assert "拒绝冻结" in out, f"未跑齐却放行了冻结：\n{out[-800:]}"
     assert (fake / "version.json").read_bytes() == before, "拒绝冻结时仍改了 version.json"
+
+
+def test_card_and_report_share_one_limitations_source():
+    """🔴 card 的 Limitations 必须与报告 §11 **同源**，⛔ 不许各写一份。
+
+    形态：报告 16 条、card 13 条，而**对外引用的人只看 card** ——
+    少掉的正好是后补的那几条（infra 排除出分母 / 私有 registry / 残余泄漏面），
+    每一条都是「主动做出的决策」，不披露等于假装没做。
+
+    判据落在**渲染后的 card 文本**上（不是「源码里调了同一个函数」）：
+    只要有人把清单复制一份进 card，条数就会与 `_limitations()` 脱钩。
+    """
+    rep = _load("t7-report")
+    card = c.MVP_DIR / "DATASET_CARD.md"
+    if not card.exists():
+        pytest.skip("card 还没生成（t7-report.py --card）")
+    text = card.read_text(encoding="utf-8")
+
+    excl = rep._excluded_limitation(["T0009", "T0022"], 39, None)
+    lims = rep._limitations(6, excl)
+    assert f"**{len(lims)} 条" in text, \
+        f"card 声称的条数与 _limitations() 的 {len(lims)} 条不一致 ⇒ 两处各写了一份"
+
+    # 逐条正文都必须真的在 card 里 —— 条数对上而正文被删改同样是隐藏
+    for x in lims:
+        head = x.lstrip("🔴 *").split("**")[0][:18].strip() or x[:18]
+        assert head in text, f"card 缺了这条局限：{x[:60]}"
+
+    # 报告与 card 的条数必须一样（同一份清单的两个渲染）
+    assert f"## 11. 局限（{len(lims)} 条" in \
+        (c.MVP_REPORTS / "baseline-v0.2-mini-t8-rerun.md").read_text(encoding="utf-8"), \
+        "报告 §11 的条数与 card 对不上"
+
+
+def test_card_never_claims_shipped_tasks_reproduce_the_baseline():
+    """🔴 card 最容易发布出去的一条假话：`tasks/` 里的题面**不是基线实跑的题面**。
+
+    基线跑的是 `t8-rerun.py` 现拼的 stage（已 gitignore），在原句之外加了两段
+    （修复①「引用文档原文」34/39、修复③「验收标准」39/39）。
+    实测交付真身 **0/39** 带这两段 ⇒ 照 `harbor run -p .../tasks` 跑等于**关掉两项修复**，
+    而它们正是 pass@1 从 0% 变 37.8% 的原因。
+
+    形态是「读者照 card 跑出个更低的数字，以为是模型差」，而 card 每个字都对得上产物。
+    这条把「必须写明差别」钉死。
+    """
+    card = c.MVP_DIR / "DATASET_CARD.md"
+    if not card.exists():
+        pytest.skip("card 还没生成（t7-report.py --card）")
+    text = card.read_text(encoding="utf-8")
+
+    # ① 事实前提仍然成立：交付题面确实不含那两段（成立才需要这条披露）
+    surv = json.loads(
+        (c.MVP_REPORTS / "t6-recheck/survivors.json").read_text(encoding="utf-8"))["survivors"]
+    shipped = [t for t in surv
+               if "## 引用文档原文" in (c.MVP_TASKS / t / "instruction.md").read_text(encoding="utf-8")]
+    assert not shipped, \
+        f"交付题面现在含内联段了（{shipped[:3]}）—— 前提变了，card 那段披露要重写"
+
+    # ② card 必须写明「基线的题面不在 tasks/ 里」
+    assert "基线跑的题面不在" in text and "stage" in text, \
+        "card 没写明基线实跑题面与交付 tasks/ 不同 ⇒ 照它复现会得到另一个数字"
+    assert "关掉这两项修复" in text, "card 没说明照 tasks/ 直接跑等于关掉两项修复"
+    # ③ 快照未入库这件事也必须说 —— 否则新克隆的仓库压根跑不起来
+    assert "不在 git 里" in text and "t4-build-env.py" in text, \
+        "card 没披露 repo-snapshot.tar.gz 未入库、须重建"
+
+
+def test_card_numbers_are_computed_not_handwritten():
+    """🔴 card 开头自称「没有一个手写数字」—— 那就不许有。
+
+    2026-09-14 实测抓到一个：快照体积原写死「每份 1–3MB」，
+    真实是 **0.8–14.0MB**（`snapshots.jsonl` 的 `tar_bytes`，均值 6.3）——
+    读者拿它估重建磁盘会差 4 倍，而这唯一的手写数字恰好在那句自夸下面。
+    """
+    rep = _load("t7-report")
+    st = rep._snapshot_stats()
+    assert st is not None, "读不到 snapshots.jsonl 的 tar_bytes —— 判据失效"
+    n, lo, hi = st
+    assert n > 0 and 0 < lo <= hi, f"体积统计不合理：{st}"
+
+    card = c.MVP_DIR / "DATASET_CARD.md"
+    if not card.exists():
+        pytest.skip("card 还没生成（t7-report.py --card）")
+    text = card.read_text(encoding="utf-8")
+    assert f"{lo:.1f}–{hi:.1f}MB" in text, \
+        f"card 的快照体积不是从 tar_bytes 现算的（应为 {lo:.1f}–{hi:.1f}MB）"
+    assert "每份 1–3MB" not in text, "写死的 1–3MB 回来了"
+
+    # 「文档份数」与「有内联的 task 条数」是两个数，⛔ 不许混
+    #
+    # ⚠️ 必须先 `_retarget("t8-rerun")`：`_n_inlined()` 的「本批是否内联」判据
+    # 走该批自己的 run 产物（见 `_batch_inlines`），而模块默认 RUNS 是 `baseline`
+    # （那批跑在修复① 之前，题面 0 条内联）⇒ 不切批次会拿到 0/39 并误判 card 写错了。
+    # 这正是 `_n_inlined()` docstring 里那个坑的镜像形态。
+    rep._retarget("t8-rerun")
+    n_docs, (n_inl, n_surv) = rep._n_docs_inlined(), rep._n_inlined()
+    assert n_inl, "切到 t8-rerun 后内联条数仍为 0 —— 判据失效（该批题面应有内联）"
+    assert n_docs != n_inl, \
+        f"两个数恰好相等（{n_docs}）⇒ 这条判据分辨不了混用，要换判据"
+    assert f"{n_docs} 份原文" in text and f"**{n_inl}/{n_surv}**" in text, \
+        f"card 没同时写清文档份数（{n_docs}）与内联条数（{n_inl}/{n_surv}）"
 
 
 def test_zero_diag_section_threshold_claim_matches_actual_pass_at_1(tmp_path):

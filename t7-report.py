@@ -54,6 +54,11 @@ REPORT = c.MVP_REPORTS / "baseline-v0.2-mini.md"
 SUMMARY = RUNS / "summary.json"
 RECHECK = c.MVP_REPORTS / "t6-recheck"
 
+#: dataset card。⚠️ **不随 `--runs` 切**：card 描述的是「这个数据集是什么」，
+#: 只有一份；报告才是「某一批跑出了什么」，一批一份。
+#: 🔴 所以 card 里凡是引用某批读数的地方都必须**写明是哪一批** —— 见 `build_card()`。
+CARD = c.MVP_DIR / "DATASET_CARD.md"
+
 
 def _retarget(runs_name: str) -> None:
     """把取数源与产物路径整组切到另一批。
@@ -1085,6 +1090,124 @@ def _n_concurrent(run_dir: Path) -> int:
         return 1
 
 
+def _compose() -> dict:
+    """基线那一批实跑的**题面构成** —— card 的「怎么用」必须照它写。
+
+    🔴 2026-09-14 抓到，这是 card 最容易发布出去的一条假话：
+    `bench/v0.2-mini/tasks/` 里交付的题面**不是基线实跑的题面**。
+    基线跑的是 `t8-rerun.py` 现拼的 stage（`reports/t8-rerun/tasks/`，已 gitignore）——
+    在原句之外加了两段：修复①「## 引用文档原文」与修复③「## 验收标准」。
+    实测交付真身 **0/39** 带这两段，stage **34/39 + 39/39** 带。
+
+    ⇒ 照 `harbor run -p bench/v0.2-mini/tasks` 跑复现的是**题集**，⛔ 不是基线读数的条件；
+    那样跑等于关掉了两项修复，而这两项修复正是 pass@1 从 0% 变成 37.8% 的原因
+    （见 remediation §8.2：T0011/T0047 就是靠修复③ 才拿到 1.0）。
+    形态是「读者照 card 跑出个更低的数字，以为是模型差」，而 card 每个字都对得上产物。
+
+    取数走 `summary-raw.json` 的 `config`（`t8-rerun.py` 自己落的盘），
+    ⛔ 不数 stage 目录：`--resume` 会把 stage 重建成只剩待跑的那几条
+    （本批补跑后只剩 2 个目录），照它数会说「本批 2 条」。同 `_n_inlined()` 那个坑。
+    """
+    raw = RUNS / "summary-raw.json"
+    if not raw.exists():
+        return {}
+    try:
+        return json.loads(raw.read_text(encoding="utf-8")).get("config") or {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _snapshot_stats() -> tuple[int, float, float] | None:
+    """未入库的仓库快照：`(份数, 最小 MB, 最大 MB)`，从 `snapshots.jsonl` 的 `tar_bytes` 现算。
+
+    🔴 2026-09-14 抓到：这段原本手写「每份 1–3MB」，实测是 **0.8–14.0MB**（均值 6.3）。
+    一份开头就写着「⛔ 本文没有一个手写数字」的 card 里，唯一的手写数字是错的 ——
+    而读者拿它估算「重建要多少磁盘」时会差 4 倍。
+    """
+    p = c.MVP_META / "snapshots.jsonl"
+    if not p.exists():
+        return None
+    sizes = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            b = json.loads(line).get("tar_bytes")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(b, int) and b > 0:
+            sizes.append(b)
+    if not sizes:
+        return None
+    return len(sizes), min(sizes) / 1048576, max(sizes) / 1048576
+
+
+def _n_docs_inlined() -> int:
+    """修复① 内联用的**文档原文**份数（`reports/t8-fix/docs/` 下的 .md）。
+
+    ⚠️ 与 `_n_inlined()` 的 34 是**两个数**：34 是「有内联的 task 条数」，
+    这里是「文档份数」（一条 task 可点名多份）。card 里两个都出现，⛔ 别混。
+    """
+    d = c.MVP_REPORTS / "t8-fix/docs"
+    return len(list(d.glob("*.md"))) if d.is_dir() else 0
+
+
+def _card_usage(cfg: dict) -> list[str]:
+    """card 的「怎么复现基线」段。**按实跑 config 现写**，⛔ 不写死命令。
+
+    ⚠️ 两条命令刻意分开列，且**先说差别**：
+      - 复现**题集**（跑交付的 tasks/ 原句题面）
+      - 复现**基线读数**（必须走 t8-rerun.py，它才会拼那两段）
+    只给一条会让读者以为二者等价 —— 见 `_compose()` 的论证。
+    """
+    inl, f2p = cfg.get("inline_docs"), cfg.get("f2p_list")
+    n_conc = cfg.get("n_concurrent")
+    turns, budget = cfg.get("max_turns"), cfg.get("max_budget_usd")
+    if not cfg:
+        # ⛔ 没有 config 就照实说「读不到」，不编一条命令出来 ——
+        # card 是对外引用的第一入口，编出来的复现命令比没有更糟。
+        return ["> ⚠️ 读不到本批实跑配置（缺 `summary-raw.json` 的 `config`）⇒"
+                " **无法给出可复现基线的命令**，⛔ 别照 `tasks/` 直接跑就当复现了基线。", ""]
+    return [
+        "**⛔ 这两件事不是一回事**，混了就会跑出另一个数字：",
+        "",
+        f"| 你想复现什么 | 入口 | 题面形态 |",
+        "|---|---|---|",
+        f"| **题集本身**（39 条能不能跑起来） | `harbor run -p bench/v0.2-mini/tasks "
+        f"-n {n_conc}` | 交付原句，**不含**下面两段 |",
+        f"| **基线读数**（{RUNS.name} 那批的 pass@1） | "
+        f"`~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t8-rerun.py` | "
+        f"原句 **+ 两段现拼** |",
+        "",
+        "🔴 **基线跑的题面不在 `tasks/` 里**。`t8-rerun.py` 把 39 条复制到 stage"
+        f"（`reports/{RUNS.name}/tasks/`，已 gitignore）并在原句之外拼了两段：",
+        "",
+        f"- **`## 引用文档原文`**（修复①，本批 `inline_docs={inl}`）——"
+        " 把题面点名的那份文档原文内联进去。"
+        f"取数 `reports/t8-fix/docs/`（{_n_docs_inlined()} 份原文已入库）+ `docs-index.json`。"
+        f"⚠️ 本批 **{_n_inlined()[0]}/{_n_inlined()[1]}** 条题面真的拼上了这段"
+        "（其余的没点名任何可取到的文档）—— ⛔ 与「文档份数」是两个数。",
+        f"- **`## 验收标准`**（修复③，本批 `f2p_list={f2p}`）——"
+        " 只给 F2P 测试的**路径清单**，⛔ 不给测试内容（给内容就能从断言反推实现）。"
+        "取数各 task 的 `tests/f2p.json`。",
+        "",
+        f"⇒ 照第一行跑（`tasks/` 原句）等于**关掉这两项修复**，"
+        f"而它们正是本批 pass@1 不是 0% 的原因（第一轮 `baseline/` 无此两段，实测 0/39）。",
+        "",
+        f"其余必控参数（本批实测）：`max_turns={turns}`、`max_budget_usd={budget}`、"
+        f"`-n {n_conc}`、`--agent-timeout-multiplier "
+        f"{cfg.get('agent_timeout_multiplier')}`。",
+        "",
+        "⚠️ **`environment/repo-snapshot.tar.gz` 不在 git 里**"
+        + (f"（{_snap[0]} 份，每份 {_snap[1]:.1f}–{_snap[2]:.1f}MB，"
+           if (_snap := _snapshot_stats()) else "（")
+        + "见 `.gitignore`）⇒ 新克隆的仓库**跑不起来**，须先用 "
+        "`scripts/mvp/t4-build-env.py` 从 mirror 重建（`meta/snapshots.jsonl` 存了"
+        "每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果）。",
+        "",
+    ]
+
+
 def build_report(res: dict, trials: list[lib.Trial],
                  gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                  missing: list[str], n_surv: int,
@@ -1288,6 +1411,150 @@ def build_report(res: dict, trials: list[lib.Trial],
     return "\n".join(L)
 
 
+def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
+               funnel: list, attrib: dict, n_surv: int, zd: dict | None,
+               n_conc: int, fingerprint: str) -> str:
+    """dataset card —— 方案 §6 点名要的那份「这个数据集是什么」。
+
+    🔴 **与报告的分工**（写错这一条，两份文件就会互相打架）：
+
+      - **报告** = 「**某一批**跑出了什么」，一批一份，文件名带批次名。
+      - **card** = 「**这个数据集**是什么」，只有一份，不随 `--runs` 切。
+        所以 card 引用读数时**必须点明是哪一批**，⛔ 不许写成数据集的固有属性 ——
+        pass@1 是「模型 × 题集 × 配置」的联合读数，换任一项都会变。
+
+    ⛔ **Limitations 不许在这里另写一份**：与报告 §11 共用 `_limitations()`。
+    两处各写一份的形态是「报告 16 条、card 13 条」，而对外引用的人只看 card ——
+    少的那几条正好是最该披露的（infra 排除、私有 registry、残余泄漏面都是后补的）。
+
+    ⚠️ 分类/分档/仓库分布从 `meta.json` 现算，⛔ 不写死：
+    局限第 2/4/5 条的措辞都依赖这几个分布，写死会在上游重跑后与局限自相矛盾。
+    """
+    surv = json.loads((RECHECK / "survivors.json").read_text(encoding="utf-8"))["survivors"]
+    cat: Counter[str] = Counter()
+    repo: Counter[str] = Counter()
+    src: Counter[str] = Counter()
+    model: Counter[str] = Counter()
+    for t in surv:
+        m = json.loads((c.MVP_TASKS / t / "meta.json").read_text(encoding="utf-8"))
+        cat[m.get("category") or "?"] += 1
+        repo[m.get("repo") or "?"] += 1
+        src[m.get("agent_source") or "?"] += 1
+        model[m.get("model") or "?"] += 1
+
+    cfg = _compose()
+    p, lo, hi = res["p"], res["lo"], res["hi"]
+    _lims = _limitations(
+        n_conc, _excluded_limitation(res.get("excluded_tasks") or [], n_surv, zd))
+
+    def _dist(ctr: Counter[str]) -> str:
+        return " / ".join(f"`{k}` {v}" for k, v in ctr.most_common())
+
+    L = [
+        "# Agent-Traj-Bench v0.2-mini — Dataset Card",
+        "",
+        f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，"
+        "由 `scripts/mvp/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
+        "",
+        "## 这是什么",
+        "",
+        "从**真实 Claude Code / Codex 生产会话轨迹**反解出的 SWE-bench 形态 benchmark："
+        "每条 task 给一个 base 快照 + 开发者当时那句话，判分看指定测试从红转绿。",
+        "",
+        "**定位是「真实生产交互衍生的补充 benchmark」，⛔ 不是通用 SWE 基准** ——"
+        "单开发者、单仓库、两类任务（见 Limitations 第 2 / 4 条）。",
+        "",
+        "## 规模与构成",
+        "",
+        "| 项 | 值 |",
+        "|---|---|",
+        f"| 交付 task 数 | **{len(surv)}** |",
+        f"| 来源仓库 | {_dist(repo)} |",
+        f"| 任务类型 | {_dist(cat)} |",
+        f"| 难度分档（`edit_ops` 代理指标） | "
+        f"{' / '.join(f'`{kk}` {len(v.tasks)}' for kk, v in bcells.items())}"
+        "　⚠️ **S 档为 0** |",
+        f"| 题面信息量分级 | "
+        f"{' / '.join(f'`{kk}` {len(gcells[kk].tasks)}' for kk in ('C', 'B', 'A1', 'A2') if kk in gcells)} |",
+        f"| 轨迹采集工具 | {_dist(src)} |",
+        f"| 轨迹里的原始模型 | {_dist(model)} |",
+        f"| 冻结批次指纹 | `{fingerprint}` |",
+        "",
+        "> **题面信息量分级**：`A2` 剥掉路径后只剩一句祈使句 ／ `A1` 点名交付物 ／"
+        " `B` 文件名点出症状 ／ `C` 散文自带可复现症状。信息量 C > B > A1 > A2。",
+        "> 🔴 这个维度与难度分档**不交叉**，两张表各看一个维度。",
+        "",
+        "## 是怎么筛出来的（漏斗）",
+        "",
+        "| 级 | 剩余 | 取数源 |",
+        "|---|---|---|",
+        *[f"| {label} | **{n}** | `{srcf}` |" for label, n, srcf in funnel],
+        "",
+        "> ⚠️ 第 3 行比第 2 行大不是笔误：单位从「会话」换成「任务单元」。",
+        "",
+        "三道机械门禁（`oracle` / `nop` / `oracle -k 3`）后 **100% 人工过目**（非抽样）。"
+        f"淘汰归因合计 {sum(attrib.values())} 条：",
+        "",
+        *[f"- {kk}：**{vv}** 条" for kk, vv in attrib.items()],
+        "",
+        "## 基线读数",
+        "",
+        f"🔴 **以下数字是 `{RUNS.name}` 那一批的读数，⛔ 不是数据集的固有属性** ——"
+        "pass@1 是「模型 × 题集 × 配置」的联合结果，换任一项都会变。",
+        "",
+        "| 项 | 值 |",
+        "|---|---|",
+        f"| 模型 | {', '.join(ctl['model_observed']) or '（产物里没有模型名）'} |",
+        f"| **pass@1** | **{p:.1%}**（{res['passed']:g} / {res['n']}） |",
+        f"| 95% Wilson | [{lo:.1%}, {hi:.1%}]，半宽 ±{res['halfwidth_pp']:.1f}pp |",
+        f"| 分母 | `scored={res['n']}`，infra 排除 {res['excluded']} 条"
+        f"{'（' + ', '.join(res['excluded_tasks']) + '）' if res['excluded_tasks'] else ''} |",
+        f"| k | {k}（`-n {n_conc}`） |",
+        f"| 实付 | ${cost['total']}（{cost['n_with_cost']}/{cost['n_trials']} 个 trial 有成本值） |",
+        "",
+        f"> **分母是 {res['n']} 而不是 {len(surv)}**：{res['denominator_note']}",
+        "",
+        f"完整报告（13 节，含真 0/假 0 逐条归因）：`{_rel(REPORT)}`　"
+        f"机器可读取数源：`{_rel(SUMMARY)}`",
+        "",
+        # ⛔ 单模型 ⇒ 必须当场说清「不能拿它比较模型」，不能只在 Limitations 里提一句。
+        # card 是对外引用的第一入口，读者最想干的就是拿这个数字比模型。
+        *(["🔴 **只跑了 1 个模型 × k=1** ⇒ ⛔ **不能**用本数据集比较模型强弱"
+           "（方案要求 ≥2 模型 × k=3 才谈模型间差异），也**不能**把这个点估计"
+           "当作「模型在真实任务上的能力」—— 半宽 ±"
+           f"{res['halfwidth_pp']:.1f}pp 的区间比多数模型间差距还宽。", ""]
+          if len(ctl["model_observed"]) < 2 or k < 3 else []),
+        "## 怎么跑",
+        "",
+        *_card_usage(cfg),
+        "## Limitations（主动披露）",
+        "",
+        f"🔴 **{len(_lims)} 条，与报告 §11 同源**（`_limitations()`，⛔ 两处不各写一份）。"
+        "不读这一节就引用上面的数字，会把已知缺陷当成结论。",
+        "",
+        *[f"{i}. {x}" for i, x in enumerate(_lims, 1)],
+        "",
+        "## 这批数字不能用来说什么",
+        "",
+        f"- ⛔ **不能**说「模型在真实开发任务上只能解 {p:.0%}」——"
+        f"单模型、k={k}、n={res['n']}，且题面信息量分级实测主导了分数（报告 §3）。",
+        f"- ⛔ **不能**拿它与 SWE-bench 等公开基准比数字：题集构造、判分口径、"
+        "题面信息量都不同源。",
+        "- ⛔ **不能**说「已排除训练集污染」—— 污染检测**未做**（Limitations 第 8 条）。",
+        f"- ⛔ **不能**拿 {len(surv)} 当 pass@1 的分母（那会把 {res['excluded']} 条"
+        "仪器故障记成答错）。",
+        "",
+        "## 复算",
+        "",
+        "```bash",
+        "PY=~/.local/share/uv/tools/harbor/bin/python   # ⛔ 系统 python3 没有 harbor 包",
+        f"$PY scripts/mvp/t7-report.py --runs {RUNS.name} --card   # $0，不跑任何模型",
+        "```",
+        "",
+    ]
+    return "\n".join(L)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--freeze", action="store_true", help="同时写 version.json 的冻结字段")
@@ -1298,6 +1565,9 @@ def main() -> int:
                     help="取数源目录名（reports/ 下）。默认 baseline（第一轮，已作废）；"
                          "整改后那批传 t8-rerun。产物文件名跟着一起切，"
                          "⛔ 两批不共用同一个 .md（会静默覆盖）")
+    ap.add_argument("--card", action="store_true",
+                    help="同时写 DATASET_CARD.md（方案 §6 点名要的那份）。"
+                         "⚠️ card 只有一份、不随 --runs 切，里面引用读数处会写明是哪一批")
     args = ap.parse_args()
 
     if args.runs != "baseline":
@@ -1407,6 +1677,21 @@ def main() -> int:
     print(f"pass@1 = {res['p']:.1%}（{res['passed']:g}/{res['n']}），排除 {res['excluded']}，实付 ${cost['total']}")
     print(f"  报告 {_rel(REPORT)}")
     print(f"  取数源 {_rel(SUMMARY)}")
+
+    if args.card:
+        # 🔴 与冻结同一条纪律：中途产物不许写 card。
+        # card 是**对外引用的第一入口**，它比报告更容易被单独传播 ——
+        # 报告首屏有「未跑齐」红字，card 一旦发出去就没人回来看那行字了。
+        if missing:
+            raise SystemExit(
+                f"⛔ 拒绝写 dataset card：{len(missing)}/{len(surv)} 条还没跑"
+                "（--partial 只放行报告，不放行 card）。\n"
+                "   → card 是对外引用入口，中途读数写进去等于把它当定稿发布。"
+            )
+        CARD.write_text(build_card(res, gcells, bcells, cost, ctl, k, funnel, attrib,
+                                   len(surv), zd, _n_concurrent(run), fingerprint),
+                        encoding="utf-8")
+        print(f"  dataset card {_rel(CARD)}")
 
     if args.freeze:
         # 🔴 冻结是**不可逆的记录动作**：`frozen_at` 一写，这批就对外声称「定稿」。
