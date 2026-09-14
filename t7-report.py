@@ -138,6 +138,11 @@ LIMITATIONS = [
     "已按其判据设门禁（`-n {n_conc}`、reward 双源核对），但**不能声称已全部排除**。",
     "**单一执行环境**：只在本机 colima + arm64 上验证过。换 x64 或换 Docker 后端须重跑门禁，"
     "结果不保证可比。",
+    # 🔴 2026-09-14 新增。⚠️ 整条由 `_excluded_limitation()` 按 run 产物生成 ——
+    # 条目文案、task 名、成因分类**全部随数据走**，⛔ 一个字都不许写死：
+    # 写死的形态是「下一批换了别的题被排除，而这条还在讲 T0009」。
+    # 没有任何排除时这条**整条消失**（⛔ 不留「本批无排除」的空话占位）。
+    "{excluded}",
     "**5 条 task 因私有 registry 被排除**：`ruijie/iam-studio-fe` 的 `@ruijie/*` 依赖只存在于"
     "内网私服，公网 404，装它必须把 `_authToken` 烤进镜像 —— 违反「不在容器里配私钥」。"
     "🔴 这是**纪律决定而非技术障碍**（内网当时可达）。后果就是第 2 条的单仓库；"
@@ -161,16 +166,83 @@ LIMITATIONS = [
 ]
 
 
-def _limitations(n_conc: int) -> list[str]:
-    """局限清单，把 `{n_conc}` 占位符换成本轮实际并发数。
+#: 排除类判定 → 给读者的「下一棒会不会再撞上」说明。
+#:
+#: 🔴 分类的意义在于**结构性 vs 偶发**：前者换个模型重跑必然复现（题面本身装不进
+#: 命令行），后者是链路抖动。两者混报的形态是「读者以为重跑一次就能补回来」。
+_EXCLUDED_KIND = {
+    "infra_agent_not_launched": (
+        "**结构性**：题面超 Linux `MAX_ARG_STRLEN`（131,072 B，容器内实测 131,000 过 / "
+        "131,060 起 `Argument list too long`）⇒ `bash -c` 拒绝 exec，agent **一个字没跑**"
+        "（退出码 255），而 verifier 照常打分 ⇒ 假 0。"
+        "🔴 **换模型重跑必然复现** —— 与模型能力无关，是题面装不进命令行。"
+        "本批成因：单份内联文档 130,285 B（第二大的 2.1 倍，孤立离群）"
+    ),
+    "infra_upstream_disconnect": (
+        "**偶发但本批两次都中**：上游 LLM 链路断连（`socket connection was closed "
+        "unexpectedly`），verifier 照常打分 ⇒ 假 0。首轮 61 轮时断、补跑 24 轮又断"
+    ),
+}
+
+
+def _excluded_limitation(excluded_tasks: list[str], n_surv: int,
+                         zd: dict | None) -> str | None:
+    """infra 排除那条局限 —— **整条按数据生成**，没有排除就返回 None。
+
+    🔴 为什么必须有这一条：§1 已经写了「排除的 task：[...]」，但那是「本批发生了什么」；
+    局限清单回答的是「**下一棒会再撞上什么**」。T0009 是结构性的 —— 换模型重跑还会撞，
+    而在加这条之前，报告里没有任何一处说明这件事。
+
+    ⚠️ 同时点破**两个分母**：39 条是 benchmark 规模，37 条才是参与计分的。
+    引用方只看到「39 条 benchmark」+「pass@1 37.8%」会以为分母是 39
+    （那样算出来是 35.9%，差 1.9pp —— 小到看不出，正因如此才要写明）。
+    """
+    if not excluded_tasks:
+        return None
+    verdicts = {t.get("task"): t.get("verdict")
+                for t in ((zd or {}).get("trials") or [])}
+    by_kind: dict[str, list[str]] = {}
+    for t in excluded_tasks:
+        by_kind.setdefault(verdicts.get(t) or "unknown", []).append(t)
+
+    n_scored = n_surv - len(excluded_tasks)
+    head = (f"🔴 **{len(excluded_tasks)} 条按 infra 排除出分母 ⇒ 分母是 {n_scored}，不是 {n_surv}**"
+            f"（{', '.join(f'`{t}`' for t in excluded_tasks)}）。"
+            f"「{n_surv} 条 benchmark」与「{n_scored} 条参与计分」是**两个数** ——"
+            f"⛔ 别拿 {n_surv} 当 pass@1 的分母（那会把仪器故障记成答错）。")
+    bits = [head]
+    for kind, tasks in sorted(by_kind.items()):
+        why = _EXCLUDED_KIND.get(kind)
+        bits.append(
+            f"　· {', '.join(f'`{t}`' for t in tasks)}（`{kind}`）："
+            + (why if why else
+               "⚠️ 本脚本没有这一类的成因说明 —— 先去 `t7-zero-diag.py` 补，"
+               "⛔ 别让读者自己猜"))
+    return "".join(bits)
+
+
+def _limitations(n_conc: int, excluded: str | None = None) -> list[str]:
+    """局限清单，把占位符换成本轮实际值。
 
     🔴 2026-09-14 抓到：第 10 条写死「已按其判据设门禁（`-n 1`）」，
     而本批实测跑的是 `-n 6`（`config.json` 的 `n_concurrent_trials`）。
     §1 与 §5 都如实写了 `-n 6`，只有这条还是旧值 ——
     而「**并发失真**」正是这条自己点名的六类静默失效之一，
     写错并发数等于这条局限在陈述一个与主表相反的执行条件。
+
+    ⚠️ `{excluded}` 那条**没有排除时整条剔除**，⛔ 不留空话占位：
+    留一句「本批无 infra 排除」会让清单的条数虚增，而条数是读者判断
+    「披露得够不够细」的第一眼指标。所以 §11 的标题条数也必须跟着这里的
+    **返回长度**算，⛔ 不能用 `len(LIMITATIONS)`（那个恒为 16，会与正文差 1）。
     """
-    return [x.replace("{n_conc}", str(n_conc)) for x in LIMITATIONS]
+    out = []
+    for x in LIMITATIONS:
+        if x == "{excluded}":
+            if excluded:
+                out.append(excluded)
+            continue                     # 无排除 ⇒ 整条不输出
+        out.append(x.replace("{n_conc}", str(n_conc)))
+    return out
 
 
 def load_funnel() -> list[tuple[str, int | str, str]]:
@@ -1028,6 +1100,10 @@ def build_report(res: dict, trials: list[lib.Trial],
     """
     p, lo, hi = res["p"], res["lo"], res["hi"]
     ec = Counter(t.error_code for t in trials if t.error_code)
+    # 🔴 局限清单先算出来 —— §11 的**标题条数**与**正文**必须用同一份，
+    # 否则「标题说 16 条、正文 15 条」（`{excluded}` 无排除时整条剔除）。
+    _lims = _limitations(
+        n_conc, _excluded_limitation(res.get("excluded_tasks") or [], n_surv, zd))
     L = [
         "# Agent-Traj-Bench v0.2-mini — 基线评测报告",
         "",
@@ -1167,13 +1243,16 @@ def build_report(res: dict, trials: list[lib.Trial],
         *[f"| {name} | {verdict} | {why} |" for name, verdict, why in health],
         "",
         *_zero_diag_section(zd, p),
-        f"## 11. 局限（{len(LIMITATIONS)} 条，主动披露）",
+        # 🔴 条数取**实际渲染出的那份**，⛔ 不用 len(LIMITATIONS)：
+        # `{excluded}` 那条在无排除时整条剔除 ⇒ 两者会差 1，
+        # 形态是「标题说 16 条、正文只有 15 条」，而这一节正是讲诚实披露的。
+        f"## 11. 局限（{len(_lims)} 条，主动披露）",
         "",
         "> 不写这一节，前面所有数字都会被一句「你怎么证明」问倒。",
         "",
         # ⛔ 不许直接渲染 LIMITATIONS：其中一条含 `{n_conc}` 占位符，
         # 直接输出会把花括号原样印进报告（且并发数仍是错的）。
-        *[f"{i}. {x}" for i, x in enumerate(_limitations(n_conc), 1)],
+        *[f"{i}. {x}" for i, x in enumerate(_lims, 1)],
         "",
         "## 12. 这批数字**不能**用来说什么",
         "",

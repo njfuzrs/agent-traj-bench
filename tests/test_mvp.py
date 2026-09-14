@@ -2622,7 +2622,14 @@ def test_limitations_cover_all_required_disclosures():
     mod = _u.module_from_spec(spec)
     spec.loader.exec_module(mod)
     lims = mod.LIMITATIONS
-    assert len(lims) == 15, f"局限应为 15 条（方案 §6 十三条 + 交接 #3 两条），实际 {len(lims)}"
+    # 🔴 判据是**下限**，⛔ 不是等号。本条测试自己的 docstring 就写着
+    # 「一条测试因为清单变长而红，是判据的问题，不是清单的问题」——
+    # 而写死 `== 15` 正是那个毛病：**新增披露是该被鼓励的方向**，
+    # 却每次都要回来改这个数字（2026-09-14 加 `{excluded}` 时实测撞到）。
+    # 少一条是隐藏（必须红），多一条是更诚实（必须绿）。
+    # 具体「哪些主题必须在」由下面的 `_find()` 逐条钉死 —— 那才是真判据。
+    assert len(lims) >= 15, \
+        f"局限少于 15 条（方案 §6 十三条 + 交接 #3 两条）⇒ 有披露被删掉了，实际 {len(lims)}"
 
     def _find(*words: str) -> str:
         """按关键词取那一条 —— 下标会漂，内容不会。"""
@@ -3759,8 +3766,16 @@ def test_limitations_concurrency_matches_actual_run():
         out = "\n".join(rep._limitations(n))
         assert f"`-n {n}`" in out, f"n_conc={n} 没填进去"
         assert "{n_conc}" not in out, "占位符没被替换 —— 会把花括号原样印进报告"
-    # 条数不能因为填充而变
-    assert len(rep._limitations(6)) == len(rep.LIMITATIONS)
+    # 条数：填充**不许**改变条数；只有 `{excluded}` 这一条会按有无排除增减。
+    # ⚠️ 判据写成「无排除时恰好少 1 条、有排除时相等」——
+    # ⛔ 不写 `== len(LIMITATIONS)`：那样会逼着 `{excluded}` 无排除时留一句
+    # 空话占位，而条数正是读者判断「披露够不够细」的第一眼指标。
+    assert len(rep._limitations(6)) == len(rep.LIMITATIONS) - 1, \
+        "无排除时 `{excluded}` 应整条剔除"
+    assert len(rep._limitations(6, "X")) == len(rep.LIMITATIONS), \
+        "有排除时应补回那一条"
+    assert "{excluded}" not in "\n".join(rep._limitations(6)), \
+        "占位符原样印进了报告"
 
     # 渲染侧必须走填充函数，⛔ 不许直接迭代 LIMITATIONS
     code = [ln.split("#", 1)[0] for ln in
@@ -4162,3 +4177,54 @@ def test_guard_blockquote_does_not_double_wrap_bold(tmp_path):
             f"  实际：{line[:140]}\n  期望：{'> 🔴 ' + guard[:120]}")
     finally:
         rep.RUNS = orig
+
+
+def test_excluded_tasks_are_disclosed_in_limitations():
+    """🔴 infra 排除必须进局限清单，且**说明每条会不会再复现**。
+
+    2026-09-14 抓到：§1 写了「排除的 task：['T0009','T0022']」，而 §11 局限
+    15 条里**一条都没提这件事**。两节回答的问题不同 —— §1 是「本批发生了什么」，
+    §11 是「**下一棒会再撞上什么**」。T0009 是结构性的（题面超
+    `MAX_ARG_STRLEN` ⇒ 换模型重跑必然复现），在加这条之前报告里没有任何一处说明。
+
+    ⚠️ 同时必须点破**两个分母**：39 是 benchmark 规模、37 才是参与计分的。
+    只看「39 条 benchmark」+「pass@1 37.8%」会以为分母是 39
+    （那样算是 35.9%，只差 1.9pp —— 小到看不出，正因如此才要写明）。
+    """
+    rep = _load("t7-report")
+    zd = {"trials": [
+        {"task": "T0009", "verdict": "infra_agent_not_launched"},
+        {"task": "T0022", "verdict": "infra_upstream_disconnect"},
+    ]}
+
+    out = rep._excluded_limitation(["T0009", "T0022"], 39, zd)
+    assert out, "有排除却没生成局限条目"
+    # ① 两个分母都要出现，且说清哪个是 pass@1 的分母
+    assert "37" in out and "39" in out, f"没点破两个分母：{out[:160]}"
+    assert "不是 39" in out, f"没写明 ⛔ 别拿 39 当分母：{out[:160]}"
+    # ② 两条 task 都要点名，各自带成因
+    assert "`T0009`" in out and "`T0022`" in out, out[:200]
+    # ③ 🔴 结构性 vs 偶发必须分开 —— 混报会让读者以为重跑就能补回来
+    assert "结构性" in out and "MAX_ARG_STRLEN" in out, \
+        f"没说明 T0009 是结构性的（换模型重跑必复现）：{out}"
+    assert "偶发" in out, f"没说明 T0022 是偶发的：{out}"
+
+    # ④ 没有排除 ⇒ 返回 None，且局限清单整条剔除（⛔ 不留空话占位）
+    assert rep._excluded_limitation([], 39, zd) is None
+    assert "{excluded}" not in "\n".join(rep._limitations(6)), "占位符漏进报告"
+
+    # ⑤ 🔴 未知判定不许静默 —— 新增一类 infra 却忘了补成因说明时，
+    #    条目要**明说自己缺**，⛔ 不能让读者以为那条没有成因
+    out2 = rep._excluded_limitation(["T0077"], 39,
+                                    {"trials": [{"task": "T0077",
+                                                 "verdict": "infra_brand_new"}]})
+    assert "infra_brand_new" in out2 and "没有这一类的成因说明" in out2, \
+        f"未知判定被静默了：{out2}"
+
+    # ⑥ 渲染进报告：条数与正文必须同源（标题说 N 条、正文就得 N 条）
+    import re as _re
+    body = "\n".join(f"{i}. {x}" for i, x in
+                     enumerate(rep._limitations(6, out), 1))
+    n_items = len(_re.findall(r"^\d+\. ", body, _re.M))
+    assert n_items == len(rep.LIMITATIONS), \
+        f"有排除时正文应为 {len(rep.LIMITATIONS)} 条，实际 {n_items}"
