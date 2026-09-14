@@ -3957,3 +3957,61 @@ def test_zero_diag_verdict_table_lists_every_verdict(tmp_path):
         assert "这才是能力信号" not in sec, "wrong_fix 行仍用排他措辞"
     finally:
         rep.RUNS = orig
+
+
+def test_bash_hunting_wording_follows_whether_docs_were_inlined(tmp_path):
+    """🔴 「bash 花在找文档上」这句的措辞必须随本批是否内联而变。
+
+    2026-09-14 抓到：原文把这些 bash 调用当作低分归因 ——
+    「花在容器里找那份题面点名、**而实际不存在**的文档上」。
+    而修复① 已把文档原文内联进题面（§2②）⇒ 本批那份文档**就在题面里**，
+    这些 find/ls 是**白费功夫**，⛔ 不是「信息拿不到」。
+    两句并读会让读者以为本批仍有文档缺口，与 §2② 直接打架。
+
+    ⚠️ 占比本身是修复① 生效的证据（同一判据、同一脚本）：
+    baseline 批 154/405 = 38%，本批 400/2774 = 14%。
+    """
+    rep = _load("t7-report")
+
+    hd = {"n_hunting": 400, "n_bash": 2774, "share": 0.1442, "note": "近似指标"}
+    zd = {"n_diagnosed": 31, "max_turns": 120, "verdicts": {"solved": 10},
+          "conclusion_guard": "x", "bash_hunting_doc": hd, "control_group": {}}
+
+    recheck = tmp_path / "t6-recheck"
+    recheck.mkdir(parents=True)
+    surv = [f"T{i:04d}" for i in range(1, 40)]
+    (recheck / "survivors.json").write_text(
+        json.dumps({"survivors": surv}), encoding="utf-8")
+    reports = tmp_path / "reports"
+    (reports / "t8-fix").mkdir(parents=True)
+    (reports / "t8-fix/docs-index.json").write_text(json.dumps(
+        {t: {"docs": [{"channel": "lake", "file": "d.md"}]} for t in surv[:34]}),
+        encoding="utf-8")
+
+    runs = tmp_path / "t8-rerun"
+    ds = runs / "tasks"
+    (ds / "T0001").mkdir(parents=True)
+    run = runs / "2026-09-14__00-00-00"
+    run.mkdir(parents=True)
+    (run / "config.json").write_text(
+        json.dumps({"datasets": [{"path": str(ds)}]}), encoding="utf-8")
+
+    orig = (rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS)
+    try:
+        rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = runs, recheck, reports
+
+        # ① 本批已内联 ⇒ 必须说「白费功夫」，⛔ 不许说「实际不存在」
+        (ds / "T0001" / "instruction.md").write_text(
+            "x\n\n## 引用文档原文\n", encoding="utf-8")
+        sec = "\n".join(rep._zero_diag_section(zd, 0.33))
+        assert "白费功夫" in sec and "原文已内联在题面里" in sec, f"没跟着 §2② 走：\n{sec[-600:]}"
+        assert "而实际不存在的文档" not in sec, f"仍说文档不存在：\n{sec[-600:]}"
+        assert "400/2774" in sec and "14%" in sec, sec[-400:]
+
+        # ② baseline 批（题面未内联）⇒ 原措辞必须保留
+        (ds / "T0001" / "instruction.md").write_text("x\n", encoding="utf-8")
+        sec2 = "\n".join(rep._zero_diag_section(zd, 0.0))
+        assert "而实际不存在的文档" in sec2, f"baseline 措辞被弄丢：\n{sec2[-600:]}"
+        assert "白费功夫" not in sec2, sec2[-400:]
+    finally:
+        rep.RUNS, rep.RECHECK, rep.c.MVP_REPORTS = orig
