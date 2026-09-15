@@ -1,0 +1,127 @@
+{
+  "_note": "从 trajectory-platform 的 data/bench-staging/ 提炼（该目录 4.4G，从未入库，也不随本仓分发）。本文件只收 DATASET_CARD.md 漏斗前三行真正需要的标量。",
+  "_fingerprint_is_transcribed": "⛔ fingerprint 是**抄录值**，不可从本仓复算 —— 它是 8562 条原始会话内容的 sha256，而原始数据未随仓迁出。要自证须回到 tp 的 data/bench-staging/meta/batch-v0.2.json。",
+  "_excluded_on_purpose": "⛔ 刻意不收 sessions[]（8562 个会话 ID）与 repo_dist（暴露 6 个内网仓库名，其中 4 个题集里从未出现）—— 它们不是题集的一部分，只是漏斗第一级的分母来源。",
+  "_source_sha256": {
+    "meta/batch-v0.2.json": "7091e58a0c2a…",
+    "phase1/meta/filtered-v2.stats.json": "45ba1d214afc…",
+    "phase1/meta/units-v2.stats.json": "007b8ec52d8e…"
+  },
+  "version": "v0.2",
+  "frozen_at": "2026-09-05T09:04:49Z",
+  "session_count": 8562,
+  "fingerprint": "91be9a5d90d801dfd9d008cc158e71ce8bfc06e4d02684c8fd8a0a7096655b0a",
+  "agent_source_dist": {
+    "claude_code": 7820,
+    "codex": 317,
+    "short_id": 248,
+    "sid_code": 177
+  },
+  "filtered": {
+    "batch_version": "v0.2",
+    "batch_fingerprint": "91be9a5d90d801dfd9d008cc158e71ce8bfc06e4d02684c8fd8a0a7096655b0a",
+    "generated_at": "2026-09-05T09:33:33Z",
+    "input_count": 8562,
+    "kept": 4381,
+    "dropped": 4181,
+    "keep_rate": 0.5117,
+    "drop_reason_dist": {
+      "R1_EMPTY": 2659,
+      "R2_TOO_SHORT": 1112,
+      "E_SELF_REFERENTIAL": 272,
+      "R4_TOO_FEW_TOKENS": 120,
+      "R3_NO_ACTION": 18
+    },
+    "forced_split": 29,
+    "keep_by_agent_source": {
+      "claude_code": 3850,
+      "codex": 224,
+      "short_id": 186,
+      "sid_code": 121
+    },
+    "drop_by_agent_source": {
+      "claude_code": 3970,
+      "codex": 93,
+      "short_id": 62,
+      "sid_code": 56
+    },
+    "kept_vendor_by_source": {
+      "claude_code": {
+        "anthropic": 3833,
+        "openai": 17
+      },
+      "codex": {
+        "deepseek": 103,
+        "zhipu": 49,
+        "openai": 46,
+        "xai": 12,
+        "moonshot": 9,
+        "alibaba": 5
+      },
+      "sid_code": {
+        "unknown": 63,
+        "openai": 24,
+        "deepseek": 21,
+        "alibaba": 6,
+        "zhipu": 5,
+        "xai": 1,
+        "anthropic": 1
+      },
+      "short_id": {
+        "deepseek": 75,
+        "openai": 47,
+        "anthropic": 39,
+        "alibaba": 25
+      }
+    },
+    "kept_repo_resolution": {
+      "voted": 2334,
+      "direct": 896,
+      "unresolved": 472,
+      "inferred": 410,
+      "conflict": 269
+    },
+    "kept_anchored": 3909,
+    "kept_conflict": 269,
+    "kept_has_raw": 4331
+  },
+  "units": {
+    "batch_version": "v0.2",
+    "generated_at": "2026-09-06T06:16:46Z",
+    "input_sessions": 4381,
+    "total_units": 7721,
+    "kept_units": 7692,
+    "dropped_units": 29,
+    "units_per_session": 1.762,
+    "sessions_with_multi_units": 1400,
+    "multi_unit_rate": 0.3196,
+    "step_range_mapped": 7466,
+    "step_range_mapped_rate": 0.967,
+    "boundary_reason_dist": {
+      "B_FIRST": 4186,
+      "B_TASK_PATTERN": 2793,
+      "B_FILE_DISJOINT": 452,
+      "B_EXTRACT_FAILED": 145,
+      "B_TIME_GAP": 95,
+      "B_NO_RAW": 50
+    },
+    "ended_by_dist": {
+      "session_end": 4179,
+      "next_task": 3340,
+      "extract_failed": 145,
+      "no_raw_jsonl": 50,
+      "interrupted": 7
+    },
+    "drop_reason_dist": {
+      "U_NO_BOUNDARY": 22,
+      "U_INTERRUPTED": 7
+    },
+    "kept_by_agent_source": {
+      "claude_code": 7108,
+      "codex": 243,
+      "short_id": 226,
+      "sid_code": 115
+    },
+    "elapsed_sec": 49.4
+  }
+}

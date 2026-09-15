@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 from collections import Counter
@@ -104,7 +105,37 @@ def load_inputs() -> tuple[list[str], dict[str, list[str]], dict[str, list[str]]
 
 
 #: Phase 0/1 的产物（漏斗前四级的取数源）。**只读**。
-STAGING = c.REPO_ROOT / "data/bench-staging"
+# 🔴 P0-4：漏斗前三行的取数源原本是 tp 的 `data/bench-staging/`（4.4G，**从未入库**）
+# ⇒ 公开仓照原样跑会直接 FileNotFoundError。现改读入库的 ~3.6KB 派生统计
+# `meta/batch-v0.2.summary.json`（只收 card 真正用到的 6 个标量）。
+#
+# ⛔ 不整份搬 `batch-v0.2.json`：它含 8562 个会话 ID 与 6 个内网仓库名（4 个题集里没有）。
+# ⚠️ `fingerprint` 在 summary 里是**抄录值**，不可从本仓复算 —— 原始会话未迁出。
+# 若 STAGING_DIR 指向真实的 bench-staging，则优先用它（源仓侧复算走这条，保证两侧同数）。
+STAGING = Path(os.environ["STAGING_DIR"]) if os.environ.get("STAGING_DIR") else None
+BATCH_SUMMARY = c.MVP_META / "batch-v0.2.summary.json"
+
+
+def _funnel_sources() -> tuple[dict, dict, dict]:
+    """漏斗前三行的三个取数源 ⇒ `(batch, filtered, units)`。
+
+    两条路径必须算出**同样的数**（阶段 5.3 的判据是逐字节 diff 两侧 card）：
+      - `STAGING_DIR` 指向 tp 的 `data/bench-staging/` ⇒ 读原始三个文件
+      - 否则（公开仓的默认）⇒ 读入库的 summary，字段名与原始保持一致
+    """
+    if STAGING is not None:
+        return (
+            json.loads((STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8")),
+            json.loads((STAGING / "phase1/meta/filtered-v2.stats.json").read_text(encoding="utf-8")),
+            json.loads((STAGING / "phase1/meta/units-v2.stats.json").read_text(encoding="utf-8")),
+        )
+    if not BATCH_SUMMARY.exists():
+        raise SystemExit(
+            f"⛔ 缺 {BATCH_SUMMARY} —— 漏斗前三行无从取数。\n"
+            f"   公开仓应有这个文件；在 tp 侧跑请 export STAGING_DIR=<…>/data/bench-staging"
+        )
+    d = json.loads(BATCH_SUMMARY.read_text(encoding="utf-8"))
+    return d, d["filtered"], d["units"]
 
 #: dataset card 的 Limitations —— 方案 §6 的 13 条（v1.3 起含 T4 新增的第 12/13 条）。
 #: 🔴 第 2 / 4 / 5 条的措辞是 T4/T6 实测后**改过**的，不是方案原文，别回改：
@@ -263,9 +294,7 @@ def load_funnel() -> list[tuple[str, int | str, str]]:
     （claude_code 7820 / codex 317 / short_id 248 / sid_code 177）合计精确等于 8562。
     照 8591 写会让报告第一行就对不上，且无法复算。
     """
-    batch = json.loads((STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))
-    filt = json.loads((STAGING / "phase1/meta/filtered-v2.stats.json").read_text(encoding="utf-8"))
-    units = json.loads((STAGING / "phase1/meta/units-v2.stats.json").read_text(encoding="utf-8"))
+    batch, filt, units = _funnel_sources()
     cand = json.loads(c.CANDIDATES_STATS.read_text(encoding="utf-8"))
     resolved = json.loads((c.MVP_META / "resolved.stats.json").read_text(encoding="utf-8"))
     tasks = json.loads((c.MVP_META / "tasks.stats.json").read_text(encoding="utf-8"))
@@ -493,6 +522,45 @@ def _fp_section(fp: dict | None) -> list[str]:
 _INLINE_MARK = "## 引用文档原文"
 
 
+def _run_meta() -> dict:
+    """该批 run 的元数据 —— run 目录未入库时的唯一来源（见 `reports/<批次>/trials.json`）。
+
+    🔴 这三件事**都是批次特异的**，⛔ 不许写死、也不许回落到「看着合理」的默认值：
+      - `n_concurrent_trials`：baseline 是 1、t8-rerun 是 6。回落 1 等于**谎报必控变量**。
+      - `batch_inlines`：baseline 跑在修复① 之前，题面 0 条内联；t8-rerun 的 stage 内联 34/39。
+      - `dataset_dir_rel`：baseline 指 `reports/baseline/survivors`、t8-rerun 指 `reports/t8-rerun/tasks`。
+    """
+    p = RUNS / "trials.json"
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8")).get("run_meta") or {}
+
+
+#: 本仓的脚本目录与题集目录（相对仓库根）。
+#
+# 🔴 ⛔ 不许把 `scripts/mvp/` 或 `bench/v0.2-mini/tasks` 写进报告字符串 ——
+# 那是 trajectory-platform 的布局。公开仓拆出来后脚本在 `scripts/`、题集在仓库根，
+# 写死的形态是**报告里每条命令都指向一个不存在的路径**，而报告本身看着完全正常。
+# 从实际布局现推 ⇒ 两个仓各自生成各自正确的路径（§5.5）。
+SCRIPTS_REL = _rel(Path(__file__).resolve().parent)
+TASKS_REL = _rel(c.MVP_TASKS)
+
+
+def _rel_run(run_dir: Path | None) -> str:
+    """报告/summary 里的 run 目录字段。
+
+    ⚠️ 公开仓的 run 目录未入库（run_dir 为 None）⇒ **照实写取数源是 trials.json**，
+    ⛔ 不许编一个看着像真的 run 路径出来：那会让读者以为 clone 下来就有 harbor 产物，
+    照它去核对只会得到「目录不存在」，而 card 顶行还写着「纯复算」。
+    """
+    if run_dir is not None:
+        return _rel(run_dir)
+    meta = _run_meta()
+    dirs = meta.get("run_dirs") or []
+    src = _rel(RUNS / "trials.json")
+    return f"{src}（派生自未入库的 run 目录 {', '.join(dirs) or '未记录'}）" if dirs else src
+
+
 def _dataset_dirs() -> list[Path]:
     """本批各 run 实际用的题源目录（从 run 的 `config.json` 现读）。
 
@@ -502,7 +570,14 @@ def _dataset_dirs() -> list[Path]:
     out: list[Path] = []
     if not RUNS.exists():
         return out
-    for run in sorted(q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20"):
+    runs = sorted(q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20")
+    if not runs:
+        # 公开仓：run 目录未入库 ⇒ 用 trials.json 记下的 stage 路径。
+        # ⚠️ 该目录本身也未入库（stage 是跑批时复制出来的）⇒ 通常不存在，
+        # 于是 `_batch_inlines()` 的判据① 命中不了，改走那边的 run_meta 回落。
+        rel = _run_meta().get("dataset_dir_rel")
+        return [c.REPO_ROOT / rel] if rel else out
+    for run in runs:
         cfg = run / "config.json"
         if not cfg.exists():
             continue
@@ -531,7 +606,19 @@ def _batch_inlines() -> bool:
          几条，万一那几条恰好都不内联，①会误判成「整批没内联」。
          agent 日志是**每条 trial 各自的**，补跑不动已跑那些。
     """
+    # ⓿ 公开仓：run 产物（stage 题面 + agent 日志）都未入库 ⇒ 两条判据都命中不了，
+    # 会把 t8-rerun 误报成「整批没内联」⇒ card 的内联条数塌成 0/39。
+    # 改读 trials.json 里记下的该批事实（⛔ 它是**批次特异**的，不是全局常量）。
+    meta = _run_meta()
+    if "batch_inlines" in meta and not RUNS.exists():
+        return bool(meta["batch_inlines"])
+    if "batch_inlines" in meta and not any(
+            q.is_dir() and q.name[:2] == "20" for q in RUNS.iterdir()):
+        return bool(meta["batch_inlines"])
+
     for d in _dataset_dirs():
+        if not d.exists():
+            continue
         for ins in sorted(d.glob("*/instruction.md")):
             if _INLINE_MARK in ins.read_text(encoding="utf-8", errors="replace"):
                 return True
@@ -683,7 +770,7 @@ def _docs_gap_para(zd: dict | None) -> list[str]:
         lines += [
             "⚠️ 但本批缺 `zero-diag.json` ⇒ **无法断言** A2 的低分是能力还是题面："
             "判据是 `true_zero_no_attempt`（零仓库写 = 判断信息不足而拒绝瞎改）。",
-            "→ 跑 `scripts/mvp/t7-zero-diag.py`（$0）后重新生成本报告。",
+            f"→ 跑 `{SCRIPTS_REL}/t7-zero-diag.py`（$0）后重新生成本报告。",
         ]
     lines.append("无论哪种读法，下面都必须**分级分组**看，而不是只看总分。")
     return lines
@@ -714,7 +801,7 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
               if p is not None else
               "ℹ️ **未做**：预案表要求 pass@1 低于 20% 时先分辨真 0 假 0，"))
             + f"而 `{_rel(RUNS / 'zero-diag.json')}` 不存在。",
-            f"→ 跑 `scripts/mvp/t7-zero-diag.py --runs {RUNS.name}`"
+            f"→ 跑 `{SCRIPTS_REL}/t7-zero-diag.py --runs {RUNS.name}`"
             "（纯读产物，$0）后重新生成本报告。",
             "",
         ]
@@ -748,7 +835,7 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
                "（新跑出的、或补跑换了 trial 目录的）。"
                if who else "")
             + "⛔ 本节判定**不可**与主表并读。"
-            "重跑 `scripts/mvp/t7-zero-diag.py`（$0）即可对齐。",
+            f"重跑 `{SCRIPTS_REL}/t7-zero-diag.py`（$0）即可对齐。",
             "",
         ]
     lines += [
@@ -758,7 +845,7 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
           "本节是主动归因，用来分辨 0 分里哪些是能力信号、哪些是判分或环境问题。"
           if p is not None else
           "预案表写死：pass@1 低于 20% ⇒「**优先怀疑 grader**，先分辨真 0 假 0」。"))
-        + f"已逐条归因 {n} 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，"
+        + f"已逐条归因 {n} 条（`{SCRIPTS_REL}/t7-zero-diag.py`，纯读产物 $0，"
         # ⛔ 产物路径随 `--runs` 变，不写死 reports/baseline/
         f"产物 `{_rel(RUNS / 'zero-diag.json')}`）。",
         "",
@@ -1075,12 +1162,17 @@ def table(cells: dict[str, lib.Cell], order: list[str]) -> list[str]:
     return out
 
 
-def _n_concurrent(run_dir: Path) -> int:
+def _n_concurrent(run_dir: Path | None) -> int:
     """从 run 产物读实际并发数（`config.json` 的 `n_concurrent_trials`）。
 
     ⛔ 不写死：第一轮是 `-n 1`、整改后那批是 `-n 6`，硬编码等于**谎报必控变量**。
     读不到时回落 1 并在报告里照实写 —— ⛔ 不编一个 6 出来。
     """
+    # 公开仓：run 目录未入库（run_dir 为 None）⇒ 读 trials.json 的 run_meta。
+    # ⛔ 不许直接回落 1 —— t8-rerun 实为 6，回落等于谎报必控变量。
+    if run_dir is None:
+        n = _run_meta().get("n_concurrent_trials")
+        return int(n) if n else 1
     p = run_dir / "config.json"
     if not p.exists():
         return 1
@@ -1094,12 +1186,12 @@ def _compose() -> dict:
     """基线那一批实跑的**题面构成** —— card 的「怎么用」必须照它写。
 
     🔴 2026-09-14 抓到，这是 card 最容易发布出去的一条假话：
-    `bench/v0.2-mini/tasks/` 里交付的题面**不是基线实跑的题面**。
+    交付的题面（`tasks/`）**不是基线实跑的题面**。
     基线跑的是 `t8-rerun.py` 现拼的 stage（`reports/t8-rerun/tasks/`，已 gitignore）——
     在原句之外加了两段：修复①「## 引用文档原文」与修复③「## 验收标准」。
     实测交付真身 **0/39** 带这两段，stage **34/39 + 39/39** 带。
 
-    ⇒ 照 `harbor run -p bench/v0.2-mini/tasks` 跑复现的是**题集**，⛔ 不是基线读数的条件；
+    ⇒ 照 `harbor run -p <题集目录>` 跑复现的是**题集**，⛔ 不是基线读数的条件；
     那样跑等于关掉了两项修复，而这两项修复正是 pass@1 从 0% 变成 37.8% 的原因
     （见 remediation §8.2：T0011/T0047 就是靠修复③ 才拿到 1.0）。
     形态是「读者照 card 跑出个更低的数字，以为是模型差」，而 card 每个字都对得上产物。
@@ -1173,10 +1265,10 @@ def _card_usage(cfg: dict) -> list[str]:
         "",
         f"| 你想复现什么 | 入口 | 题面形态 |",
         "|---|---|---|",
-        f"| **题集本身**（39 条能不能跑起来） | `harbor run -p bench/v0.2-mini/tasks "
+        f"| **题集本身**（39 条能不能跑起来） | `harbor run -p {TASKS_REL} "
         f"-n {n_conc}` | 交付原句，**不含**下面两段 |",
         f"| **基线读数**（{RUNS.name} 那批的 pass@1） | "
-        f"`~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t8-rerun.py` | "
+        f"`~/.local/share/uv/tools/harbor/bin/python {SCRIPTS_REL}/t8-rerun.py` | "
         f"原句 **+ 两段现拼** |",
         "",
         "🔴 **基线跑的题面不在 `tasks/` 里**。`t8-rerun.py` 把 39 条复制到 stage"
@@ -1201,9 +1293,10 @@ def _card_usage(cfg: dict) -> list[str]:
         "⚠️ **`environment/repo-snapshot.tar.gz` 不在 git 里**"
         + (f"（{_snap[0]} 份，每份 {_snap[1]:.1f}–{_snap[2]:.1f}MB，"
            if (_snap := _snapshot_stats()) else "（")
-        + "见 `.gitignore`）⇒ 新克隆的仓库**跑不起来**，须先用 "
-        "`scripts/mvp/t4-build-env.py` 从 mirror 重建（`meta/snapshots.jsonl` 存了"
-        "每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果）。",
+        + "见 `.gitignore`）⇒ 新克隆的仓库**跑不起来**，须先重建 —— 两条路径：\n"
+        f"> - **有快照在手**（HF 仓的 `snapshots/`）：`{SCRIPTS_REL}/t4-build-env.py --from-snapshots <dir>`，逐份校验 `tar_sha256`，任一条不符即报红退出 4。\n"
+        f"> - **有 mirror 在手**（仅采集机）：`{SCRIPTS_REL}/t4-build-env.py` 从 mirror 重建。\n"
+        "> `meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果。",
         "",
     ]
 
@@ -1230,7 +1323,7 @@ def build_report(res: dict, trials: list[lib.Trial],
     L = [
         "# Agent-Traj-Bench v0.2-mini — 基线评测报告",
         "",
-        f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，由 `scripts/mvp/t7-report.py` 从 run 产物**纯复算**。",
+        f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，由 `{SCRIPTS_REL}/t7-report.py` 从 run 产物**纯复算**。",
         # ⛔ 取数源路径必须从 RUNS 现取，不能写死 `reports/baseline/` ——
         # `--runs t8-rerun` 时报告会自称数据来自第一轮那批（已作废），
         # 而报告里每个数字其实都是新批的。冒烟实测撞到（2026-09-13）。
@@ -1400,7 +1493,7 @@ def build_report(res: dict, trials: list[lib.Trial],
         # `baseline`（第一轮，已作废）⇒ 照本报告的复算命令跑，读的是**另一批**，
         # 复算出来的数字与本文对不上。而 §13 是本报告自称「可复算」的唯一入口，
         # 它指错批次等于这份报告不可复算。
-        "~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-report.py"
+        f"~/.local/share/uv/tools/harbor/bin/python {SCRIPTS_REL}/t7-report.py"
         + (f" --runs {RUNS.name}" if RUNS.name != "baseline" else ""),
         "```",
         "",
@@ -1454,7 +1547,7 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         "# Agent-Traj-Bench v0.2-mini — Dataset Card",
         "",
         f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，"
-        "由 `scripts/mvp/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
+        f"由 `{SCRIPTS_REL}/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
         "",
         "## 这是什么",
         "",
@@ -1548,7 +1641,7 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         "",
         "```bash",
         "PY=~/.local/share/uv/tools/harbor/bin/python   # ⛔ 系统 python3 没有 harbor 包",
-        f"$PY scripts/mvp/t7-report.py --runs {RUNS.name} --card   # $0，不跑任何模型",
+        f"$PY {SCRIPTS_REL}/t7-report.py --runs {RUNS.name} --card   # $0，不跑任何模型",
         "```",
         "",
     ]
@@ -1573,15 +1666,20 @@ def main() -> int:
     if args.runs != "baseline":
         _retarget(args.runs)
 
+    # ⚠️ 公开仓没有 run 目录（那些 harbor 产物 2.5G，从未入库）⇒ 回落到入库的
+    # `trials.json`。此时 `run` 为 None，只影响 `_n_concurrent(run)` 这类读 run 元数据的地方。
     run = lib.latest_run(RUNS)
-    if run is None:
-        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/mvp/t8-rerun.py（或 t7-baseline.py）")
+    if run is None and not (RUNS / "trials.json").exists():
+        raise SystemExit(
+            f"{RUNS} 下既没有 run 目录、也没有 trials.json —— "
+            f"先跑 scripts/t8-rerun.py（或 t7-baseline.py）"
+        )
     # 🔴 跨所有 run 目录收 —— `t8-rerun.py --resume` 会新建一个 run 目录，
     # 只读最后那个会**静默漏掉**第一轮跑出的 trial（分母悄悄变小，每张表照样有数）。
     # 单 run 目录时 collect_all 等价于 collect。
     trials = lib.collect_all(RUNS)
     if not trials:
-        raise SystemExit(f"{run} 里没有可读的 trial —— 看 run.log")
+        raise SystemExit(f"{run or RUNS} 里没有可读的 trial —— 看 run.log / trials.json")
 
     surv, grade, band = load_inputs()
     res = lib.pass_at_1(trials)
@@ -1607,7 +1705,7 @@ def main() -> int:
         raise SystemExit(
             f"⛔ 跑批没跑齐：存活 {len(surv)} 条里有 {len(missing)} 条在这一轮产物里没有 trial。\n"
             f"   缺：{', '.join(missing[:8])}{' …' if len(missing) > 8 else ''}\n"
-            f"   run={_rel(run)}\n"
+            f"   run={_rel_run(run)}\n"
             "   → 等跑批跑完再出报告；确实要看中途结果就加 --partial（报告会标红「未跑齐」）。"
         )
     if missing:
@@ -1624,7 +1722,7 @@ def main() -> int:
         # ⚠️ 用 _rel() 而不是裸 relative_to：MVP_DIR 被指到仓外（冒烟测试就是这么跑的）时
         # relative_to 会抛 ValueError，形态是「报告脚本崩在写 summary 的最后一行」，
         # 完全不指向路径。2026-09-12 冒烟时实测撞到。
-        "run_dir": _rel(run),
+        "run_dir": _rel_run(run),
         "k": k,
         # 🔴 完整性状态必须进机器可读取数源，不能只在 markdown 里标红 ——
         # 别处引用 summary.json 时看不到 markdown 的那行字。
@@ -1659,16 +1757,16 @@ def main() -> int:
         print(f"⚠️ zero-diag.json 已过期（判了 {st['n_diagnosed']} 条，主表 "
               f"{st['n_with_trial']} 条；未覆盖 {len(who)} 条："
               f"{', '.join(who[:8])}{' …' if len(who) > 8 else ''}）"
-              " —— 报告 §10 会标注；重跑 scripts/mvp/t7-zero-diag.py（$0）")
+              f" —— 报告 §10 会标注；重跑 {SCRIPTS_REL}/t7-zero-diag.py（$0）")
     health = health_checks(res, bcells, zd)
-    fingerprint = json.loads(
-        (STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))["fingerprint"][:12]
+    # ⚠️ 与漏斗前三行走同一个取数源（公开仓是入库的 summary，抄录值）
+    fingerprint = _funnel_sources()[0]["fingerprint"][:12]
 
     # 🔴 pass@1 低于健康度下限却没做真 0/假 0 归因 ⇒ 预案要求的那一步没做。
     # 不拦住的话报告会「看起来完整」地把 0% 摊出来，读者只能读成「模型不行」。
     if res["p"] < 0.20 and zd is None:
         print("⚠️ pass@1 低于 20% 但缺 zero-diag.json —— 报告 §10 会标「未做」；"
-              "建议先跑 scripts/mvp/t7-zero-diag.py（$0）")
+              f"建议先跑 {SCRIPTS_REL}/t7-zero-diag.py（$0）")
 
     REPORT.write_text(build_report(res, trials, gcells, bcells, cost, ctl, k, missing, len(surv),
                                    funnel, gate_rows, attrib, health, fingerprint, zd, fp,
@@ -1716,7 +1814,7 @@ def main() -> int:
             # `baseline-v0.2-mini-t8-rerun.md`、summary 在 `reports/t8-rerun/` 下。
             # 写死会把**另一批**的产物路径永久冻进 version.json，
             # 而日后照它去复现只会读到 baseline 那批（或根本不存在的文件）。
-            "artifacts": [_rel(REPORT), _rel(SUMMARY), _rel(run)],
+            "artifacts": [_rel(REPORT), _rel(SUMMARY), _rel_run(run)],
             # 🔴 2026-09-14 抓到（就在真冻结那一刻）：这里原写
             #   f"...（{passed}/{n}），分母 {len(surv)} 条，排除 {excluded} 条"
             # ⇒ 渲染成「pass@1=37.8%（14/**37**），分母 **39** 条」——

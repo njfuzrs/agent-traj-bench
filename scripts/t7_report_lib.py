@@ -370,8 +370,13 @@ def collect_all(jobs_dir: Path) -> list[Trial]:
     if not jobs_dir.exists():
         return []
     runs = sorted(p for p in jobs_dir.iterdir() if p.is_dir() and p.name[:2] == "20")
-    if len(runs) <= 1:
-        return collect(runs[0]) if runs else []
+    # 🔴 没有 run 目录时回落到入库的 trials.json（公开仓走这条，见 load_trials_json）。
+    # ⚠️ 顺序不能反：有真 run 目录时**必须**用它 —— 那是权威产物，
+    # trials.json 只是它的派生快照，反过来会让新跑的一批被旧快照静默覆盖。
+    if not runs:
+        return load_trials_json(jobs_dir)
+    if len(runs) == 1:
+        return collect(runs[0])
 
     # 后面的 run 覆盖前面的同名 task；同一 run 内的多次尝试（k>1）全留
     by_task: dict[str, list[Trial]] = {}
@@ -381,6 +386,33 @@ def collect_all(jobs_dir: Path) -> list[Trial]:
             seen_here.setdefault(t.task, []).append(t)
         by_task.update(seen_here)
     return [t for rows in by_task.values() for t in rows]
+
+
+def load_trials_json(jobs_dir: Path) -> list[Trial]:
+    """从入库的 `trials.json` 读回 trial —— **公开仓的唯一取数路径**。
+
+    🔴 为什么需要它：`collect()` 逐个读 harbor 的 trial 产物目录
+    （`<run>/<task>__<hash>/verifier/reward.json` 等），而那些 run 目录
+    **从未入库**（baseline 648M + t8-rerun 1.9G）⇒ 公开仓照原样跑会
+    在 `latest_run()` 就退出，报告与 card 全都生成不出来。
+
+    ⚠️ `trials.json` 是 `collect_all()` 的序列化结果，字段与主路径**逐一对应**
+    （见 `Trial`）⇒ 两条路径算出的报告必须逐字节一致，这一点由
+    `test_trials_json_matches_collect_all` 与阶段 5.3 的 diff 判据盯着。
+    ⛔ 不许在这里补算或猜任何字段：缺字段就该让报告报错，而不是拿默认值凑一个数。
+    """
+    p = Path(jobs_dir) / "trials.json"
+    if not p.exists():
+        return []
+    rows = json.loads(p.read_text(encoding="utf-8"))["rows"]
+    out: list[Trial] = []
+    for r in rows:
+        d = dict(r)
+        d["errors"] = tuple(d.get("errors") or ())
+        # ⚠️ 只留了目录名（⛔ 不留本机绝对路径）—— 陈旧性守卫只用 `.name`
+        d["trial_dir"] = Path(d["trial_dir"]) if d.get("trial_dir") else None
+        out.append(Trial(**d))
+    return out
 
 
 def latest_run(jobs_dir: Path) -> Path | None:
