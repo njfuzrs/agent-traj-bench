@@ -1,0 +1,80 @@
+# Licenses
+
+本仓库分三层授权。🔴 **三层各有各的许可，⛔ 不要只读其中一条就当成全仓的许可** ——
+第三层（快照）是**别人的代码**，它的版权声明是 MIT 明文要求的，不是可选的礼节。
+
+| 层 | 内容 | 许可 |
+| --- | --- | --- |
+| ① 数据内容 | `tasks/*/instruction.md`、`tasks/*/meta.json`、`tasks/*/tests/{f2p,p2p}.json`、`meta/`、`reports/`、`DATASET_CARD.md`、`version.json` | **CC BY 4.0** |
+| ② 代码 | `scripts/`、`tasks/*/tests/{test.sh,score.py}`、`tasks/*/solution/solve.sh` | **MIT** |
+| ③ 仓库快照（**不在本仓**，见 HF Dataset） | `snapshots/T####.tar.gz`（39 份） | **MIT**，版权归 sid-code —— 见下方 ③ |
+
+---
+
+## ① 数据内容 — CC BY 4.0
+
+Copyright (c) 2026 njfuzrs
+
+题面、判分用例清单、漏斗统计与全部报告，按
+[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
+授权：可自由复制、改编、商用，条件是**署名**并指明是否作过修改。
+
+建议引用：
+
+```
+Agent-Traj-Bench v0.2-mini. njfuzrs, 2026.
+https://github.com/njfuzrs/agent-traj-bench
+```
+
+⚠️ **题面是从真实开发轨迹反解的原句**，其中含开发者当时写下的路径与措辞
+（多数已脱敏为 `/Users/<USER>`，`tasks/T0011/instruction.md` 里保留了一句含真实用户名与
+主机名的 shell 提示符 —— 见 README「已知局限」）。⛔ **不要为了"清理"去改题面**：
+判分口径绑在题面原句上，改它等于改题目。
+
+## ② 代码 — MIT
+
+Copyright (c) 2026 njfuzrs
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## ③ 仓库快照 — MIT（sid-code）
+
+39 份 `repo-snapshot.tar.gz` 分发在
+<https://huggingface.co/datasets/njfuzrs/agent-traj-bench>（不在本仓，见 `.gitignore`）。
+**它们的内容是 [sid-code](https://github.com/njfuzrs/sid-code) 的源码**，按 MIT 授权：
+
+```
+MIT License
+
+Copyright (c) 2026 zhourusheng and sid-code contributors
+```
+
+（完整 MIT 条文同 ② 节，版权行换成上面这一行。）
+
+🔴 **为什么这一层必须单列**：实测 39/39 份快照的顶层**都没有打包 `LICENSE` 文件**
+（`tar tzf` 顶层只有 `.github/ scripts/ src/ tests/ vendor/ website/` 等）。
+而 MIT 要求「在所有副本及实质性部分中包含上述版权声明」⇒ 分发这些 tar 就得在**别处**
+把版权行补上，这里和 HF 仓的 README 就是那个"别处"。
+
+⛔ 只声明「数据集 CC BY 4.0」是**不够的** —— 那覆盖不到 tar 里面的源码，
+而快照按字节数是本数据集最大的组成部分。
+
+⚠️ 快照必须**逐字节保持原样**：它的 `sha256` 记在 `meta/snapshots.jsonl` 的 `tar_sha256`
+里，是可复算性的唯一基准。为"脱敏"去重打包会让全部校验和失效
+（详见 README「已知局限」里那两项已被证伪的误报）。

@@ -1,7 +1,7 @@
 # Agent-Traj-Bench v0.2-mini — 基线评测报告
 
-> 生成于 2026-09-14 04:43 UTC，由 `scripts/mvp/t7-report.py` 从 run 产物**纯复算**。
-> 取数源唯一：`bench/v0.2-mini/reports/t8-rerun/`（39 条 task × k=1）。
+> 生成于 2026-09-15 04:30 UTC，由 `scripts/t7-report.py` 从 run 产物**纯复算**。
+> 取数源唯一：`reports/t8-rerun/`（39 条 task × k=1）。
 
 ## 1. 主结果
 
@@ -146,7 +146,7 @@ reward.json 的 error_code 分布：{4: 3}
 
 ## 10. 真 0 / 假 0 归因（ℹ️ 预案未触发，主动归因）
 
-pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」**未被触发**；本节是主动归因，用来分辨 0 分里哪些是能力信号、哪些是判分或环境问题。已逐条归因 39 条（`scripts/mvp/t7-zero-diag.py`，纯读产物 $0，产物 `bench/v0.2-mini/reports/t8-rerun/zero-diag.json`）。
+pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」**未被触发**；本节是主动归因，用来分辨 0 分里哪些是能力信号、哪些是判分或环境问题。已逐条归因 39 条（`scripts/t7-zero-diag.py`，纯读产物 $0，产物 `reports/t8-rerun/zero-diag.json`）。
 
 | 判定 | 条数 | 含义 |
 |---|---|---|
@@ -216,7 +216,7 @@ pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」
 
 ```bash
 # 纯复算，不跑任何东西、不花钱
-~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-report.py --runs t8-rerun
+~/.local/share/uv/tools/harbor/bin/python scripts/t7-report.py --runs t8-rerun
 ```
 
-机器可读取数源：`bench/v0.2-mini/reports/t8-rerun/summary.json`（⛔ 别抄本文的 markdown 数字）。
+机器可读取数源：`reports/t8-rerun/summary.json`（⛔ 别抄本文的 markdown 数字）。

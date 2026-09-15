@@ -1,0 +1,33 @@
+# ── 快照本体（259.9MB / 39 份）────────────────────────────────────
+#
+# 🔴 走 HF Dataset（huggingface.co/datasets/njfuzrs/agent-traj-bench），⛔ 不入 git。
+# 校验和已记在 meta/snapshots.jsonl 的 tar_sha256 / tar_bytes 里 ⇒ 重建后可逐份自证。
+# 重建：scripts/t4-build-env.py --from-snapshots <HF 仓的 snapshots/>
+tasks/*/environment/repo-snapshot.tar.gz
+
+# ── harbor 跑批产物（baseline 648M + t8-rerun 1.9G）──────────────
+#
+# ⚠️ 这些目录**从未入库**，公开仓的报告与 card 改从 reports/<批次>/trials.json
+# 复算（那是 collect_all() 的序列化结果，字段与主路径逐一对应）。
+# ⛔ 别把 trials.json 也 ignore 掉 —— 它是公开仓唯一的 trial 取数源。
+reports/*/20*/
+reports/*/survivors/
+reports/*/tasks/
+reports/*/run.log
+reports/*/resume-*.log
+reports/t5-gate/
+reports/t7-regate/retry/*/20*/
+reports/t7-regate/retry/*/tasks/
+reports/t7-regate/retry/*/run.log
+reports/t8-fix/exp-fix/
+reports/t8-fix/exp-concurrency-n6/
+reports/t8-fix/stage/
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# ── 本机 ──────────────────────────────────────────────────────────
+.DS_Store

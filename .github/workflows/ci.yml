@@ -1,0 +1,86 @@
+name: bench-gates
+
+# 题集门禁四条。全部 $0：不跑模型、不起容器、不需要快照。
+#
+# 🔴 每条门禁的**作用域与模式都是实测收窄过的**，⛔ 改宽之前先读注释里的「为什么不能」——
+# 两条宽写法都会让门禁永远红，然后被人加 `|| true` 关掉，那比没有门禁更糟。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # ── 门禁① 题数 = 39 ────────────────────────────────────────────
+      # 防「又把 65 条搬回来」：26 条在 T6 复核里被淘汰，留在私有仓归档。
+      - name: gate1 - 题数必须是 39
+        run: |
+          n=$(find tasks -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          echo "tasks/ 条数: $n"
+          test "$n" -eq 39 || { echo "::error::期望 39 条，实得 $n"; exit 1; }
+
+      # ── 门禁② harbor 认格式 39/39 ──────────────────────────────────
+      # 上游的接入契约。⚠️ 它只验 harbor 认不认 task 目录结构，
+      # ⛔ 不验脚本能不能跑 —— 那是门禁④ 与单测的事（典型假绿，见 P1-1）。
+      - name: gate2 - harbor Task.is_valid_dir 39/39
+        run: |
+          pip install --quiet harbor
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          from harbor.models.task.task import Task
+          tasks = sorted(p for p in Path("tasks").iterdir() if p.is_dir())
+          bad = [t.name for t in tasks if not Task.is_valid_dir(t)]
+          print(f"Task.is_valid_dir: {len(tasks) - len(bad)}/{len(tasks)}")
+          if bad:
+              print(f"::error::harbor 不认这些 task: {bad[:8]}")
+              sys.exit(1)
+          PY
+
+      # ── 门禁③ 内网基建地址归零 ─────────────────────────────────────
+      # 🔴 模式必须收窄到内网基建，⛔ 不许写 `\.ruijie\.com\.cn`：
+      # 那会误伤 tasks/T0056/tests/test_patch.diff（公开 API 端点，且在 F2P 判分补丁里）
+      # ⇒ 一个写错的门禁会**逼着下一个人去改判分口径**。宁可窄一点。
+      - name: gate3 - 内网基建地址必须归零
+        run: |
+          if grep -rIE 'gitlab\.ruishan\.cc' . --exclude-dir=.git; then
+            echo "::error::内网基建地址混入了公开仓"
+            exit 1
+          fi
+          echo "无内网基建地址 ✓"
+
+      # ── 门禁④ scripts/ 不许有本机绝对路径 ─────────────────────────
+      # 🔴 作用域只管 `scripts/`，模式是 `/Users/zhourusheng` 而非 `/Users/`：
+      #   - 全仓扫 `/Users/` ⇒ reports/ 57 个文件命中，那是**历史证据**，改了就不是原始证据
+      #   - 扫 tasks/ ⇒ 39/39 命中，那是**题面原文**（从真实轨迹反解），改它就改了题目
+      # ⚠️ 排除 scripts/tests/：那里的路径是断言 fixture（map_repo_path 要验的就是这种输入），
+      # 由单测 test_no_hardcoded_local_paths_in_scripts 用同一套白名单盯着。
+      - name: gate4 - scripts/ 不许有本机绝对路径
+        run: |
+          if grep -rn '/Users/zhourusheng' scripts/ \
+               --exclude-dir=tests --exclude-dir=__pycache__; then
+            echo "::error::scripts/ 里有本机绝对路径（P1-1 复发）"
+            exit 1
+          fi
+          echo "scripts/ 无本机绝对路径 ✓"
+
+      # ── 单测 ───────────────────────────────────────────────────────
+      # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
+      # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。
+      - name: 单测
+        run: |
+          pip install --quiet pytest
+          cd scripts && python -m pytest tests/test_mvp.py -q

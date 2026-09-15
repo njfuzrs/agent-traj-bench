@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — Dataset Card
 
-> 生成于 2026-09-14 04:43 UTC，由 `scripts/mvp/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
+> 生成于 2026-09-15 04:30 UTC，由 `scripts/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
 
 ## 这是什么
 
@@ -63,7 +63,7 @@
 
 > **分母是 37 而不是 39**：分母是 scored（参与计分的 task）。基础设施故障（抛异常 / verifier 未写分）排除出分母 —— 算进去等于把它记成答错。⛔ 不是 40（那是 T5 门禁的结论，含 T0005）。
 
-完整报告（13 节，含真 0/假 0 逐条归因）：`bench/v0.2-mini/reports/baseline-v0.2-mini-t8-rerun.md`　机器可读取数源：`bench/v0.2-mini/reports/t8-rerun/summary.json`
+完整报告（13 节，含真 0/假 0 逐条归因）：`reports/baseline-v0.2-mini-t8-rerun.md`　机器可读取数源：`reports/t8-rerun/summary.json`
 
 🔴 **只跑了 1 个模型 × k=1** ⇒ ⛔ **不能**用本数据集比较模型强弱（方案要求 ≥2 模型 × k=3 才谈模型间差异），也**不能**把这个点估计当作「模型在真实任务上的能力」—— 半宽 ±14.9pp 的区间比多数模型间差距还宽。
 
@@ -73,8 +73,8 @@
 
 | 你想复现什么 | 入口 | 题面形态 |
 |---|---|---|
-| **题集本身**（39 条能不能跑起来） | `harbor run -p bench/v0.2-mini/tasks -n 6` | 交付原句，**不含**下面两段 |
-| **基线读数**（t8-rerun 那批的 pass@1） | `~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t8-rerun.py` | 原句 **+ 两段现拼** |
+| **题集本身**（39 条能不能跑起来） | `harbor run -p tasks -n 6` | 交付原句，**不含**下面两段 |
+| **基线读数**（t8-rerun 那批的 pass@1） | `~/.local/share/uv/tools/harbor/bin/python scripts/t8-rerun.py` | 原句 **+ 两段现拼** |
 
 🔴 **基线跑的题面不在 `tasks/` 里**。`t8-rerun.py` 把 39 条复制到 stage（`reports/t8-rerun/tasks/`，已 gitignore）并在原句之外拼了两段：
 
@@ -85,7 +85,10 @@
 
 其余必控参数（本批实测）：`max_turns=120`、`max_budget_usd=1.8`、`-n 6`、`--agent-timeout-multiplier 3.0`。
 
-⚠️ **`environment/repo-snapshot.tar.gz` 不在 git 里**（65 份，每份 0.8–14.0MB，见 `.gitignore`）⇒ 新克隆的仓库**跑不起来**，须先用 `scripts/mvp/t4-build-env.py` 从 mirror 重建（`meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果）。
+⚠️ **`environment/repo-snapshot.tar.gz` 不在 git 里**（65 份，每份 0.8–14.0MB，见 `.gitignore`）⇒ 新克隆的仓库**跑不起来**，须先重建 —— 两条路径：
+> - **有快照在手**（HF 仓的 `snapshots/`）：`scripts/t4-build-env.py --from-snapshots <dir>`，逐份校验 `tar_sha256`，任一条不符即报红退出 4。
+> - **有 mirror 在手**（仅采集机）：`scripts/t4-build-env.py` 从 mirror 重建。
+> `meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果。
 
 ## Limitations（主动披露）
 
@@ -119,5 +122,5 @@
 
 ```bash
 PY=~/.local/share/uv/tools/harbor/bin/python   # ⛔ 系统 python3 没有 harbor 包
-$PY scripts/mvp/t7-report.py --runs t8-rerun --card   # $0，不跑任何模型
+$PY scripts/t7-report.py --runs t8-rerun --card   # $0，不跑任何模型
 ```
