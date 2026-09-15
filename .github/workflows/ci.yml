@@ -1,6 +1,6 @@
 name: bench-gates
 
-# 题集门禁五条。全部 $0：不跑模型、不起容器、不需要快照。
+# 题集门禁六条。全部 $0：不跑模型、不起容器、不需要快照。
 #
 # 🔴 每条门禁的**作用域与模式都是实测收窄过的**，⛔ 改宽之前先读注释里的「为什么不能」——
 # 两条宽写法都会让门禁永远红，然后被人加 `|| true` 关掉，那比没有门禁更糟。
@@ -18,7 +18,12 @@ jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
+      # 🔴 `fetch-depth: 0` 是门禁⑥ 的前提：checkout@v4 默认 depth=1，
+      # 那样 `git rev-list --all` 只有 1 个提交 ⇒ 门禁⑥ 会**永远绿**而什么都没扫。
+      # ⛔ 别为了省几秒把它改回默认值（本仓 66 提交 / 1.8k 对象，实测 6~13 秒）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -97,6 +102,63 @@ jobs:
             echo "::error::检出私有仓源码物料（见 §6B）"; exit 1
           fi
           echo "✅ 私有仓源码物料 0 命中"
+
+      # ── 门禁⑥ 全历史私有仓源码物料归零（§6C）────────────────────
+      # 🔴 这一条补的是**门禁③④⑤ 的共同盲区**：它们都写着 `--exclude-dir=.git`
+      # ⇒ 只看工作树，**永远看不见历史**。而 `git push` 推的是全部提交 ——
+      # 6B 用「新增一个提交覆盖旧内容」的方式脱敏，五条门禁 + 六条判据全绿，
+      # 但 clone 后 `git show HEAD~1:meta/resolved.jsonl` 一条命令就能取回 178 KB
+      # 私有仓源码（实测）。⇒ 判据的作用域比风险面窄，与 6fe48cf 是同一类缺陷。
+      #
+      # ⚠️ 模式与门禁⑤ **逐字一致**，⛔ 别在这里写宽模式：裸 `iam-studio-fe`
+      # 会误伤 reports/t4-env.md:103 的合规披露散文 ⇒ 门禁永远红然后被关掉。
+      # ⚠️ 白名单同门禁⑤：`*/tests/*`（map_repo_path 的断言 fixture）+
+      # reports/t4-env.md（解释 5 条为何被挡的散文）。
+      # ⚠️ 第二段扫的是 meta/*.jsonl 的**非 repo 字段** —— snapshots.jsonl 的私有串是
+      # **包名不是路径形态**，上面那个模式抓不到（§6B.5 末段已警告），靠这段兜。
+      # ⛔ `repo` 字段本身不算残留：那是合规披露的事实（card 第 12/13 条已公开）。
+      - name: gate6 - 全历史私有仓源码物料归零
+        run: |
+          # 🔴 `set -e` 必须显式写：GitHub Actions 默认 `bash -e {0}`，但本地 `bash gate6.sh`
+          # 不带 -e ⇒ 下面那个 python 报红后**仍会往下走到 echo ✅ 并 exit 0**（实测踩过：
+          # 反向自证时脚本明明点名了 3 个 blob，退出码却是 0）。不写它 ⇒ 本地自证是假绿。
+          set -euo pipefail
+          test "$(git rev-list --all | wc -l | tr -d ' ')" -gt 1 \
+            || { echo "::error::只有 1 个提交 ⇒ checkout 缺 fetch-depth: 0，本门禁形同虚设"; exit 1; }
+          python - <<'PY'
+          import subprocess, re, json, collections, sys
+          PAT = re.compile(rb'(anka-app|iam-studio-fe|tag-studio|ontology-studio)/[A-Za-z0-9_./-]*\.(vue|tsx|ts|json)'
+                           rb'|(anka-app|iam-studio-fe)/[A-Za-z0-9_.-]+/(src|packages)/')
+          PRIV = ('iam-studio-fe','anka-app','tag-studio','ontology-studio')
+          objs = collections.defaultdict(set)
+          for line in subprocess.run(['git','rev-list','--all','--objects'],
+                                     capture_output=True,text=True).stdout.split('\n'):
+              p = line.split(' ',1)
+              if len(p)==2 and p[1]: objs[p[1]].add(p[0])
+          bad1, bad2 = [], collections.Counter()
+          for path, shas in objs.items():
+              for s in shas:
+                  if subprocess.run(['git','cat-file','-t',s],
+                                    capture_output=True,text=True).stdout.strip()!='blob': continue
+                  raw = subprocess.run(['git','cat-file','blob',s],capture_output=True).stdout
+                  if not ('/tests/' in path or path.startswith('tests/') or path=='reports/t4-env.md'):
+                      if PAT.search(raw): bad1.append((path, s[:8], len(PAT.findall(raw))))
+                  if path.startswith('meta/') and path.endswith('.jsonl'):
+                      try: txt = raw.decode('utf-8')
+                      except UnicodeDecodeError: continue
+                      for line2 in txt.split('\n'):
+                          if not line2.strip(): continue
+                          for k, v in json.loads(line2).items():
+                              if k == 'repo': continue
+                              t = v if isinstance(v,str) else json.dumps(v,ensure_ascii=False)
+                              c = sum(t.count(pp) for pp in PRIV)
+                              if c: bad2[f'{path}:{k}'] += c
+          print(f"扫过 {sum(len(v) for v in objs.values())} 个对象 / {len(objs)} 个路径")
+          if bad1: print(f"::error::全历史仍有私有仓源码物料: {bad1}")
+          if bad2: print(f"::error::全历史仍有非 repo 字段残留: {dict(bad2)}")
+          sys.exit(1 if (bad1 or bad2) else 0)
+          PY
+          echo "✅ 全历史私有仓源码物料 0 命中"
 
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
