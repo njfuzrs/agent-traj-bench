@@ -35,9 +35,15 @@ jobs:
       # ── 门禁② harbor 认格式 39/39 ──────────────────────────────────
       # 上游的接入契约。⚠️ 它只验 harbor 认不认 task 目录结构，
       # ⛔ 不验脚本能不能跑 —— 那是门禁④ 与单测的事（典型假绿，见 P1-1）。
+      #
+      # 🔴 版本必须钉死 == version.json 的 execution_base（harbor 0.22.0）：
+      # 裸 `pip install harbor` 装的是最新版，而**这个 import 路径本身就搬过一次家**
+      # （0.22 之前是 `harbor.task`，现在是 `harbor.models.task.task`）
+      # ⇒ 上游再搬一次时门禁会以 ImportError 报红，形态是「题集看着坏了」，
+      # 而真实原因是 CI 装了一个与冻结版本不同的 harbor。⛔ 别把它改回浮动版本。
       - name: gate2 - harbor Task.is_valid_dir 39/39
         run: |
-          pip install --quiet harbor
+          pip install --quiet 'harbor==0.22.0'
           python - <<'PY'
           import sys
           from pathlib import Path

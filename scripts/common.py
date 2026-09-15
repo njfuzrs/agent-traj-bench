@@ -5,7 +5,9 @@
 
 本模块只放**T1-T7 都要遵守的契约**，不放业务逻辑：
 
-  1. 目录布局：产物一律写 `bench/v0.2-mini/`，原始层与 mirror 只读
+  1. 目录布局：产物一律写**仓库根**（`tasks/` `meta/` `reports/`），原始层与 mirror 只读
+     ⚠️ 源仓（trajectory-platform）里这一层是 `bench/v0.2-mini/`；拆仓时 subtree split
+     已去掉该前缀 ⇒ 本仓的产物根就是 `REPO_ROOT`，见下方 `MVP_DIR`。
   2. `tool_input` 解析：JSON 与 Python repr 双兼容（§3.2）
   3. 路径映射：严格前缀匹配，不用模糊切分（§3.4）
   4. mirror 只读访问：一律 `git -C $MIRROR`（§3.3）
@@ -70,6 +72,15 @@ MVP_DIR = Path(os.environ.get("MVP_DIR", REPO_ROOT))
 MVP_META = MVP_DIR / "meta"
 MVP_TASKS = MVP_DIR / "tasks"
 MVP_REPORTS = MVP_DIR / "reports"
+
+#: 本脚本目录相对仓库根的写法，供**写进产物或打给用户看**的命令串使用。
+#
+# 🔴 ⛔ 不许在任何字符串里写死 `scripts/mvp/` —— 那是源仓（trajectory-platform）的布局。
+# 公开仓拆出来后脚本在 `scripts/`，写死的形态是**提示语与 meta.json 里的命令全指向
+# 一个不存在的路径**，而脚本本身照常跑通、门禁也全绿（门禁④ 只拦 `/Users/` 绝对路径）
+# ⇒ 只有照着提示敲命令的人会撞上 `No such file or directory`。
+# 同 `t7-report.py` 的 `SCRIPTS_REL`（§5.5），从实际布局现推。
+SCRIPTS_REL = Path(__file__).resolve().parent.name
 
 CANDIDATES = MVP_META / "candidates.jsonl"  # T1 产物
 CANDIDATES_STATS = MVP_META / "candidates.stats.json"
@@ -272,7 +283,7 @@ def assert_jobs_dir_ok(jobs_dir: Path | str) -> Path:
         raise ValueError(
             f"harbor jobs 目录必须在 $HOME 之下（colima 只挂载 $HOME），"
             f"给的是 {p} —— 用 /tmp 会得到 RewardFileNotFoundError，"
-            f"见 bench/v0.2-mini/reports/tz-preflight.md R-3"
+            f"见 {MVP_REPORTS.name}/tz-preflight.md R-3"
         )
     return p
 

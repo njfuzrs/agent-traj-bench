@@ -28,8 +28,8 @@ meta.json 里长得和存活条目一模一样（三道门禁全绿），下游�
 
 ## 用法
 
-    python3 scripts/mvp/t6-writeback.py --dry-run   # 只看会改什么
-    python3 scripts/mvp/t6-writeback.py
+    python3 scripts/t6-writeback.py --dry-run   # 只看会改什么
+    python3 scripts/t6-writeback.py
 """
 
 from __future__ import annotations
@@ -129,7 +129,8 @@ def main() -> int:
                 f"违规 {len(s['violations'])}，已核良性 {s['benign_n']}"
             )
             m["leakage"]["leak_scan_violations"] = s["violations"]
-        m["leakage"]["scanned_by"] = "scripts/mvp/t6-leak-scan.py（容器内，非读 tar）"
+        # ⛔ 同 t3 的 generated_by：目录名从 c.SCRIPTS_REL 现推，不写死（源仓 scripts/mvp/）。
+        m["leakage"]["scanned_by"] = f"{c.SCRIPTS_REL}/t6-leak-scan.py（容器内，非读 tar）"
 
         # 另一类泄漏：题面文件名本身带信息（容器内扫描抓不到 —— 泄漏在题面文本里）。
         # 三级，与 §4.2 表格逐条对齐；一律不淘汰（bug 标题的自然形态）。
@@ -176,7 +177,7 @@ def main() -> int:
     if missing_scan:
         print(f"⚠️ 存活但泄漏扫描未覆盖/未建成的 {len(missing_scan)} 条，"
               f"leak_scan_passed 写 null（不是 true）：{' '.join(missing_scan)}")
-        print("   补跑：python3 scripts/mvp/t6-leak-scan.py --resume")
+        print("   补跑：python3 scripts/t6-leak-scan.py --resume")
     return 0
 
 

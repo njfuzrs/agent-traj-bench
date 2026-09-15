@@ -42,8 +42,8 @@
 用 `common.band(edit_ops)` 现算，**不用 Phase 1 的 `difficulty`**（§3.7 坑二）。
 
 用法：
-    python3 scripts/mvp/t1-select-candidates.py
-    python3 scripts/mvp/t1-select-candidates.py --selftest-strict-secret   # 反向自证
+    python3 scripts/t1-select-candidates.py
+    python3 scripts/t1-select-candidates.py --selftest-strict-secret   # 反向自证
 """
 
 from __future__ import annotations

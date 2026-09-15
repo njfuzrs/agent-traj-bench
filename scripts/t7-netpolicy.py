@@ -113,7 +113,7 @@ def verify(task_id: str) -> None:
     import tomllib
 
     # ⚠️ 必须用 harbor 自己那个 venv 的解释器跑本脚本：
-    #   ~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-netpolicy.py
+    #   ~/.local/share/uv/tools/harbor/bin/python scripts/t7-netpolicy.py
     # harbor 是 uv tool 装的，不在本仓依赖里 ⇒ 本地静态检查会报
     # reportMissingImports，那是**预期**的，不是缺依赖。
     from harbor.models.task.config import NetworkMode, TaskConfig  # noqa: PLC0415

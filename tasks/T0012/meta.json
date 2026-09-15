@@ -115,7 +115,7 @@
     "p2p"
   ],
   "reward_file": "reward.json",
-  "generated_by": "scripts/mvp/t3-build-harbor-tasks.py",
+  "generated_by": "scripts/t3-build-harbor-tasks.py",
   "solvability": {
     "gold_verified": true,
     "gate_oracle": true,
@@ -127,7 +127,7 @@
     "leak_scan_passed": true,
     "leak_scan_note": "容器内 find 全盘扫描：命中 69，违规 0，已核良性 69",
     "leak_scan_violations": [],
-    "scanned_by": "scripts/mvp/t6-leak-scan.py（容器内，非读 tar）",
+    "scanned_by": "scripts/t6-leak-scan.py（容器内，非读 tar）",
     "filename_specificity": null,
     "filename_note": "mechanism=文件名点出修法所需机制，得分可能偏高（4 条，T7 要标注）；symptom=仅症状词，§4.2 判为正常题面；topic_only=仅主题"
   },

@@ -6,20 +6,20 @@
   "task_count": 39,
   "plan": "docs-research/trajectory-platform/bench-mvp-plan.md@v1.2",
   "execution_base": "harbor 0.22.0（sid-code/evals/external-benchmarks/harbor，只调用不修改）",
-  "note": "与 bench/（v0.1，844 条已冻结）平级，不覆盖、不迁移。task_count 与 frozen_at 由 T7 冻结时写入。",
+  "note": "拆仓后本仓只含 v0.2-mini 交付 39 条，产物根即仓库根（tasks/ meta/ reports/ 与 scripts/ 平级）；源仓 trajectory-platform 里这一层是 bench/v0.2-mini/，与 v0.1（844 条已冻结）平级，不覆盖、不迁移。task_count 与 frozen_at 由 T7 冻结时写入。",
   "progress": {
     "TZ": {
       "state": "done",
       "date": "2026-09-07",
-      "report": "bench/v0.2-mini/reports/tz-preflight.md",
+      "report": "reports/tz-preflight.md",
       "gate": "oracle=1 且 nop=0，reward 双源一致"
     },
     "T0": {
       "state": "done",
       "date": "2026-09-07",
       "artifacts": [
-        "scripts/mvp/",
-        "bench/v0.2-mini/"
+        "scripts/",
+        ".（仓库根 —— 拆仓后产物根就是根目录）"
       ],
       "gate": "pytest 68 passed / 0 skipped；harbor Task.is_valid_dir 认格式"
     },
@@ -27,8 +27,8 @@
       "state": "done",
       "date": "2026-09-07",
       "artifacts": [
-        "bench/v0.2-mini/meta/candidates.jsonl",
-        "bench/v0.2-mini/meta/candidates.stats.json"
+        "meta/candidates.jsonl",
+        "meta/candidates.stats.json"
       ],
       "gate": "182 条 ≥120；S41/M52/L89 三档各 ≥15；反向自证非零退出"
     },
@@ -36,8 +36,8 @@
       "state": "done",
       "date": "2026-09-08",
       "artifacts": [
-        "bench/v0.2-mini/meta/resolved.jsonl",
-        "bench/v0.2-mini/reports/t2-resolve.md"
+        "meta/resolved.jsonl",
+        "reports/t2-resolve.md"
       ],
       "gate": "70 条反解成功（目标 40-50）；exact 100%，锚点 96.1%"
     },
@@ -45,10 +45,10 @@
       "state": "done",
       "date": "2026-09-10",
       "artifacts": [
-        "bench/v0.2-mini/tasks/T####/",
-        "bench/v0.2-mini/meta/p2p.jsonl",
-        "bench/v0.2-mini/meta/tasks.stats.json",
-        "bench/v0.2-mini/reports/t3-tasks.md"
+        "tasks/T####/",
+        "meta/p2p.jsonl",
+        "meta/tasks.stats.json",
+        "reports/t3-tasks.md"
       ],
       "gate": "65 条 task；Task.is_valid_dir 65/65；P2P 采样 50/50 base；四条作弊路径 + 三条反向自证全封堵",
       "note": "⚠️ S 档仅 5 条，不达「各档 ≥10」，根因在 T2（见 t3-tasks.md §9.1）"
@@ -57,9 +57,9 @@
       "state": "done",
       "date": "2026-09-10",
       "artifacts": [
-        "bench/v0.2-mini/tasks/T####/environment/",
-        "bench/v0.2-mini/meta/snapshots.jsonl",
-        "bench/v0.2-mini/reports/t4-env.md"
+        "tasks/T####/environment/",
+        "meta/snapshots.jsonl",
+        "reports/t4-env.md"
       ],
       "gate": "65 条快照；步骤④交叉 apply --check 130/130；泄漏扫描零违规"
     },
@@ -67,11 +67,11 @@
       "state": "done",
       "date": "2026-09-11",
       "artifacts": [
-        "bench/v0.2-mini/meta/gate.jsonl",
-        "bench/v0.2-mini/reports/t5-gate.md",
-        "bench/v0.2-mini/reports/t5-selftest.md",
-        "scripts/mvp/t5-gate.py",
-        "scripts/mvp/t5_gate_lib.py"
+        "meta/gate.jsonl",
+        "reports/t5-gate.md",
+        "reports/t5-selftest.md",
+        "scripts/t5-gate.py",
+        "scripts/t5_gate_lib.py"
       ],
       "gate": "三道门禁（oracle 44/65、nop 61/65、oracle-k3 在 40 条上 40/40 三次一致）后存活 40 条；反向自证 6/6；实付 $0",
       "note": "7 条因 src/ink/ 从未入库不可复现；T0017/T0027 留作待复查，已由 T6 定性淘汰"
@@ -80,10 +80,10 @@
       "state": "done",
       "date": "2026-09-11",
       "artifacts": [
-        "bench/v0.2-mini/reports/t6-review.md",
-        "bench/v0.2-mini/reports/t6-recheck/",
-        "scripts/mvp/t6-leak-scan.py",
-        "scripts/mvp/t6-writeback.py"
+        "reports/t6-review.md",
+        "reports/t6-recheck/",
+        "scripts/t6-leak-scan.py",
+        "scripts/t6-writeback.py"
       ],
       "gate": "40/40 过目（100%，非抽样）；容器内泄漏扫描零违规 + 扫描器 5/5 反向自证；F2P 因果 40/40",
       "survivors": 39,
@@ -93,9 +93,9 @@
       "state": "done",
       "date": "2026-09-14",
       "artifacts": [
-        "bench/v0.2-mini/reports/baseline-v0.2-mini-t8-rerun.md",
-        "bench/v0.2-mini/reports/t8-rerun/summary.json",
-        "bench/v0.2-mini/reports/t8-rerun/2026-09-14__09-46-52"
+        "reports/baseline-v0.2-mini-t8-rerun.md",
+        "reports/t8-rerun/summary.json",
+        "reports/t8-rerun/2026-09-14__09-46-52（⛔ 未入库：1.9G run 产物，.gitignore 排除 reports/*/20*/；公开仓的取数源是同目录的 trials.json）"
       ],
       "gate": "pass@1=37.8%（14/37），分母 scored=37（题集 39 条，infra 排除 2 条不计分），实付 $26.214353",
       "model": [

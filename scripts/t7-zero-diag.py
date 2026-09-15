@@ -36,8 +36,8 @@ oracle 拿 0 分、Exceptions=0，真因是 github 间歇不可达导致 uv 装�
 
 ## 用法
 
-    ~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-zero-diag.py
-    ~/.local/share/uv/tools/harbor/bin/python scripts/mvp/t7-zero-diag.py --json
+    ~/.local/share/uv/tools/harbor/bin/python scripts/t7-zero-diag.py
+    ~/.local/share/uv/tools/harbor/bin/python scripts/t7-zero-diag.py --json
 
 输出 `reports/baseline/zero-diag.json`（机器可读，供报告引用）。
 """
@@ -475,7 +475,7 @@ def main() -> int:
 
     run = lib.latest_run(RUNS)
     if run is None:
-        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/mvp/t8-rerun.py（或 t7-baseline.py）")
+        raise SystemExit(f"{RUNS} 下没有 run 目录 —— 先跑 scripts/t8-rerun.py（或 t7-baseline.py）")
 
     grade_groups = json.loads((RECHECK / "t7-grade-groups.json").read_text(encoding="utf-8"))
     grade = {t: g for g, ts in grade_groups.items() for t in ts}

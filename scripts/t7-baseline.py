@@ -251,7 +251,7 @@ def main() -> int:
     path = stage(tasks)
     elapsed = run(path, OUT, args.k)
     print(f"跑完，{elapsed / 60:.1f} 分钟。产物 {OUT}")
-    print("下一步：scripts/mvp/t7-report.py 出报告（判定与统计都在那边）")
+    print("下一步：scripts/t7-report.py 出报告（判定与统计都在那边）")
     return 0
 
 

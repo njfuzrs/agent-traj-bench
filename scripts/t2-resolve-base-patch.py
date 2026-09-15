@@ -55,9 +55,9 @@
 的做法（见 T1 的 `--selftest-strict-secret`）。
 
 用法：
-    python3 scripts/mvp/t2-resolve-base-patch.py
-    python3 scripts/mvp/t2-resolve-base-patch.py --selftest-fuzzy-path   # 反向自证
-    python3 scripts/mvp/t2-resolve-base-patch.py --limit 20              # 抽样快跑
+    python3 scripts/t2-resolve-base-patch.py
+    python3 scripts/t2-resolve-base-patch.py --selftest-fuzzy-path   # 反向自证
+    python3 scripts/t2-resolve-base-patch.py --limit 20              # 抽样快跑
 """
 
 from __future__ import annotations

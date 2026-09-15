@@ -596,7 +596,9 @@ def build_one(task_id: str, row: dict, snap: dict, p2p: list[str], instruction: 
         "reward_keys": ["reward", "f2p", "p2p"],
         # 纠正记录：harbor 只读单数名（见本脚本 docstring），方案原文写的是复数
         "reward_file": "reward.json",
-        "generated_by": "scripts/mvp/t3-build-harbor-tasks.py",
+        # ⛔ 不写死目录名：源仓是 `scripts/mvp/`、公开仓是 `scripts/`（c.SCRIPTS_REL 现推）。
+        # 写死的形态是 39 份 meta.json 里的出处字段全指向不存在的路径，而没有任何门禁会红。
+        "generated_by": f"{c.SCRIPTS_REL}/t3-build-harbor-tasks.py",
     }
     (task_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -664,7 +666,7 @@ def main() -> int:
 
     if not P2P_IN.exists():
         print(
-            f"🔴 {P2P_IN} 不存在 —— 先跑 `python3 scripts/mvp/t3-sample-p2p.py`。\n"
+            f"🔴 {P2P_IN} 不存在 —— 先跑 `python3 scripts/t3-sample-p2p.py`。\n"
             f"   P2P 必须采在 T4 剔除后的快照上（衔接①），采错文件树会让全批 reward=0。",
             file=sys.stderr,
         )
@@ -682,7 +684,7 @@ def main() -> int:
         print(
             f"🔴 有 {len(missing)}/{len(todo)} 条 task 还没有 P2P 名单："
             f"{missing[:8]}{' ...' if len(missing) > 8 else ''}\n"
-            f"   跑 `python3 scripts/mvp/t3-sample-p2p.py --resume` 补齐，"
+            f"   跑 `python3 scripts/t3-sample-p2p.py --resume` 补齐，"
             f"或 --allow-missing-p2p 强行生成（调试用，产物不可用于评测）",
             file=sys.stderr,
         )
@@ -717,7 +719,7 @@ def main() -> int:
             print(f"   {t}: {miss}", file=sys.stderr)
         print(
             "   environment/ 两个文件属 T4：快照不入 git，换机器后先跑 "
-            "scripts/mvp/t4-build-env.py 重建",
+            "scripts/t4-build-env.py 重建",
             file=sys.stderr,
         )
         return 2

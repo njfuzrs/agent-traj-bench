@@ -53,7 +53,7 @@
                 ㊴ `--resume` 把 ok:false 也当已采，失败的 base 被永久跳过
 
 用法：
-    python3 -m pytest scripts/mvp/tests/test_mvp.py -v
+    python3 -m pytest scripts/tests/test_mvp.py -v
 """
 
 from __future__ import annotations
@@ -538,7 +538,7 @@ def test_unimplemented_skeletons_exit_nonzero(script):
 def test_no_skeleton_scripts_remain():
     """正面守「没有漏登记的骨架」——空名单本身不构成证据。
 
-    判据：`scripts/mvp/` 下任何文件只要正文（去掉注释）里写着「尚未实现」，
+    判据：`scripts/` 下任何文件只要正文（去掉注释）里写着「尚未实现」，
     就必须出现在 `SKELETONS` 名单里，否则它是个**没人测的骨架**。
     """
     unlisted = []
@@ -561,9 +561,9 @@ def test_no_script_starts_a_real_run_when_merely_executed():
 
     教训是「转发壳即地雷」：一个文件只要被执行就产生副作用，那么任何**以为自己
     只是在探测它**的调用方（测试、`--help`、shell 补全）都会触发副作用。
-    所以 `t5-gate.sh` 已删除，跑批统一走 `python3 scripts/mvp/t5-gate.py`。
+    所以 `t5-gate.sh` 已删除，跑批统一走 `python3 scripts/t5-gate.py`。
 
-    这条守的是不变式：`scripts/mvp/` 下不得再出现「无参数执行就调 harbor」的 .sh。
+    这条守的是不变式：`scripts/` 下不得再出现「无参数执行就调 harbor」的 .sh。
     """
     offenders = []
     for sh in sorted(MVP.glob("*.sh")):
@@ -4617,3 +4617,66 @@ def test_no_hardcoded_local_paths_in_scripts():
                 continue
             bad.append(f"{rel}:{i}: {line.strip()[:90]}")
     assert not bad, "scripts/ 里有本机绝对路径（门禁④ 会拦）：\n" + "\n".join(bad)
+
+
+def test_no_source_repo_layout_in_user_facing_strings():
+    """公开仓的**用户可见字符串**里不许残留源仓布局 `scripts/mvp/`（阶段 6 验收新增）。
+
+    🔴 为什么四条 CI 门禁都拦不住这类缺陷：
+      - 门禁① 只数题数、② 只问 harbor 认不认目录结构、③ 只扫内网基建地址、
+        ④ 只拦 `/Users/zhourusheng` 这种**绝对**路径。
+      - `scripts/mvp/xxx.py` 是**相对**路径，四条全绿，而脚本自己 import 得到的是
+        `common.py`（同目录），照常跑通 ⇒ 只有**照着提示敲命令的人**会撞
+        `No such file or directory`。
+      - 阶段 6 实测抓到 32 处（10 个脚本的提示串 + 39 份 meta.json 的
+        `generated_by` / `scanned_by`）——「脚本能跑」与「提示语指得对」是两件事，
+        这正是 §6.1 第一条假绿的同一形态。
+
+    ⚠️ 白名单只放**正在解释这件事本身**的行（含「源仓 / 公开仓 / 拆仓 / 少一级」等词）：
+    那些行必须保留 `scripts/mvp/` 字样，否则说明文字自己就没了。
+    ⛔ 不许因为「注释里也有」就把整类注释排除 —— 那样真的写错时就没人拦了。
+    """
+    # 正在解释「源仓 vs 公开仓」差异的行，保留
+    keep = ("源仓", "公开仓", "拆仓", "subtree", "不再是", "⛔ 不是", "不许把", "少一级",
+            "不许在任何字符串里写死")
+    bad: list[str] = []
+    for py in sorted(MVP.rglob("*.py")):
+        if "__pycache__" in str(py):
+            continue
+        # ⚠️ 本文件自己在**讲这条规则**（docstring 与判据里都要出现该字样）⇒ 自排除。
+        # ⛔ 不是「测试可以豁免」：其余 tests/*.py 仍在扫描范围内。
+        if py.resolve() == Path(__file__).resolve():
+            continue
+        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
+            if "scripts/mvp/" in line and not any(k in line for k in keep):
+                bad.append(f"{py.relative_to(MVP)}:{i}: {line.strip()[:90]}")
+    assert not bad, (
+        "scripts/ 里残留源仓布局 `scripts/mvp/`（公开仓应为 `scripts/`）：\n"
+        + "\n".join(bad)
+    )
+
+
+def test_task_meta_provenance_points_at_this_repo_layout():
+    """39 份 `meta.json` 的出处字段必须指向**本仓真实存在**的脚本（阶段 6 验收新增）。
+
+    这两个字段（`generated_by` / `scanned_by`）是别人复核题集时的第一跳。
+    源仓写的是 `scripts/mvp/...`，拆仓后该目录不存在 ⇒ 形态是
+    「39 份 meta.json 的出处全指向不存在的文件」，而 harbor 不读这两个键、
+    `snapshots.jsonl` 也不校验 meta.json ⇒ **没有任何现有判据会红**。
+    ⇒ 这里直接验「文件真的在」，⛔ 不是验字符串等于某个字面量
+    （后者在源仓侧同样会红，而两个仓的正确值本就不同）。
+    """
+    metas = sorted(c.MVP_TASKS.glob("*/meta.json"))
+    assert len(metas) == 39, f"期望 39 份 meta.json，实得 {len(metas)}"
+    bad: list[str] = []
+    for p in metas:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        for key, val in (("generated_by", d.get("generated_by")),
+                         ("scanned_by", (d.get("leakage") or {}).get("scanned_by"))):
+            if not val:
+                continue
+            # 值形如 `scripts/t6-leak-scan.py（容器内，非读 tar）` ⇒ 只取路径那一段
+            script = str(val).split("（")[0].strip()
+            if not (c.REPO_ROOT / script).exists():
+                bad.append(f"{p.parent.name}/{key}: {script} 不存在")
+    assert not bad, "meta.json 的出处字段指向不存在的脚本：\n" + "\n".join(bad[:12])

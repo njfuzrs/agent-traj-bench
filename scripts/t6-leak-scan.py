@@ -27,9 +27,9 @@
 
 ## 用法
 
-    python3 scripts/mvp/t6-leak-scan.py            # 全量 40 条
-    python3 scripts/mvp/t6-leak-scan.py --only T0002
-    python3 scripts/mvp/t6-leak-scan.py --keep-images   # 不删镜像（调试用）
+    python3 scripts/t6-leak-scan.py            # 全量 40 条
+    python3 scripts/t6-leak-scan.py --only T0002
+    python3 scripts/t6-leak-scan.py --keep-images   # 不删镜像（调试用）
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ def main() -> int:
     print(f"\n扫描 {len(rows)} 条：违规 {sum(1 for r in rows if r.get('leak_scan_passed') is False)} 条，"
           f"未建成 {n_unbuilt} 条 → {OUT}")
     if n_unbuilt:
-        print(f"⚠️ 未建成的复跑：python3 scripts/mvp/t6-leak-scan.py --resume")
+        print(f"⚠️ 未建成的复跑：python3 scripts/t6-leak-scan.py --resume")
     return 1 if n_bad else 0
 
 

@@ -97,7 +97,7 @@ def build_image(task_id: str, tag: str) -> float:
     if not snap.exists():
         raise FileNotFoundError(
             f"{snap} 不存在 —— 快照不入 git（429MB），换机器后先跑 "
-            f"scripts/mvp/t4-build-env.py 重建（见 t4-env.md §9.1）"
+            f"scripts/t4-build-env.py 重建（见 t4-env.md §9.1）"
         )
     t0 = time.time()
     proc = subprocess.run(

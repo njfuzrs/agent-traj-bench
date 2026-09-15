@@ -47,13 +47,13 @@ reward.json；T3 是 `docker run` 直跑 bun，**没有经过 harbor 的结果�
 ## 用法
 
     # 完整跑（三道门禁）
-    python3 scripts/mvp/t5-gate.py
+    python3 scripts/t5-gate.py
 
     # 只跑某一道（分批时用）
-    python3 scripts/mvp/t5-gate.py --only nop
+    python3 scripts/t5-gate.py --only nop
 
     # 在既有产物上纯复算，不重跑（$0）
-    python3 scripts/mvp/t5-gate.py --from-runs
+    python3 scripts/t5-gate.py --from-runs
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ def write_outputs(summaries: dict[str, lib.GateSummary]) -> list[str]:
     lines = [
         "# T5 — 门禁：oracle / nop 双向验证",
         "",
-        "> 生成：`scripts/mvp/t5-gate.py`；判定逻辑 `scripts/mvp/t5_gate_lib.py`",
+        "> 生成：`scripts/t5-gate.py`；判定逻辑 `scripts/t5_gate_lib.py`",
         "> 逐 task 结论：`meta/gate.jsonl`",
         "",
         "## 结论",
@@ -447,7 +447,7 @@ def write_selftest_report(outcomes: list[lib.SelftestOutcome]) -> None:
     lines = [
         "# T5 反向自证（方案 §4 T5 的四条 + 一个对照）",
         "",
-        "> 生成：`python3 scripts/mvp/t5-gate.py --selftest`",
+        "> 生成：`python3 scripts/t5-gate.py --selftest`",
         "> 机制：**故意破坏一处，然后要求门禁报红** —— 并核「红的理由对不对」，",
         "> 不只看红没红。理由错的红是假绿的一种（T4 交接 #6 的教训）。",
         "",
