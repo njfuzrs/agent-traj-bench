@@ -1,1 +1,0 @@
-["tests/sdk/command-queue.test.ts", "tests/sdk/e2e.test.ts", "tests/sdk/mcp-bridge.test.ts", "tests/sdk/message-converter.test.ts", "tests/sdk/ndjson.test.ts", "tests/sdk/permission-bridge.test.ts", "tests/sdk/schemas.test.ts", "tests/sdk/session-recovery.test.ts", "tests/sdk/stream-json-e2e.test.ts", "tests/sdk/structured-io.test.ts", "tests/sdk/structured-output.test.ts"]
