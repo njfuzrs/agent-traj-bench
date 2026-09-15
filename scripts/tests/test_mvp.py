@@ -123,9 +123,46 @@ def test_parse_tool_input_bad_returns_empty(bad):
 
 # ── ② 路径映射严格前缀（§3.4） ─────────────────────────────────────
 
+# 🔴 这几条的路径 fixture **必须从 `c.CODE_ROOT` 现推，⛔ 不许硬编码 `/Users/zhourusheng`**：
+# `REPO_PATH_PREFIXES` 是由 `CODE_ROOT`（默认 `~/Code`）拼出来的 ⇒ 写死采集机的前缀，
+# 只在「$HOME 恰好是 /Users/zhourusheng」的机器上过。实测：GitHub Actions 上 $HOME 是
+# `/home/runner` ⇒ 严格前缀一条都不命中，`map_repo_path` 全返回 None，**4 条测试直接红**。
+# ⚠️ 这是一类**只在别人机器上暴露**的假绿：本地 202 passed 全绿，CI 却 7 failed
+# （2026-09-15 首次 push 后实测），且门禁④ 抓不到 —— 它只扫 `scripts/` 不扫 `scripts/tests/`。
+def _in_repo(rel: str, repo: str = "person/sid-code") -> str:
+    """拼一个「确实落在 REPO_PATH_PREFIXES 之内」的绝对路径。"""
+    for prefix, prefix_repo in c.REPO_PATH_PREFIXES.items():
+        if prefix_repo == repo:
+            return prefix + rel
+    raise AssertionError(f"REPO_PATH_PREFIXES 里没有 {repo}")
+
+
+# 🔴 mirror（`~/Code/_archive/bench-mirrors/`）**从不随公开仓分发** —— 它是 sid-code 的 bare 归档。
+# ⇒ 依赖它的测试在别人机器上必须 **skip 而不是 fail**，否则公开仓 CI 恒红。
+# 实测（2026-09-15 首次 push 后）：3 条依赖 mirror 的测试没有 skip 守卫 ⇒ GitHub Actions 报红，
+# 形态是 `git archive 失败` / `mirror 里应能反查到 base` / `assert 'absent' == 'external'`，
+# 看着像题集坏了，其实是**取数源本就不在公开仓里**。
+# ⚠️ 判定走 `c.mirror_path()` 而**不是**把 home 路径写死 —— 后者在 `MIRRORS_DIR` 被覆盖时判不出来。
+def _has_mirror(repo: str = "person/sid-code") -> bool:
+    try:
+        return c.mirror_path(repo).exists()
+    except KeyError:
+        return False
+
+
+needs_mirror = pytest.mark.skipif(
+    not _has_mirror(),
+    reason="无 mirror 归档（bench-mirrors 不随公开仓分发）—— 采集机上这条是真跑的",
+)
+
+
+def _outside(rel: str) -> str:
+    """拼一个「在 $HOME 之下但不在任何仓库前缀内」的绝对路径。"""
+    return str(Path.home() / rel)
+
 
 def test_map_repo_path_in_repo():
-    p = "/Users/zhourusheng/Code/person/sid-code/src/agent/x.ts"
+    p = _in_repo("src/agent/x.ts")
     assert c.map_repo_path(p) == "src/agent/x.ts"
 
 
@@ -136,19 +173,19 @@ def test_map_repo_path_rejects_claude_projects():
     路径也当成仓库内文件，形态是「锚点校验失败率虚高」，看着像轨迹质量差，
     实际是映射写糙了。
     """
-    p = "/Users/zhourusheng/.claude/projects/memory/sid-code/notes.md"
+    p = _outside(".claude/projects/memory/sid-code/notes.md")
     assert c.map_repo_path(p) is None
 
 
 def test_map_repo_path_rejects_cross_repo():
     """§3.4 的另一类失败：跨仓路径混进来。指定 repo 时必须拒绝别的仓库。"""
-    p = "/Users/zhourusheng/Code/ruijie/iam-studio-fe/src/x.vue"
+    p = _in_repo("src/x.vue", repo="ruijie/iam-studio-fe")
     assert c.map_repo_path(p, repo="person/sid-code") is None
     assert c.map_repo_path(p, repo="ruijie/iam-studio-fe") == "src/x.vue"
 
 
 def test_map_repo_path_repo_root_is_not_a_file():
-    assert c.map_repo_path("/Users/zhourusheng/Code/person/sid-code/") is None
+    assert c.map_repo_path(_in_repo("")) is None
 
 
 @pytest.mark.parametrize("bad", [None, "", 123, "relative/path.ts", "/tmp/x.ts"])
@@ -686,10 +723,7 @@ def test_labeled_v2_has_fields_t1_depends_on():
         assert field in row, f"labeled-v2 缺字段 {field}"
 
 
-@pytest.mark.skipif(
-    not (Path.home() / "Code/_archive/bench-mirrors/person_sid-code.git").exists(),
-    reason="无 mirror 归档",
-)
+@needs_mirror
 def test_resolve_base_commit_on_real_mirror():
     """§3.3：按时间戳反查真的能取到 commit（只查 refs/heads/main）。"""
     sha = c.resolve_base_commit("person/sid-code", "2026-07-15T10:00:00")
@@ -877,7 +911,7 @@ def test_is_doc(rel, expected):
 def test_roundtrip_holds_for_strict_mapping():
     """严格映射下 `前缀 + 相对路径 == 原绝对路径` 恒成立（182 条实测 0 违反）。"""
     t2 = load_t2()
-    abs_path = "/Users/zhourusheng/Code/person/sid-code/src/app.ts"
+    abs_path = _in_repo("src/app.ts")
     rel = c.map_repo_path(abs_path, "person/sid-code")
     assert rel == "src/app.ts"
     assert t2.roundtrip_ok(abs_path, rel, "person/sid-code") is True
@@ -890,9 +924,8 @@ def test_roundtrip_breaks_for_fuzzy_mapping():
     这就是 §3.4 那 21 条锚点失败的来源，也是 `--selftest-fuzzy-path` 的原理。
     """
     t2 = load_t2()
-    leaky = (
-        "/Users/zhourusheng/.claude/projects/"
-        "-Users-zhourusheng-Code-person-sid-code/memory/MEMORY.md"
+    leaky = _outside(
+        ".claude/projects/-Users-zhourusheng-Code-person-sid-code/memory/MEMORY.md"
     )
     assert c.map_repo_path(leaky, "person/sid-code") is None      # 严格映射丢弃
     fuzzy = t2.fuzzy_map_repo_path(leaky, "person/sid-code")
@@ -944,18 +977,19 @@ def test_dropped_path_classification_distinguishes_worktree():
     assert t2.classify_dropped("/tmp/scratch.ts", "person/sid-code") == "out_of_scope"
     assert (
         t2.classify_dropped(
-            "/Users/zhourusheng/Code/person/sid-code-worktrees/obs/packages/x.ts", "person/sid-code"
+            _in_repo("").rstrip("/") + "-worktrees/obs/packages/x.ts", "person/sid-code"
         )
         == "same_repo_worktree"
     )
     assert (
         t2.classify_dropped(
-            "/Users/zhourusheng/Code/ruijie/iam-studio-fe/src/x.ts", "person/sid-code"
+            _in_repo("src/x.ts", repo="ruijie/iam-studio-fe"), "person/sid-code"
         )
         == "cross_repo"
     )
 
 
+@needs_mirror
 def test_gitignored_uses_base_gitignore_not_head():
     """`.claude/worktrees/...` **通过了**严格前缀映射，只有 `.gitignore` 能拦住它。
 
@@ -1039,6 +1073,7 @@ def test_t4_leak_files_are_file_granular():
     assert not t4.strip_leaks(".github/workflows/docs-lint.yml")
 
 
+@needs_mirror
 def test_t4_eval_framework_mode_distinguishes_two_mechanisms():
     """⑳ `file:` 与 `workspace:` 必须分开判 —— 混为一谈会白淘汰 47 条 task。
 
@@ -1055,6 +1090,7 @@ def test_t4_eval_framework_mode_distinguishes_two_mechanisms():
     assert t4.eval_framework_mode(repo, "16cb147266b9131896460972aba3f6b873ac8f48") == "workspace"
 
 
+@needs_mirror
 def test_t4_cross_verify_catches_patch_touching_stripped_path():
     """㉑ 步骤④必须抓出「patch 触及被剔除路径」——这正是两层各自都绿的破口。
 
