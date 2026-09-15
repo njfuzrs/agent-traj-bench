@@ -1,6 +1,6 @@
 name: bench-gates
 
-# 题集门禁四条。全部 $0：不跑模型、不起容器、不需要快照。
+# 题集门禁五条。全部 $0：不跑模型、不起容器、不需要快照。
 #
 # 🔴 每条门禁的**作用域与模式都是实测收窄过的**，⛔ 改宽之前先读注释里的「为什么不能」——
 # 两条宽写法都会让门禁永远红，然后被人加 `|| true` 关掉，那比没有门禁更糟。
@@ -82,6 +82,21 @@ jobs:
             exit 1
           fi
           echo "scripts/ 无本机绝对路径 ✓"
+
+      # ── 门禁⑤ 私有仓源码物料归零 ────────────────────────────────
+      # 🔴 模式盯【私有仓文件路径形态】，⛔ 不许写裸 `iam-studio-fe`：
+      # 那会误伤 reports/t4-env.md:103 与 card 第 12/13 条的**合规披露散文**
+      # （解释 5 条为何被挡），门禁会永远红 ⇒ 然后被人关掉。
+      # ⚠️ `scripts/tests/` 是白名单：test_mvp.py:145/953 的 fixture 就该带这种路径。
+      # ⚠️ 选项写在路径操作数【之前】：GNU grep 两种都吃，但 BSD grep / ugrep 会把
+      # 选项当文件名（实测 exit 2 且**排除失效**）⇒ 这样写本地与 CI 才是同一条命令。
+      - name: gate5 - 私有仓源码物料归零
+        run: |
+          PAT='(anka-app|iam-studio-fe|tag-studio|ontology-studio)/[A-Za-z0-9_./-]*\.(vue|tsx|ts|json)|(anka-app|iam-studio-fe)/[A-Za-z0-9_.-]+/(src|packages)/'
+          if grep -rIEn --exclude-dir=.git --exclude-dir=__pycache__ --exclude-dir=tests -- "$PAT" . ; then
+            echo "::error::检出私有仓源码物料（见 §6B）"; exit 1
+          fi
+          echo "✅ 私有仓源码物料 0 命中"
 
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
