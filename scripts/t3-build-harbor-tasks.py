@@ -128,6 +128,17 @@ REQUIRED_FILES = (
 )
 
 
+#: 交付契约里**不入库、须重建**的那些文件（见 `.gitignore`）。
+#
+# 🔴 ⛔ 不许把它从 `REQUIRED_FILES` 里删掉 —— 那是「一条 task 跑起来要什么」的契约，
+# 删了就等于宣布快照不是必需品。这里只是把「缺失原因」分成两类：
+#   - 入库文件缺 ⇒ **交付物被破坏**，退出码 2（反向自证②盯的就是这条）
+#   - 快照缺     ⇒ **预期状态**（259.9MB 走 HF，见 DATASET_CARD.md）⇒ 提示重建，不算不齐
+# 合并成一类的形态是：公开仓每次自查都报「39/39 条产物不齐」，
+# 于是这道守卫**天天在喊狼来了**，真有一条 score.py 丢了也没人看得见。
+REBUILDABLE_FILES = ("environment/repo-snapshot.tar.gz",)
+
+
 def missing_files(task_dir: Path) -> list[str]:
     """返回缺失或**空**的必需文件。空文件与缺文件同罪 —— 零字节的 `gold_patch.diff`
     在容器里是「apply 成功但什么都没改」，即 oracle 静默拿 0 分。"""
@@ -617,14 +628,33 @@ def main() -> int:
     # 而验收项要的是「删掉某条的 tests/score.py → 自查必须报错」，
     # 那就必须有一条**不写盘**的路径。T5 的门禁也该用这条来复核交付物。
     if args.check_only:
-        todo_c = [args.only] if args.only else sorted(snaps)
-        incomplete_c = {t: m for t in todo_c if (m := missing_files(c.MVP_TASKS / t))}
-        if incomplete_c:
-            print(f"🔴 {len(incomplete_c)}/{len(todo_c)} 条 task 的产物不齐：", file=sys.stderr)
-            for t, miss in sorted(incomplete_c.items()):
+        # ⚠️ 作用域是**磁盘上真实交付的那些**，⛔ 不是 snapshots.jsonl 的全部 65 条：
+        # 公开仓只交付 39 条（26 条淘汰题留在 trajectory-platform 归档）⇒ 照 65 条枚举
+        # 会把「本来就不该在这儿的 26 条」报成产物不齐，把这道守卫淹掉。
+        on_disk = ({p.name for p in c.MVP_TASKS.iterdir() if p.is_dir()}
+                   if c.MVP_TASKS.exists() else set())
+        todo_c = [args.only] if args.only else sorted(snaps.keys() & on_disk) or sorted(snaps)
+        hard: dict[str, list[str]] = {}
+        rebuild: dict[str, list[str]] = {}
+        for t in todo_c:
+            miss = missing_files(c.MVP_TASKS / t)
+            if h := [m for m in miss if m not in REBUILDABLE_FILES]:
+                hard[t] = h
+            if r := [m for m in miss if m in REBUILDABLE_FILES]:
+                rebuild[t] = r
+        if hard:
+            print(f"🔴 {len(hard)}/{len(todo_c)} 条 task 的产物不齐：", file=sys.stderr)
+            for t, miss in sorted(hard.items()):
                 print(f"   {t}: {miss}", file=sys.stderr)
             return 2
-        print(f"✅ {len(todo_c)} 条 task 的 {len(REQUIRED_FILES)} 个文件全部齐备且非空")
+        n_req = len(REQUIRED_FILES) - len(REBUILDABLE_FILES) if rebuild else len(REQUIRED_FILES)
+        print(f"✅ {len(todo_c)} 条 task 的 {n_req} 个入库文件全部齐备且非空")
+        if rebuild:
+            # ⛔ 不静默放过：说清缺的是什么、怎么补，且它不影响「入库产物完好」这个结论
+            print(f"⚠️ 另有 {len(rebuild)} 条缺 {', '.join(REBUILDABLE_FILES)}"
+                  "（未入库，走 HF 快照仓）⇒ 跑 "
+                  "`t4-build-env.py --from-snapshots <dir>` 重建并逐份校验 sha256",
+                  file=sys.stderr)
         return 0
     resolved = {r["unit_id"]: r for r in c.read_jsonl(c.RESOLVED) if r.get("ok")}
     # 题面只在 candidates.jsonl 里（T1 产物），resolved.jsonl 没带上这个字段

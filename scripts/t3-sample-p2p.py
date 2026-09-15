@@ -67,7 +67,7 @@ SNAPSHOTS = c.MVP_META / "snapshots.jsonl"
 P2P_OUT = c.MVP_META / "p2p.jsonl"
 
 #: 容器往这里写 junit XML。**必须在 $HOME 之下** —— colima `mounts: []`，
-#: VM 内只挂了 `/Users/zhourusheng` 一个 virtiofs，用 `/tmp` 宿主读不到
+#: VM 内只挂了 `$HOME` 一个 virtiofs，用 `/tmp` 宿主读不到
 #: （与 TZ R-3 同一个坑，见 common.assert_jobs_dir_ok）。
 WORK_DIR = Path.home() / ".cache/traj-bench-t3"
 

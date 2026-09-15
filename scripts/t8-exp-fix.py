@@ -30,7 +30,8 @@ README ⑤ 的教训正是「小规模探针全绿不能外推到真实 run」�
 """
 import json, os, re, shutil, subprocess, sys, time
 from pathlib import Path
-sys.path.insert(0, "/Users/zhourusheng/Code/person/trajectory-platform/scripts/mvp")
+# ⚠️ 用 __file__ 自定位同目录，⛔ 不写死本机绝对路径（CI 门禁④ 会拦，且别人 clone 后路径不同）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common as c
 import t5_gate_lib as lib
 
@@ -91,7 +92,11 @@ def run(arm: str, path: Path, turns: int) -> Path:
            "--agent-timeout-multiplier", "3",      # 轮数 ×3 ⇒ 墙钟也要放开，否则被超时截断
            "-y"]
     env = {**os.environ, "HARBOR_TELEMETRY": "0",
-           "PYTHONPATH": "/Users/zhourusheng/Code/person/sid-code/evals/external-benchmarks/harbor",
+           # ⚠️ harbor 底座路径来自环境变量 HARBOR_PATH（默认按 CODE_ROOT 推），
+             # ⛔ 不写死本机绝对路径 —— harbor 是 sid-code 的资产，不随本仓分发
+             "PYTHONPATH": os.environ.get(
+                 "HARBOR_PATH",
+                 str(c.CODE_ROOT / "person/sid-code/evals/external-benchmarks/harbor")),
            "SID_HARBOR_GATEWAY_URL": f"http://{GW}", "SID_HARBOR_PROVIDER": FAMILY,
            "SID_HARBOR_BINARY_ARM64": str(Path("~/.local/share/sid-harbor-gateway/bins/sid-code-arm64-30586ff003c9").expanduser()),
            "SID_HARBOR_BINARY_X64": str(Path("~/.local/share/sid-harbor-gateway/bins/sid-code-x64-30586ff003c9").expanduser()),

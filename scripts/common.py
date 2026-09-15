@@ -14,7 +14,7 @@
 ## 为什么与 scripts/phase0 / phase1 / phase2 隔离（§4 T0）
 
 那三套各自已有一套目录与字段约定，再往里塞会互相污染。MVP 的脚本要能
-**独立跑、独立删** —— 所以自成 `scripts/mvp/`，只读它们的产物，不改它们的代码。
+**独立跑、独立删** —— 所以自成一套脚本目录（源仓 `scripts/mvp/`，公开仓 `scripts/`），只读它们的产物，不改它们的代码。
 
 ## 四条纪律（方案 §4 T0「关键约定」，每条都有单测盯着）
 
@@ -34,7 +34,7 @@
 harbor 的 docker environment 声明 `capabilities.mounted=True`
 （`environments/docker/docker.py:303`），于是 `verifier/verifier.py:203` 跳过 download，
 假定 trial 目录是 bind mount。而本机 colima 的 `mounts: []` —— VM 内只挂了
-`/Users/zhourusheng` 一个 virtiofs，**宿主 `/tmp` 不在 VM 里**。用 `/tmp` 的形态是
+`$HOME` 一个 virtiofs，**宿主 `/tmp` 不在 VM 里**。用 `/tmp` 的形态是
 `RewardFileNotFoundError`，它指向「reward 没写」这个错误方向，真因是「写了但宿主看不见」。
 `assert_jobs_dir_ok()` 把这条固定住。
 """
@@ -49,16 +49,24 @@ from pathlib import Path
 
 # ── 目录布局 ────────────────────────────────────────────────────────
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# ⚠️ 公开仓的布局与 trajectory-platform 不同：题集是**仓库根**，不再是 `bench/v0.2-mini/`
+# 子目录，且脚本从 `scripts/mvp/` 提到了 `scripts/` ⇒ 少一级目录。
+# 原写法 `parent.parent.parent` 在这里会指到**仓库外面**（`~/Code/person`），
+# 形态是「所有脚本都读不到 tasks/」而不指向路径常量 —— 所以固定为 parents[1]。
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # 只读数据湖。本模块及下游脚本**只允许 open() 读**，不许写、不许移、不许删。
+# 🔴 公开仓**不含** `data/`（66G，未入库）⇒ 这两个常量在本仓指向不存在的路径是**预期的**。
+# 它们只被 T1/T2（从原始轨迹反解题面）用到，而公开仓的 tasks/ 已是成品 ⇒ 无需重跑 T1/T2。
+# 要重跑须用环境变量指到 trajectory-platform 那侧的真实目录。
 SESSIONS_DIR = Path(os.environ.get("SESSIONS_DIR", REPO_ROOT / "data/pulled_sessions"))
 
 # Phase 1 的产物（7692 个已标注单元），只读 —— T1 的唯一输入
 LABELED_V2 = Path(os.environ.get("LABELED_V2", REPO_ROOT / "data/bench-staging/phase1/meta/labeled-v2.jsonl"))
 
-# 本方案的产物根。与 bench/（v0.1，844 条已冻结）**平级**，不混、不覆盖
-MVP_DIR = Path(os.environ.get("MVP_DIR", REPO_ROOT / "bench/v0.2-mini"))
+# 本方案的产物根。⚠️ 公开仓里题集就在仓库根（tasks/ meta/ reports/ 与 scripts/ 平级），
+# ⛔ 不是 `bench/v0.2-mini/` —— 拆仓时 subtree split 已把那层前缀去掉。
+MVP_DIR = Path(os.environ.get("MVP_DIR", REPO_ROOT))
 MVP_META = MVP_DIR / "meta"
 MVP_TASKS = MVP_DIR / "tasks"
 MVP_REPORTS = MVP_DIR / "reports"
@@ -77,9 +85,18 @@ REPO_MIRRORS = {
 }
 
 # 轨迹里的绝对路径 → 仓库。**必须严格前缀匹配**，见 map_repo_path 的 docstring
+#
+# ⚠️ 这里原本写死了采集那台机器的 `/Users/<user>/Code/...` 前缀。公开仓不许留本机绝对路径
+# （CI 门禁④ 会拦），且**别人 clone 后前缀本来就不同** ⇒ 改为两级环境变量可覆盖：
+#   CODE_ROOT      —— 存放各仓库的父目录，默认 `~/Code`
+#   SID_CODE_PATH  —— 单独覆盖 sid-code 的路径（上游 §5.1 点名的那个）
+# 🔴 值必须以 `/` 结尾：map_repo_path 是严格前缀匹配，少了斜杠会让
+# `.../sid-code-worktrees/...` 被误判成 `person/sid-code`（单测 test_mvp.py 盯着这条）。
+CODE_ROOT = Path(os.environ.get("CODE_ROOT", Path.home() / "Code"))
+
 REPO_PATH_PREFIXES = {
-    "/Users/zhourusheng/Code/person/sid-code/": "person/sid-code",
-    "/Users/zhourusheng/Code/ruijie/iam-studio-fe/": "ruijie/iam-studio-fe",
+    os.environ.get("SID_CODE_PATH", f"{CODE_ROOT}/person/sid-code") + "/": "person/sid-code",
+    f"{CODE_ROOT}/ruijie/iam-studio-fe/": "ruijie/iam-studio-fe",
 }
 
 

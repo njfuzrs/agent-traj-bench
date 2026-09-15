@@ -366,6 +366,74 @@ def selftest_substring_leak(rows: list[dict]) -> int:
     return EXIT_LEAK
 
 
+def from_snapshots(snap_dir: Path, tasks_dir: Path, limit: int = 0,
+                   no_write: bool = False, only: str | None = None) -> int:
+    """从**现成快照**铺开 environment/ —— fresh clone 的唯一重建路径。
+
+    🔴 为什么必须有这个模式（P1-4）：本脚本原本只能从 `MIRRORS_DIR` 的 19 个 bare 仓
+    重建，而那些 mirror **只在采集那台机器上**。别人 clone 公开仓后没有 mirror
+    ⇒ `repo-snapshot.tar.gz`（39 份 / 259.9MB，未入库）永远铺不出来，
+    形态是「题集看着完整、`harbor run` 一跑就全挂」。
+
+    ⛔ **必须逐份校验 sha256**，不许只把文件拷过去：
+    `snapshots.jsonl` 的 `tar_sha256` 是快照的**唯一**真实性基准。
+    不校验的版本同样会「跑通」，那等于把「可复现」偷换成「文件下来了」——
+    一份被中途截断或被改过的 tar 会一路铺进容器，最后表现为判分结果诡异，
+    而没有任何一步指向「快照不对」。反向自证盯着这条：故意改坏一份，本模式必须报红。
+
+    退出码：0 全部校验通过；4 有 sha256 不匹配或缺失（⛔ 不用 1 —— 那和参数错混了）。
+    """
+    snaps = {r["task_id"]: r for r in c.read_jsonl(SNAPSHOTS) if r.get("ok")}
+    # 只铺**交付集**：公开仓的 tasks/ 是 39 条，而 snapshots.jsonl 记的是 65 条
+    on_disk = {p.name for p in tasks_dir.iterdir() if p.is_dir()} if tasks_dir.exists() else set()
+    todo = sorted(snaps.keys() & on_disk) if on_disk else sorted(snaps)
+    if only:
+        todo = [t for t in todo if t == only]
+    if limit:
+        todo = todo[:limit]
+    if not todo:
+        print(f"⛔ 没有可铺的 task（snapshots.jsonl ok {len(snaps)} 条 / "
+              f"tasks/ {len(on_disk)} 条）", file=sys.stderr)
+        return 4
+
+    n_ok = n_bad = 0
+    bad: list[str] = []
+    for tid in todo:
+        rec = snaps[tid]
+        src = snap_dir / f"{tid}.tar.gz"
+        if not src.exists():
+            print(f"🔴 {tid}: 快照缺失 {src}", file=sys.stderr)
+            bad.append(tid); n_bad += 1
+            continue
+        gz = src.read_bytes()
+        got = hashlib.sha256(gz).hexdigest()
+        want = rec.get("tar_sha256")
+        if got != want:
+            # ⚠️ 报出两个值，⛔ 不只说「校验失败」—— 长度差很多通常是截断，
+            # 长度一样而摘要不同才是内容被改过，两种归因方向完全不同。
+            print(f"🔴 {tid}: sha256 不匹配\n"
+                  f"     期望 {want}\n"
+                  f"     实得 {got}\n"
+                  f"     大小 {len(gz)} bytes（snapshots.jsonl 记 {rec.get('tar_bytes')}）",
+                  file=sys.stderr)
+            bad.append(tid); n_bad += 1
+            continue
+        n_ok += 1
+        if not no_write:
+            env = tasks_dir / tid / "environment"
+            env.mkdir(parents=True, exist_ok=True)
+            (env / "repo-snapshot.tar.gz").write_bytes(gz)
+
+    print(f"{'校验' if no_write else '铺开'} {n_ok}/{len(todo)} 条快照 sha256 通过"
+          f"{'' if not n_bad else f'，🔴 {n_bad} 条失败：' + ', '.join(bad)}",
+          file=sys.stderr)
+    if n_bad:
+        print("⛔ 有快照未通过校验 —— 不许继续跑评测：铺进容器的内容与冻结时不是同一份，"
+              "判分结果不可复算。", file=sys.stderr)
+        return 4
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="T4 — env 镜像 + 仓库快照 + 步骤④交叉验收")
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 条（调试用）")
@@ -376,11 +444,23 @@ def main() -> int:
         help="反向自证：把顶层锚定退化成子串匹配，泄漏守卫必须报红（退出码 3）",
     )
     ap.add_argument("--no-write", action="store_true", help="只跑验收，不落快照")
+    ap.add_argument(
+        "--from-snapshots", metavar="DIR", default=None,
+        help="从现成快照目录（HF 仓的 snapshots/）铺开 environment/，跳过 mirror。"
+             "逐份校验 sha256，任一条不符即以退出码 4 报红",
+    )
+    ap.add_argument("--only", metavar="T####", default=None, help="只处理这一条（配合 --from-snapshots 调试）")
     args = ap.parse_args()
 
     c.ensure_mvp_dirs()
     tasks_dir = Path(args.tasks_dir) if args.tasks_dir else c.MVP_TASKS
     tasks_dir.mkdir(parents=True, exist_ok=True)
+
+    # 🔴 必须在读 RESOLVED / 摸 mirror **之前**分叉：fresh clone 既没有 mirror，
+    # 也不需要 T2 的上游产物 —— 它要的只是「把已冻结的快照按 sha256 铺开」。
+    if args.from_snapshots:
+        return from_snapshots(Path(args.from_snapshots), tasks_dir,
+                              limit=args.limit, no_write=args.no_write, only=args.only)
 
     rows = [r for r in c.read_jsonl(c.RESOLVED) if r.get("ok")]
     if args.limit:

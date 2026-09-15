@@ -91,6 +91,8 @@ MIN_ANCHOR_QUALIFIED = 100
 EXIT_OK = 0
 EXIT_LEAK = 3  # 泄漏守卫触发（反向自证的期望结果）
 EXIT_GATE = 4  # 验收未达标
+#: 自证跑不起来（没有输入），⛔ 与 EXIT_LEAK/1 都不同 —— 见 main 里那段说明
+EXIT_NO_INPUT = 5
 
 
 def is_doc(rel: str) -> bool:
@@ -432,8 +434,10 @@ def resolve_one(row: dict, *, path_mapper) -> dict:
     leaks: list[str] = []
     n_failed_ops = 0
     n_unparseable = 0
+    n_write_actions_seen = 0
 
     for _, tool_name, tool_input, failed in c.iter_write_actions(row["sid"], row["step_range"]):
+        n_write_actions_seen += 1
         if failed:
             # 采集当时就失败的写操作 —— 重放它等于伪造一个没发生过的改动
             n_failed_ops += 1
@@ -477,6 +481,10 @@ def resolve_one(row: dict, *, path_mapper) -> dict:
     out["gitignored_files"] = sorted(ignored)
     out["n_failed_ops_skipped"] = n_failed_ops
     out["n_unparseable_ops"] = n_unparseable
+    #: 本条候选**读到**的写操作总数（含被跳过的）。
+    # ⚠️ 它是 `--selftest-fuzzy-path` 分辨「守卫失效」与「没有输入」的唯一依据 ——
+    # 没有它，两种情形在输出上逐字节一样（都是 leaked 为空）。
+    out["n_write_actions_seen"] = n_write_actions_seen
     out["leaked_paths"] = leaks
 
     if leaks:
@@ -632,8 +640,29 @@ def main() -> int:
     # 反向自证：泄漏守卫必须抓到东西
     leaked = [r for r in resolved if r.get("leaked_paths")]
     if args.selftest_fuzzy_path:
+        # 🔴 先分辨两件**完全不同**的事，⛔ 不许都报「守卫是失效的」：
+        #
+        #   ① 有写操作可读、模糊切分下守卫却没抓到 ⇒ 守卫真失效（退出 1，自证失败）
+        #   ② 压根没有写操作可读 ⇒ 自证**跑不起来**（退出 EXIT_NO_INPUT）
+        #
+        # ② 正是公开仓的常态：`data/pulled_sessions/`（66G 原始轨迹）未随仓迁出
+        # ⇒ `iter_write_actions()` 恒返回 0 条 ⇒ 守卫无从触发。
+        # 把它报成「守卫是失效的」是一句**假指控**：守卫的代码好着，缺的是输入。
+        # 而假指控比没有守卫更糟 —— 它训练读者忽略这行红字（同 t7-report 陈旧性守卫的纪律）。
+        n_actions = sum((r.get("n_write_actions_seen") or 0) for r in resolved)
+        if not leaked and not n_actions:
+            print(
+                f"⚠️ 自证跑不起来：{len(rows_in)} 条候选里**一个写操作都没读到** ——\n"
+                f"   数据湖 {c.SESSIONS_DIR} "
+                f"{'不存在' if not c.SESSIONS_DIR.exists() else '里没有对应会话'}。\n"
+                "   ⛔ 这**不是**「守卫失效」：守卫要有写操作才可能触发。\n"
+                "   → 要真跑这条自证，export SESSIONS_DIR 指到 trajectory-platform 的 "
+                "data/pulled_sessions/",
+                file=sys.stderr)
+            return EXIT_NO_INPUT
         if not leaked:
-            print("❌ 自证失败：模糊切分下泄漏守卫一条都没抓到，守卫是失效的", file=sys.stderr)
+            print(f"❌ 自证失败：读到 {n_actions} 个写操作，"
+                  "模糊切分下泄漏守卫却一条都没抓到，守卫是失效的", file=sys.stderr)
             return 1
         samples = sorted({p for r in leaked for p in r["leaked_paths"]})
         print(f"✅ 泄漏守卫生效：{len(leaked)} 条候选被拦下，泄漏路径 {len(samples)} 个", file=sys.stderr)

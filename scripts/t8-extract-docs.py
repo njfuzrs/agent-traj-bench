@@ -16,13 +16,16 @@
 `agent_source` / `doc_channel` / `doc_bytes` / `doc_sha256` 必须写进 meta，
 否则下游算 pass@1 时无法区分「内联了原文」与「内联了镜像近似版」。
 """
-import hashlib, json, re, tomllib
+import hashlib, json, os, re, tomllib
 from pathlib import Path
 
-ROOT = Path("/Users/zhourusheng/Code/person/trajectory-platform")
-TASKS = ROOT / "bench/v0.2-mini/tasks"
-LAKE = ROOT / "data/pulled_sessions"
-REPORTS = ROOT / "bench/v0.2-mini/reports"
+# ⚠️ 仓库根从 __file__ 反推，⛔ 不写死本机绝对路径。
+# 且公开仓的题集在**仓库根**（tasks/ reports/ 与 scripts/ 平级），不再有 bench/v0.2-mini/ 前缀。
+ROOT = Path(__file__).resolve().parents[1]
+TASKS = ROOT / "tasks"
+#: 🔴 只读数据湖，**公开仓不含它**（66G 未入库）⇒ 本脚本要重跑须 export LAKE_DIR 指到源仓那侧
+LAKE = Path(os.environ.get("LAKE_DIR", ROOT / "data/pulled_sessions"))
+REPORTS = ROOT / "reports"
 OUT = REPORTS / "t8-fix/docs"
 DOC_EXT = {".md", ".txt", ".jsonl", ".ts", ".yaml", ".yml"}
 #: ⛔ `.json` **刻意不算文档**。唯一引用它的 T0011 指的是用户自己的

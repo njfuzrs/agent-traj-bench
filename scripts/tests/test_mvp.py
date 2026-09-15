@@ -70,10 +70,16 @@ from pathlib import Path
 import pytest
 
 MVP = Path(__file__).resolve().parent.parent
-REPO_ROOT = MVP.parent.parent
 sys.path.insert(0, str(MVP))
 
 import common as c  # noqa: E402
+
+# ⚠️ 拆仓后脚本从 `scripts/mvp/` 提到了 `scripts/` ⇒ 少一级目录。
+# 原写法 `MVP.parent.parent` 在公开仓会指到**仓库外面**，而这个值被当作
+# subprocess 的 cwd 用 ⇒ 形态是「子进程在别的目录里跑，读不到任何产物」，
+# 而报错只会说某个产物缺失，完全不指向 cwd。
+# ⇒ 与 common.REPO_ROOT 同源，⛔ 不在这里各算一遍。
+REPO_ROOT = c.REPO_ROOT
 
 
 def load_t1():
@@ -578,10 +584,22 @@ def test_no_script_starts_a_real_run_when_merely_executed():
 
 
 def test_mvp_dir_is_separate_from_v01():
-    """纪律 3：v0.2-mini 是新目录，不覆盖、不迁移 bench/ 下 v0.1 的 844 条。"""
-    assert c.MVP_DIR.name == "v0.2-mini"
-    assert c.MVP_DIR.parent.name == "bench"
-    assert c.MVP_DIR != c.MVP_DIR.parent
+    """纪律 3：v0.2-mini 是新目录，不覆盖、不迁移 bench/ 下 v0.1 的 844 条。
+
+    ⚠️ 拆仓后这条纪律的**载体变了**：公开仓（agent-traj-bench）里题集就在仓库根，
+    v0.1 的 844 条压根没搬过来 ⇒ 「与 v0.1 平级不混」在这里由**仓库边界**保证，
+    比目录名更硬。所以判据按布局分两支，⛔ 不许直接断言 `name == "v0.2-mini"`：
+    那会让公开仓的测试永久红着，而它红的不是纪律被破坏，是纪律换了实现方式。
+    """
+    if c.MVP_DIR.parent.name == "bench":
+        # 源仓（trajectory-platform）：bench/v0.2-mini 与 bench/ 下 v0.1 平级
+        assert c.MVP_DIR.name == "v0.2-mini"
+        assert c.MVP_DIR != c.MVP_DIR.parent
+    else:
+        # 公开仓：题集在仓库根，且**不含** v0.1 的任何痕迹
+        assert c.MVP_DIR == c.REPO_ROOT, f"题集根应是仓库根，实为 {c.MVP_DIR}"
+        assert not (c.REPO_ROOT / "bench").exists(), "公开仓不该有 bench/（v0.1 没搬过来）"
+        assert c.MVP_TASKS.is_dir() and any(c.MVP_TASKS.iterdir())
 
 
 def test_sessions_dir_is_readonly_by_convention():
@@ -887,6 +905,11 @@ def test_selftest_fuzzy_path_reds_out():
 
     自证的对象是**主路径上的守卫**（注入 path_mapper），不是另写一段只验自己的
     分支 —— 沿用 T1 `--selftest-strict-secret` 的做法。
+
+    ⚠️ 这条自证要**原始轨迹**（守卫得有写操作才可能触发），而公开仓不含
+    `data/pulled_sessions/`（66G，未迁出）⇒ 那里只能验「它如实说自己跑不起来」。
+    ⛔ 判据不许简化成「非零退出即通过」：EXIT_NO_INPUT(5) 与自证失败(1) 都非零，
+    混在一起等于这条测试再也分不出守卫到底还在不在。
     """
     proc = subprocess.run(
         [sys.executable, str(MVP / "t2-resolve-base-patch.py"), "--selftest-fuzzy-path", "--limit", "40"],
@@ -894,7 +917,15 @@ def test_selftest_fuzzy_path_reds_out():
         text=True,
         cwd=REPO_ROOT,
     )
-    assert proc.returncode == 3, f"期望退出码 3，实得 {proc.returncode}"
+    if proc.returncode == 5:
+        # 没有数据湖：必须**明说是缺输入**，⛔ 不许含「守卫是失效的」那句假指控
+        assert "自证跑不起来" in proc.stderr, proc.stderr[-400:]
+        assert "不是」「守卫失效" not in proc.stderr
+        assert "守卫是失效的" not in proc.stderr, "无输入时不许指控守卫失效"
+        assert "SESSIONS_DIR" in proc.stderr, "得告诉人怎么把这条自证真跑起来"
+        pytest.skip("没有原始轨迹（data/pulled_sessions/ 未随公开仓迁出）—— "
+                    "自证已如实报 EXIT_NO_INPUT；要真跑请 export SESSIONS_DIR")
+    assert proc.returncode == 3, f"期望退出码 3，实得 {proc.returncode}\n{proc.stderr[-500:]}"
     assert "泄漏守卫生效" in proc.stderr
     assert ".claude/projects" in proc.stderr
 
@@ -3447,8 +3478,11 @@ def _build_freeze_fixture(dst: Path, *, n_solved_every: int = 3) -> list[str]:
     real = c.MVP_DIR
     (dst / "meta").mkdir(parents=True)
     (dst / "reports").mkdir(parents=True)
+    # ⚠️ `meta/batch-v0.2.summary.json` 必须一起复制：漏斗前三行（8562/4381/7692）
+    # 的取数源就是它（公开仓拆仓后不再有 tp 的 `data/bench-staging/`，见 t7-report._funnel_sources）。
+    # 漏掉它的形态是**冒烟在「缺取数源」上退出**，看着像脚本坏了，其实是 fixture 少给了一个文件。
     for rel in ("meta/gate.jsonl", "meta/resolved.stats.json", "meta/tasks.stats.json",
-                "meta/candidates.stats.json", "version.json"):
+                "meta/candidates.stats.json", "meta/batch-v0.2.summary.json", "version.json"):
         if (real / rel).exists():
             (dst / rel).parent.mkdir(parents=True, exist_ok=True)
             (dst / rel).write_bytes((real / rel).read_bytes())
@@ -3488,12 +3522,29 @@ def _build_freeze_fixture(dst: Path, *, n_solved_every: int = 3) -> list[str]:
          "datasets": [{"path": str(dst / "reports/t8-rerun/tasks")}]}), encoding="utf-8")
 
     # 题面两份都要：stage 的（含内联段，§2② 判据）+ 原始的（对照组判据）
+    #
+    # ⚠️ stage（`reports/t8-rerun/tasks/`）**未入库**（跑批时复制出来的，已 gitignore）
+    # ⇒ 公开仓里 `st.exists()` 恒为假。回落成 `b"x\n"` 的形态是：
+    # `_batch_inlines()` 判成「整批没内联」⇒ known_caveat 回落 baseline 措辞「35/39 题面点名…」
+    # ⇒ 冒烟测到的是**另一批**的形态，而它看着只是一条不相干的断言在报错。
+    # ⇒ 按 `docs-index.json` 合成内联段（fixture 本来就在合成 run 产物，这里同一纪律）：
+    # 只给 channel 为 lake/mirror 的那些加，与 `t8-rerun.build_instruction()` 同口径 ⇒ 34/39。
+    _idx_p = dst / "reports/t8-fix/docs-index.json"
+    _idx = json.loads(_idx_p.read_text(encoding="utf-8")) if _idx_p.exists() else {}
+
+    def _inlinable(task: str) -> bool:
+        return any((d.get("channel") in ("lake", "mirror"))
+                   for d in (_idx.get(task, {}).get("docs") or []))
+
     for t in surv:
         (dst / "reports/t8-rerun/tasks" / t).mkdir(parents=True, exist_ok=True)
         (dst / "tasks" / t).mkdir(parents=True, exist_ok=True)
         st = real / "reports/t8-rerun/tasks" / t / "instruction.md"
-        (dst / "reports/t8-rerun/tasks" / t / "instruction.md").write_bytes(
-            st.read_bytes() if st.exists() else b"x\n")
+        if st.exists():
+            stage_text = st.read_bytes()
+        else:
+            stage_text = ("x\n\n## 引用文档原文\n\nsmoke\n" if _inlinable(t) else "x\n").encode()
+        (dst / "reports/t8-rerun/tasks" / t / "instruction.md").write_bytes(stage_text)
         for rel in ("instruction.md", "meta.json"):
             src = real / "tasks" / t / rel
             if src.exists():
@@ -4423,3 +4474,146 @@ def test_excluded_tasks_are_disclosed_in_limitations():
     n_items = len(_re.findall(r"^\d+\. ", body, _re.M))
     assert n_items == len(rep.LIMITATIONS), \
         f"有排除时正文应为 {len(rep.LIMITATIONS)} 条，实际 {n_items}"
+
+
+# ── ㊳ 拆仓后的两条取数路径（公开仓不含 data/ 与 run 产物） ─────────────
+
+
+def test_batch_summary_carries_funnel_scalars_and_no_leak():
+    """漏斗前三行的取数源必须是**入库的** summary，且不许带泄漏面（P0-4）。
+
+    🔴 原生成器读 tp 的 `data/bench-staging/`（4.4G，从未入库）⇒ 公开仓直接
+    FileNotFoundError。改读 `meta/batch-v0.2.summary.json` 后必须同时守住两头：
+      ① card 要的标量一个不少（少一个，漏斗那行就静默变成 `?`）
+      ② ⛔ 不许把 `sessions[]`（8562 个会话 ID）与 `repo_dist`（6 个内网仓库名，
+         其中 4 个题集里从未出现）带过来 —— 它们不是题集的一部分。
+    """
+    p = c.MVP_META / "batch-v0.2.summary.json"
+    assert p.exists(), "缺 batch-v0.2.summary.json —— 漏斗前三行无从取数"
+    d = json.loads(p.read_text(encoding="utf-8"))
+
+    # ① 标量齐全，且四通道合计必须闭合到 session_count（口径换了就该当场炸）
+    assert d["session_count"] == sum(d["agent_source_dist"].values())
+    assert d["filtered"]["kept"] > 0 and d["units"]["kept_units"] > 0
+    assert len(d["fingerprint"]) == 64, "fingerprint 应是完整 sha256（card 只取前 12 位）"
+
+    # ② 泄漏面：⛔ 两个字段都不许在
+    assert "sessions" not in d, "会话 ID 列表被带进公开仓了"
+    assert "repo_dist" not in d, "内网仓库名分布被带进公开仓了"
+    assert "ruijie" not in p.read_text(encoding="utf-8"), "summary 里出现内网仓库名"
+
+    # ③ fingerprint 是抄录值这件事必须写在文件里 —— 否则下一个人会试图在本仓重算它，
+    #    而本仓没有原始数据，重算只能得到一个不同的、假的指纹
+    assert "抄录" in d["_fingerprint_is_transcribed"]
+
+
+def test_trials_json_matches_collect_all_shape():
+    """`trials.json` 必须能替代未入库的 run 产物，且字段与主路径逐一对应。
+
+    🔴 为什么这条要有：run 目录（baseline 648M + t8-rerun 1.9G）从未入库
+    ⇒ 公开仓 `collect()` 读不到任何 trial，报告与 card 全生成不出来。
+    回落到 `trials.json` 之后，**它算出的 pass@1 必须与冻结时一致** ——
+    否则等于公开仓对外发布了一个和论断不同的数字，而两边都自称「纯复算」。
+    """
+    # ⚠️ 用真 import（本文件已有 `import t7_report_lib as t7lib`），⛔ 不用 _load()：
+    # `Trial` 是 dataclass，实例化时 dataclasses 要回查 `sys.modules[cls.__module__]`，
+    # 而 _load 造的是合成模块名、没进 sys.modules ⇒ 形态是 AttributeError: NoneType，
+    # 看着像 trials.json 的字段错了，其实是加载方式不对。
+    lib = t7lib
+    for batch, want_n_conc in (("baseline", 1), ("t8-rerun", 6)):
+        runs = c.MVP_REPORTS / batch
+        trials = lib.load_trials_json(runs)
+        assert len(trials) == 39, f"{batch}: 期望 39 条 trial，实得 {len(trials)}"
+
+        # 字段真读进来了（⛔ 不是 None 占位）
+        assert all(t.task for t in trials)
+        assert {t.model for t in trials} == {"origin-deepseek-v4-1-flash"}
+        assert len({t.binary_sha for t in trials}) == 1, "混了不同二进制 ⇒ pass@1 不可作单一臂结论"
+
+        # run_meta：⛔ n_concurrent 不许回落默认 1（t8-rerun 实为 6，回落等于谎报必控变量）
+        meta = json.loads((runs / "trials.json").read_text(encoding="utf-8"))["run_meta"]
+        assert meta["n_concurrent_trials"] == want_n_conc
+
+        # ⛔ 不许把本机绝对路径带进来
+        assert "/Users/" not in (runs / "trials.json").read_text(encoding="utf-8")
+
+    # 关键一致性：t8-rerun 那批算出的 pass@1 必须还是 14/37（冻结值）
+    res = lib.pass_at_1(lib.load_trials_json(c.MVP_REPORTS / "t8-rerun"))
+    assert (res["n"], res["passed"], res["excluded"]) == (37, 14, 2), \
+        f"pass@1 口径变了：{res['n']}/{res['passed']}/{res['excluded']} —— 冻结值是 37/14/2"
+
+
+def test_batch_inlines_is_batch_specific_not_global():
+    """`_batch_inlines()` 回落 run_meta 时必须仍是**批次特异**的。
+
+    🔴 baseline 跑在修复① 之前，题面 0 条内联；t8-rerun 的 stage 内联 34/39。
+    回落成一个全局常量的形态是：baseline 那批的报告声称「34/39 已内联」，
+    与事实完全相反 —— 而那正是 `_batch_inlines` docstring 记的那次回归。
+    """
+    rep = _load("t7-report")
+    rep._retarget("baseline")
+    assert rep._batch_inlines() is False, "baseline 批不该被判成有内联"
+    assert rep._n_inlined()[0] == 0, "baseline 批的内联条数应为 0"
+    rep._retarget("t8-rerun")
+    assert rep._batch_inlines() is True, "t8-rerun 批应判成有内联"
+    assert rep._n_inlined() == (34, 39), f"t8-rerun 内联条数应为 34/39，实得 {rep._n_inlined()}"
+
+
+def test_from_snapshots_verifies_sha256(tmp_path):
+    """`--from-snapshots` 必须**逐份校验 sha256**，不许只把文件拷过去（P1-4）。
+
+    🔴 反向自证：改坏一份 tar，它必须报红退出 4。
+    ⛔ 只验「跑通了」不算 —— 不校验 sha256 的实现同样会跑通，
+    那等于把「可复现」偷换成「文件下来了」。
+    """
+    t4 = MVP / "t4-build-env.py"
+    snaps = [r for r in c.read_jsonl(c.MVP_META / "snapshots.jsonl") if r.get("ok")]
+    on_disk = {p.name for p in c.MVP_TASKS.iterdir() if p.is_dir()}
+    rec = next((r for r in snaps if r["task_id"] in on_disk), None)
+    assert rec is not None, "没有可用的快照记录 —— 判据失效"
+    tid = rec["task_id"]
+
+    snap_dir = tmp_path / "snapshots"
+    snap_dir.mkdir()
+    # 造一份**内容不对**的 tar（大小随意）—— 校验版必须抓到
+    (snap_dir / f"{tid}.tar.gz").write_bytes(b"not the frozen snapshot")
+
+    proc = subprocess.run(
+        [sys.executable, str(t4), "--from-snapshots", str(snap_dir),
+         "--only", tid, "--no-write"],
+        capture_output=True, text=True, cwd=REPO_ROOT)
+    assert proc.returncode == 4, f"改坏的快照没报红：rc={proc.returncode}\n{proc.stderr[-400:]}"
+    assert "sha256 不匹配" in proc.stderr
+    assert rec["tar_sha256"] in proc.stderr, "报错没写出期望摘要 —— 无法判断是截断还是被改过"
+
+    # 缺失也必须报红（模拟 LFS 没拉全），⛔ 不许静默跳过
+    (snap_dir / f"{tid}.tar.gz").unlink()
+    proc2 = subprocess.run(
+        [sys.executable, str(t4), "--from-snapshots", str(snap_dir),
+         "--only", tid, "--no-write"],
+        capture_output=True, text=True, cwd=REPO_ROOT)
+    assert proc2.returncode == 4 and "快照缺失" in proc2.stderr
+
+
+def test_no_hardcoded_local_paths_in_scripts():
+    """CI 门禁④：`scripts/` 里不许有本机绝对路径（P1-1 复发防线）。
+
+    ⚠️ 作用域**含** `scripts/tests/`，但测试里的路径是**断言 fixture**
+    （`map_repo_path` 要验的就是这种形状的输入）⇒ 它们不算硬编码，
+    单独列白名单。⛔ 不许因为「测试里也有」就把整个 tests/ 排除出门禁 ——
+    那样真的硬编码混进测试辅助代码时就没人拦了。
+    """
+    import re as _re
+    bad: list[str] = []
+    for py in sorted(MVP.rglob("*.py")):
+        if "__pycache__" in str(py):
+            continue
+        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
+            if not _re.search(r"/Users/[a-z]", line):
+                continue
+            rel = py.relative_to(MVP)
+            # 白名单：测试的断言 fixture（形如 assert/== 里的字面量路径）
+            if rel.parts[0] == "tests":
+                continue
+            bad.append(f"{rel}:{i}: {line.strip()[:90]}")
+    assert not bad, "scripts/ 里有本机绝对路径（门禁④ 会拦）：\n" + "\n".join(bad)

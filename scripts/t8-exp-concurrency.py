@@ -22,7 +22,8 @@ oracle 打 gold patch ⇒ 每条必须 reward=1 ⇒ 任何一条掉 0 就是并�
 """
 import json, os, subprocess, sys, time
 from pathlib import Path
-sys.path.insert(0, "/Users/zhourusheng/Code/person/trajectory-platform/scripts/mvp")
+# ⚠️ 用 __file__ 自定位同目录，⛔ 不写死本机绝对路径（CI 门禁④ 会拦，且别人 clone 后路径不同）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common as c
 import t5_gate_lib as lib
 
