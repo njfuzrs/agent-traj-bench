@@ -72,7 +72,7 @@ WRITE_TOOLS = {
 SHELL_TOOLS = {"bash", "exec_command", "shell", "run_command", "run_terminal_cmd"}
 
 # 测试/门禁命令。绑定的是仓库真实存在的门禁（§2.3 修订：tsc 不是 sid-code 的门禁，
-# 但仍统计，因为 iam-studio-fe 上它有意义）。
+# 但仍统计，因为 <私有前端仓> 上它有意义）。
 TEST_CMD_RE = re.compile(
     r"\b(bun\s+test|vitest|jest|pytest|py\.test|go\s+test|cargo\s+test"
     r"|npm\s+(?:run\s+)?test|pnpm\s+(?:run\s+)?test|yarn\s+test"

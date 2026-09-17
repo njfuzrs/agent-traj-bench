@@ -25,7 +25,7 @@
       ⑮ 源信息块必须齐全
 
 用法：
-    python3 -m pytest tests/test_phase1.py -v
+    python3 -m pytest tests/test_s1_s3.py -v
 """
 
 import importlib.util
@@ -34,10 +34,25 @@ from pathlib import Path
 
 import pytest
 
-PHASE1 = Path(__file__).resolve().parent.parent / "scripts" / "phase1"
+PHASE1 = Path(__file__).resolve().parent.parent / "s1_s3"
 sys.path.insert(0, str(PHASE1))
 
-import common  # noqa: E402
+# ⚠️ 不用裸 `import common` —— 两层各有一份同名的 common.py，而 sys.modules 是
+# 进程级缓存：交叉收集时（pytest pipeline/tests scripts/tests）**谁先加载谁赢**，
+# 且 conftest 全部先于测试模块导入 ⇒ 裸 import 拿到的是另一层那份（实测 §2.8）。
+# 按绝对路径显式加载本层那份，并占住 sys.modules —— 后者是给下面 _load() 出来的
+# 生产脚本用的，它们自己也写 `import common`。
+def _load_own_common():
+    spec = importlib.util.spec_from_file_location("common", PHASE1 / "common.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["common"] = mod          # 先占住，再 exec —— 生产脚本 import 时才拿得到
+    spec.loader.exec_module(mod)
+    return mod
+
+
+common = _load_own_common()
+
 import labeler  # noqa: E402
 import s2_rules  # noqa: E402
 import s3_segment as seg  # noqa: E402
@@ -808,3 +823,21 @@ def test_output_paths_outside_data_lake():
     for out in (common.FILTERED, common.UNITS, common.DESENS_DIR, common.P1_META):
         p = Path(out).resolve()
         assert lake not in p.parents and p != lake, f"{out} 落在数据湖内"
+
+
+def test_common_module_is_not_shared_with_scripts_layer():
+    """两层各有一个 common.py，同名不同物 —— 撞上时 sys.modules 会静默返回先加载的那份
+
+    实测形态（迁移方案 §2.8）：先 import pipeline 那份、再 import scripts 那份，
+    第二次拿到的 __file__ 仍是第一份，且 `MVP_TASKS` 整个不存在。
+    最坏情况不是 AttributeError（那还算显眼），是两份都有的 `read_jsonl`
+    被静默换掉：scripts 那份返回生成器，本层调用方写 len() ⇒ TypeError，
+    或 for 遍历两次时第二次拿到空 —— 不报错，只是少处理一批数据。
+
+    ⛔ 所以不许把两份 common.py 合并成一份「公共层」：常量表不兼容
+    （本层 FILTERED/UNITS 是 str，scripts 层 MVP_TASKS 是 Path）。
+    """
+    import common
+    here = Path(__file__).resolve().parent.parent      # pipeline/
+    assert Path(common.__file__).resolve().is_relative_to(here), \
+        f"import common 拿到了 {common.__file__} —— 不是本层那份，说明与 scripts/ 层撞了"

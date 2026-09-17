@@ -18,28 +18,28 @@ set -uo pipefail
 ARCHIVE_DIR="${ARCHIVE_DIR:-$HOME/Code/_archive/bench-mirrors}"
 CODE_ROOT="${CODE_ROOT:-$HOME/Code}"
 
-# 待归档仓库清单。取自 bench 方案 §2.5 的仓库分布表（按 session 数排序），
-# 外加同一 Code 根下其余带 .git 的仓库 —— 归档成本极低，漏掉的代价是不可逆的。
-REPOS=(
-  person/sid-code                    # 支点仓库，L1/L2 主力
-  person/docs-research               # L3 数据源
-  ruijie/iam-studio-fe               # L4 私有基线
-  person/code-graph
-  person/claude-code
-  person/claude-trace
-  person/trajectory-platform
-  person/claude-best
-  person/claude-code-working
-  person/eval-framework
-  <私有仓1>
-  <私有仓2>
-  <私有仓3>
-  <私有仓4>
-  <私有仓5>
-  <私有仓6>
-  <私有仓7>
-  <私有仓8>
-)
+# 待归档仓库清单 —— 与 repo_map.py 的 KNOWN_REPOS 同源，两处读同一个 JSON。
+# 原先两处各写一份数组、靠注释保持同源；漏掉一个仓的代价是不可逆的
+# （对应会话的 base_commit 从此无从定位），所以判据落到单一文件上。
+#
+# 仓内默认清单只含已公开披露的 10 个仓。归档要用完整的 18 个：
+#   export REPO_MAP_CONFIG=<trajectory-platform>/data/bench-staging/repos.json
+REPO_MAP_CONFIG="${REPO_MAP_CONFIG:-$(dirname "$0")/../config/repos.example.json}"
+if [ ! -f "$REPO_MAP_CONFIG" ]; then
+  echo "✗ 仓库清单不存在：$REPO_MAP_CONFIG" >&2
+  exit 1
+fi
+# ⚠️ 不用 mapfile：macOS 自带的 bash 3.2 没有它，而本脚本的 shebang 是
+#   /usr/bin/env bash ⇒ 在采集机上可能解析到 3.2 那份。while read 两处都兼容。
+REPOS=()
+while IFS= read -r _r; do
+  [ -n "$_r" ] && REPOS+=("$_r")
+done < <(python3 -c "import json,sys;print('\n'.join(json.load(open(sys.argv[1]))['repos']))" "$REPO_MAP_CONFIG")
+if [ "${#REPOS[@]}" -eq 0 ]; then
+  echo "✗ 仓库清单为空：$REPO_MAP_CONFIG" >&2
+  exit 1
+fi
+echo "仓库清单：${REPO_MAP_CONFIG}（${#REPOS[@]} 个仓）"
 
 mkdir -p "$ARCHIVE_DIR"
 MANIFEST="$ARCHIVE_DIR/manifest.tsv"
@@ -54,7 +54,7 @@ for repo in "${REPOS[@]}"; do
   dst="$ARCHIVE_DIR/$name.git"
 
   if [ ! -d "$src/.git" ]; then
-    echo "跳过 $repo（本地不存在）"
+    echo "跳过 ${repo}（本地不存在）"
     skip=$((skip+1))
     continue
   fi

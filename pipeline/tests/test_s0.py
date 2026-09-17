@@ -13,8 +13,8 @@
   ⑤ 排除前缀按 / 分段匹配，evals-foo/ 不能被 evals/ 误命中
 
 用法：
-    backend/venv/bin/python -m pytest tests/test_phase0_s0.py -v
-    python3 -m pytest tests/test_phase0_s0.py -v
+    backend/venv/bin/python -m pytest tests/test_s0.py -v
+    python3 -m pytest tests/test_s0.py -v
 """
 
 import importlib.util
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-PHASE0 = Path(__file__).resolve().parent.parent / "scripts" / "phase0"
+PHASE0 = Path(__file__).resolve().parent.parent / "s0"
 sys.path.insert(0, str(PHASE0))
 
 import repo_map  # noqa: E402

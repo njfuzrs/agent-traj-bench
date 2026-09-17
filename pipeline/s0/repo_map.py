@@ -39,29 +39,21 @@ import collections
 import json
 import os
 import re
+from pathlib import Path
 
-# 已知仓库清单 —— 与 archive-repos.sh 的 REPOS 同源。
-# 这里必须与归档清单一致：反解出的仓库若不在归档内，base_commit 就无从定位。
-KNOWN_REPOS = [
-    "person/sid-code",
-    "person/docs-research",
-    "ruijie/iam-studio-fe",
-    "person/code-graph",
-    "person/claude-code",
-    "person/claude-trace",
-    "person/trajectory-platform",
-    "person/claude-best",
-    "person/claude-code-working",
-    "person/eval-framework",
-    "<私有仓1>",
-    "<私有仓2>",
-    "<私有仓3>",
-    "<私有仓4>",
-    "<私有仓5>",
-    "<私有仓6>",
-    "<私有仓7>",
-    "<私有仓8>",
-]
+# 已知仓库清单 —— 与 archive-repos.sh 的 REPOS 同源，两处读同一个 JSON。
+# 原先两处各写一份数组、靠注释保持同源，改一处忘另一处就会让反解出的仓库不在
+# 归档内 ⇒ base_commit 无从定位（test_known_repos_matches_archive_manifest 盯的正是这条）。
+#
+# 仓内默认值只含**已公开披露**的 10 个仓。真实清单 18 个，另外 8 个是未披露的
+# 内网仓，不入库 ⇒ 跑真清洗要指到仓外的完整清单：
+#   export REPO_MAP_CONFIG=<trajectory-platform>/data/bench-staging/repos.json
+# 清单不全的后果是「少反解出几个仓」（那些会话记 unresolved），不会算错。
+_CFG = os.environ.get(
+    "REPO_MAP_CONFIG",
+    str(Path(__file__).resolve().parent.parent / "config/repos.example.json"),
+)
+KNOWN_REPOS = json.loads(Path(_CFG).read_text(encoding="utf-8"))["repos"]
 
 # 长前缀优先，避免 person/sid-code 被 person/sid 之类的短前缀抢走
 _REPOS_BY_LEN = sorted(KNOWN_REPOS, key=len, reverse=True)
