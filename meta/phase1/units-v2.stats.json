@@ -1,0 +1,39 @@
+{
+  "batch_version": "v0.2",
+  "generated_at": "2026-09-06T06:16:46Z",
+  "input_sessions": 4381,
+  "total_units": 7721,
+  "kept_units": 7692,
+  "dropped_units": 29,
+  "units_per_session": 1.762,
+  "sessions_with_multi_units": 1400,
+  "multi_unit_rate": 0.3196,
+  "step_range_mapped": 7466,
+  "step_range_mapped_rate": 0.967,
+  "boundary_reason_dist": {
+    "B_FIRST": 4186,
+    "B_TASK_PATTERN": 2793,
+    "B_FILE_DISJOINT": 452,
+    "B_EXTRACT_FAILED": 145,
+    "B_TIME_GAP": 95,
+    "B_NO_RAW": 50
+  },
+  "ended_by_dist": {
+    "session_end": 4179,
+    "next_task": 3340,
+    "extract_failed": 145,
+    "no_raw_jsonl": 50,
+    "interrupted": 7
+  },
+  "drop_reason_dist": {
+    "U_NO_BOUNDARY": 22,
+    "U_INTERRUPTED": 7
+  },
+  "kept_by_agent_source": {
+    "claude_code": 7108,
+    "codex": 243,
+    "short_id": 226,
+    "sid_code": 115
+  },
+  "elapsed_sec": 49.4
+}
