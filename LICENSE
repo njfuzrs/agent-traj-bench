@@ -5,7 +5,7 @@
 
 | 层 | 内容 | 许可 |
 | --- | --- | --- |
-| ① 数据内容 | `tasks/*/instruction.md`、`tasks/*/meta.json`、`tasks/*/tests/{f2p,p2p}.json`、`meta/`、`reports/`、`DATASET_CARD.md`、`version.json` | **CC BY 4.0** |
+| ① 数据内容 | `tasks/*/instruction.md`、`tasks/*/meta.json`、`tasks/*/tests/{f2p,p2p}.json`、`meta/`、`reports/`、`docs/`、`DATASET_CARD.md`、`version.json` | **CC BY 4.0** |
 | ② 代码 | `scripts/`、`tasks/*/tests/{test.sh,score.py}`、`tasks/*/solution/solve.sh` | **MIT** |
 | ③ 仓库快照（**不在本仓**，见 HF Dataset） | `snapshots/T####.tar.gz`（39 份） | **MIT**，版权归 sid-code —— 见下方 ③ |
 
@@ -15,9 +15,13 @@
 
 Copyright (c) 2026 njfuzrs
 
-题面、判分用例清单、漏斗统计与全部报告，按
+题面、判分用例清单、漏斗统计、全部报告与 `docs/` 下的判据文档，按
 [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
 授权：可自由复制、改编、商用，条件是**署名**并指明是否作过修改。
+
+⚠️ **本表三层是穷举的，没有兜底条款** —— 新增一类入库物（如本次的 `docs/`）
+**必须同时登记进这张表**，否则它处于**无许可状态**：别人 clone 到了也不知道能不能用。
+⛔ 别默认"没写就等于跟仓库同许可"。
 
 建议引用：
 

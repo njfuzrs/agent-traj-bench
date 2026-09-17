@@ -17,6 +17,7 @@
 - 数据集卡：[`DATASET_CARD.md`](DATASET_CARD.md) —— ⛔ 里面**没有一个手写数字**，全部由 `scripts/t7-report.py --card` 从产物复算
 - 完整报告：[`reports/baseline-v0.2-mini-t8-rerun.md`](reports/baseline-v0.2-mini-t8-rerun.md)（13 节，含真 0/假 0 逐条归因）
 - 快照仓：<https://huggingface.co/datasets/njfuzrs/agent-traj-bench>
+- 过程评测判据：[`docs/eval-criteria/`](docs/eval-criteria/) —— ⚠️ 判据词汇表，与本仓 `pass@1` 口径**不互比**（见「目录」）
 
 ## 🔴 两条复现路径不是一回事
 
@@ -80,7 +81,26 @@ meta/                     漏斗取数源：candidates / resolved / p2p / gate /
                           + batch-v0.2.summary.json（漏斗前三行的标量）
 reports/                  T1–T7 全部报告 + trials.json（trial 级取数源）
 scripts/                  生成与复算脚本（T1→T8），含单测 tests/test_mvp.py
+docs/eval-criteria/       ⚠️ 过程评测判据词汇表 —— 判据文档，不是可运行的评测集
+                          mechanical-assertions.md  27 个机械断言键（零成本 / 不需要 judge）
+                          rubric-dimensions.md      64 个 rubric 维度 / 84 条措辞原文
 ```
+
+⚠️ **`docs/eval-criteria/` 与本仓 `tasks/` 的判分口径不兼容，分数不可互比**：
+`tasks/` 判**结果**（「改对了吗」→ `pass@1`），那两份文档记的是判**过程**的判据
+（「过程病态吗」→ 0–5 分制 rubric + 机械断言）。⛔ 别把两边的分数放进同一张表。
+🔴 它们描述的是本仓**当前没有**的能力，是**待接入的判据**，⛔ 不是「已经支持过程评测」：
+
+```bash
+# 判据要限定在实现面（scripts/ pipeline/），⛔ 别扫全仓
+for k in fidelity_step_ratio plan_must_cover process_grader pathology rubric_; do
+  printf "%-22s %s\n" "$k" "$(grep -rl "$k" scripts/ pipeline/ | wc -l)"
+done   # → 全部 0
+```
+
+⚠️ **⛔ 别用裸关键词扫全仓**：`grep -rli rubric .` 现在会命中**这两份新文档本身**（自我推翻），
+而 `grep -rli fidelity` 的命中是 `tasks/` 里被测仓库的**测试文件名**、
+`unique_tools` 的命中是采集侧的**会话统计字段** —— 三者都是**同名不同源**，不是过程评测实现。
 
 ## 漏斗（从 8562 条会话到 39 道题）
 
