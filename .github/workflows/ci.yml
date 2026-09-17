@@ -65,9 +65,18 @@ jobs:
       # 🔴 模式必须收窄到内网基建，⛔ 不许写 `\.ruijie\.com\.cn`：
       # 那会误伤 tasks/T0056/tests/test_patch.diff（公开 API 端点，且在 F2P 判分补丁里）
       # ⇒ 一个写错的门禁会**逼着下一个人去改判分口径**。宁可窄一点。
+      #
+      # ⚠️ 排除 .pytest_cache/.ruff_cache（③④⑤⑧ 四条工作树门禁都加了，理由同一条）：
+      #   grep 走**文件系统**，不认 .gitignore ⇒ 本地跑过 pytest 之后，缓存里的
+      #   `nodeids` 会把 parametrize 的入参原样写进去（实测 pipeline/tests/test_s0.py:69
+      #   那条私有仓路径 fixture 就这么进了 .pytest_cache/v/cache/nodeids）。
+      #   CI 是全新 checkout ⇒ 永远绿；本地跑过单测 ⇒ 报红。**同一条门禁两地不同结论**
+      #   是最容易被 `|| true` 关掉的形态，所以把作用域对齐到「会被提交的文件」。
+      #   ⛔ 别改成扫 `git ls-files`：那样工作树里未提交的新文件就没人管了。
       - name: gate3 - 内网基建地址必须归零
         run: |
-          if grep -rIE 'gitlab\.ruishan\.cc' . --exclude-dir=.git; then
+          if grep -rIE 'gitlab\.ruishan\.cc' . --exclude-dir=.git \
+               --exclude-dir=.pytest_cache --exclude-dir=.ruff_cache; then
             echo "::error::内网基建地址混入了公开仓"
             exit 1
           fi
@@ -82,7 +91,8 @@ jobs:
       - name: gate4 - scripts/ 不许有本机绝对路径
         run: |
           if grep -rn '/Users/zhourusheng' scripts/ \
-               --exclude-dir=tests --exclude-dir=__pycache__; then
+               --exclude-dir=tests --exclude-dir=__pycache__ \
+               --exclude-dir=.pytest_cache --exclude-dir=.ruff_cache; then
             echo "::error::scripts/ 里有本机绝对路径（P1-1 复发）"
             exit 1
           fi
@@ -98,7 +108,8 @@ jobs:
       - name: gate5 - 私有仓源码物料归零
         run: |
           PAT='(anka-app|iam-studio-fe|tag-studio|ontology-studio)/[A-Za-z0-9_./-]*\.(vue|tsx|ts|json)|(anka-app|iam-studio-fe)/[A-Za-z0-9_.-]+/(src|packages)/'
-          if grep -rIEn --exclude-dir=.git --exclude-dir=__pycache__ --exclude-dir=tests -- "$PAT" . ; then
+          if grep -rIEn --exclude-dir=.git --exclude-dir=__pycache__ --exclude-dir=tests \
+                  --exclude-dir=.pytest_cache --exclude-dir=.ruff_cache -- "$PAT" . ; then
             echo "::error::检出私有仓源码物料（见 §6B）"; exit 1
           fi
           echo "✅ 私有仓源码物料 0 命中"
@@ -200,6 +211,117 @@ jobs:
           PY
           echo "✅ card 取数源全部可达或已声明"
 
+      # ── 门禁⑧ 未披露的内网仓名归零（二期新增）─────────────────────
+      # 🔴 模式必须**逐仓枚举 8 个未披露仓**，⛔ 不许写 `ruijie/[a-z0-9-]+`：
+      #   那会命中大量**已合规披露**的 `ruijie/iam-studio-fe`（card 第 2/13 条、
+      #   meta/resolved.stats.json、meta/snapshots.jsonl、scripts/ 判定逻辑）
+      #   ⇒ 门禁上线即红，然后被人加 `|| true` 关掉。同门禁⑤ 注释里警告过的坑。
+      # ⚠️ 为什么 iam-studio-fe 可以留：card 第 13 条已公开披露「5 条 task 因私有
+      #   registry 被排除」，它是**披露事实**；而这 8 个仓在题集里从未出现
+      #   ⇒ 它们出现即泄漏。
+      # ⚠️ 这条是二期新增：门禁⑤ 盯的是**私有仓文件路径形态**（私有仓名 + 前端源码后缀，
+      #   这里不照抄那个形态 —— 举例写全会被门禁⑤ 自己扫到，实测踩过一次），
+      #   而 repo_map.py 里是**裸仓名列表** ⇒ 实测门禁⑤ 对它 0 命中，无人看守。
+      #   这也正是 pipeline/config/repos.example.json 只放 10 个已披露仓的理由。
+      - name: gate8 - 未披露的内网仓名归零
+        run: |
+          PAT='ruijie/(frontend-source|iam-sid-fe-native|iam-space-template-fe|iam-third-party-fe-native|device-verify|iam-mda-fe-native|sid-vue-components|source-id-source)'
+          if grep -rInE --exclude-dir=.git --exclude-dir=__pycache__ \
+                  --exclude-dir=.pytest_cache --exclude-dir=.ruff_cache -- "$PAT" . ; then
+            echo "::error::未披露的内网仓名混入"; exit 1
+          fi
+          echo "✅ 无未披露内网仓名"
+
+      # ── 门禁⑪ 全历史未披露内网仓名归零（本步骤实测补的）─────────────
+      # 🔴 补的是**门禁⑥ 与门禁⑧ 之间的缝**，两条都盯不到它：
+      #   - 门禁⑧ 逐仓枚举没错，但 `grep -r .` 只看**工作树** ⇒ 看不见历史；
+      #   - 门禁⑥ 确实扫全历史，但它复用门禁⑤ 的**文件路径形态**模式
+      #     （私有仓名 + 前端源码后缀），对**裸仓名列表**实测 0 命中。
+      #   ⇒ 迁入清洗链路时实测踩到：改造① 把工作树的 18 行硬编码清单外置了，
+      #     十条门禁全绿，但 7 个迁入提交的历史里清单原样留着，
+      #     `git show <任一提交>:pipeline/s0/repo_map.py` 一条命令就能取回 8 个仓名。
+      #     处置是导出时加一遍 `git filter-repo --replace-text`（换成 <私有仓N>）。
+      # ⚠️ 判据用 `git grep <rev>`（读 blob），⛔ 不是 `grep -r`（读工作树）。
+      # ⚠️ `git grep` 的 rev 必须写在模式**之后**、`--` 之前：
+      #   写成 `git grep -- "$PAT" "$rev"` 会把 rev 当**路径** ⇒ 恒不命中（假绿，实测踩过）。
+      # ⚠️ 与门禁⑧ 共用同一份枚举模式 —— 改一处必须改两处，
+      #   ⛔ 别在这里放宽成 `ruijie/[a-z0-9-]+`：会命中已合规披露的 iam-studio-fe。
+      - name: gate11 - 全历史未披露内网仓名归零
+        run: |
+          set -euo pipefail
+          test "$(git rev-list --all | wc -l | tr -d ' ')" -gt 1 \
+            || { echo "::error::只有 1 个提交 ⇒ checkout 缺 fetch-depth: 0，本门禁形同虚设"; exit 1; }
+          PAT='ruijie/(frontend-source|iam-sid-fe-native|iam-space-template-fe|iam-third-party-fe-native|device-verify|iam-mda-fe-native|sid-vue-components|source-id-source)'
+          bad=0
+          for rev in $(git rev-list --all); do
+            hits=$(git grep -IEl "$PAT" "$rev" -- 2>/dev/null || true)
+            if [ -n "$hits" ]; then
+              echo "::error::提交 $(git log -1 --format='%h %s' "$rev") 含未披露内网仓名："
+              echo "$hits" | sed "s#^$rev:#    #"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "✅ 全历史（$(git rev-list --all | wc -l | tr -d ' ') 提交）无未披露内网仓名"
+
+      # ── 门禁⑨ 全仓不许有绝对路径 symlink（§2.12）────────────────────
+      # 🔴 grep 不读 symlink 的目标串 ⇒ 门禁③④⑤⑥⑧ 全都扫不到它。
+      #   源仓就留着两个指向 /Users/zhourusheng/... 的 symlink，一期无人发现；
+      #   迁移时它们会静默变成死链（指向的路径在别人机器上不存在）。
+      # ⚠️ 判据读 git 索引里的 mode 120000 + blob 内容，不用 `test -L`：
+      #   后者在 CI 的 checkout 里对已损坏的 symlink 也返回真，看不出目标是什么。
+      - name: gate9 - 无绝对路径 symlink
+        run: |
+          set -euo pipefail
+          bad=$(git ls-files -s | awk '$1=="120000"{print $4}' | while read -r f; do
+                  t=$(git cat-file -p ":$f"); case "$t" in /*) echo "$f -> $t";; esac; done)
+          if [ -n "$bad" ]; then echo "::error::绝对路径 symlink: $bad"; exit 1; fi
+          echo "✅ 无绝对路径 symlink"
+
+      # ── 门禁⑩ pipeline/ 必须零第三方依赖（二期新增）───────────────
+      # 🔴 这是本层的卖点之一（pipeline/README.md 第 5 条对外承诺过）：别人 clone
+      #   后跑单测只需 pytest，不必装 sklearn/jieba/numpy/openai。
+      # ⚠️ 判据是「import 的顶层模块名 ∈ 标准库 ∪ 本层自己的模块」，
+      #   ⛔ 不是「pip list 里有没有」——后者在装了全套依赖的机器上永远绿。
+      # ⚠️ OWN 那几个是本层自己的模块（靠 sys.path.insert 或 spec 加载，不是第三方包）。
+      # ⚠️ 只把 pytest 放进 tests/ 的白名单，⛔ 不整目录排除：
+      #   否则测试文件里偷偷加的第三方依赖就没人管了。
+      - name: gate10 - pipeline 零第三方依赖
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast, sys
+          from pathlib import Path
+          OWN = {"common", "labeler", "repo_map", "s2_rules", "s3_segment"}
+          DEV = {"pytest"}                      # 开发依赖，只在 tests/ 里允许
+          std = set(sys.stdlib_module_names)    # Python 3.10+
+          bad: dict[str, set[str]] = {}
+          scanned = 0
+          for f in sorted(Path("pipeline").rglob("*.py")):
+              if "__pycache__" in f.parts:
+                  continue
+              scanned += 1
+              allowed = std | OWN | (DEV if "tests" in f.parts else set())
+              for n in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+                  if isinstance(n, ast.Import):
+                      mods = [a.name.split(".")[0] for a in n.names]
+                  elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                      mods = [n.module.split(".")[0]]
+                  else:
+                      continue
+                  for m in mods:
+                      if m not in allowed:
+                          bad.setdefault(str(f), set()).add(m)
+          for f, ms in sorted(bad.items()):
+              print(f"::error::{f} 引入了第三方依赖: {sorted(ms)}")
+          # 扫到 0 个文件也算红：形态是「路径写错 ⇒ 门禁永远绿」
+          if not scanned:
+              print("::error::pipeline/ 下没扫到 .py ⇒ 判据作用域错了"); sys.exit(1)
+          print(f"扫描 {scanned} 个文件，{'发现' if bad else '未发现'}第三方依赖")
+          sys.exit(1 if bad else 0)
+          PY
+          echo "✅ pipeline 零第三方依赖"
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。
@@ -207,3 +329,13 @@ jobs:
         run: |
           pip install --quiet pytest
           cd scripts && python -m pytest tests/test_mvp.py -q
+      # ── pipeline 单测 ──────────────────────────────────────────────
+      # ⚠️ 没有原始轨迹的那 2 条会 skip 并说明原因（实测 195 passed / 2 skipped）。
+      # ⛔ 不许因为 CI 里 skip 就删掉它们 —— 在采集机上是真跑的。
+      # 🔴 两层**分开跑**是刻意的：两层各有一个同名 common.py，同一进程里装两份会
+      #   互相覆盖（§2.8）。两层的 conftest.py + 两条对称断言把这条纪律机器化了，
+      #   一次收集两个目录也是绿的（实测两种顺序 398 passed / 6 skipped），
+      #   但生产上两层从不同进程跑 ⇒ CI 也按生产形态分开跑。
+      - name: 单测 - pipeline 清洗链路
+        run: |
+          cd pipeline && python -m pytest tests -q

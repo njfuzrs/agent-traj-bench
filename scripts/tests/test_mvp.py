@@ -72,7 +72,18 @@ import pytest
 MVP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(MVP))
 
-import common as c  # noqa: E402
+# ⚠️ 不用裸 `import common` —— 理由同 pipeline/tests/test_s1_s3.py 顶部那段：
+# 两层各有一份同名 common.py，交叉收集时裸 import 会拿到另一层那份。
+def _load_own_common():
+    spec = importlib.util.spec_from_file_location("common", MVP / "common.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["common"] = mod          # 先占住：t7_report_lib 等自己也 import common
+    spec.loader.exec_module(mod)
+    return mod
+
+
+c = _load_own_common()
 
 # ⚠️ 拆仓后脚本从 `scripts/mvp/` 提到了 `scripts/` ⇒ 少一级目录。
 # 原写法 `MVP.parent.parent` 在公开仓会指到**仓库外面**，而这个值被当作
@@ -4716,3 +4727,20 @@ def test_task_meta_provenance_points_at_this_repo_layout():
             if not (c.REPO_ROOT / script).exists():
                 bad.append(f"{p.parent.name}/{key}: {script} 不存在")
     assert not bad, "meta.json 的出处字段指向不存在的脚本：\n" + "\n".join(bad[:12])
+
+
+def test_common_module_is_not_shared_with_pipeline_layer():
+    """与 pipeline/tests/test_s1_s3.py 里那条对称 —— ⚠️ 两条都要有
+
+    哪一边先加载取决于 pytest 的参数顺序：只加一边的话，收集顺序反过来时就漏了。
+
+    实测形态（迁移方案 §2.8）：`pipeline/s1_s3/common.py` 与 `scripts/common.py`
+    同名不同物，两层都用 `sys.path.insert(0, ...)` + `import common`，而
+    `sys.modules` 是进程级缓存 ⇒ 第二个 import 静默拿到第一份，
+    且本层的 `MVP_TASKS` 整个不存在。
+
+    ⛔ 不许把两份合并成一份「公共层」：常量表不兼容
+    （本层 MVP_TASKS 是 Path，pipeline 层 FILTERED/UNITS 是 str）。
+    """
+    assert Path(c.__file__).resolve().is_relative_to(MVP), \
+        f"import common 拿到了 {c.__file__} —— 不是本层那份，说明与 pipeline/ 层撞了"
