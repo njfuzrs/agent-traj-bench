@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — Dataset Card
 
-> 生成于 2026-09-15 07:51 UTC，由 `scripts/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
+> 生成于 2026-09-17 02:32 UTC，由 `scripts/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
 
 ## 这是什么
 
@@ -29,8 +29,8 @@
 | 级 | 剩余 | 取数源 |
 |---|---|---|
 | 冻结批次**会话**（四通道：claude_code 7820 / codex 317 / short_id 248 / sid_code 177） | **8562** | `meta/batch-v0.2.json` |
-| 清洗后保留的**会话**（去空/过短/自指等） | **4381** | `phase1/meta/filtered-v2.stats.json` |
-| 切分出的**任务单元**（⚠️ 换单位，1.762 个/会话） | **7692** | `phase1/meta/units-v2.stats.json` |
+| 清洗后保留的**会话**（去空/过短/自指等） | **4381** | `meta/phase1/filtered-v2.stats.json` |
+| 切分出的**任务单元**（⚠️ 换单位，1.762 个/会话） | **7692** | `meta/phase1/units-v2.stats.json` |
 | 其中两端边界均 high 置信的单元 | **2937** | `meta/candidates.stats.json` |
 | T1 候选（八级筛选后） | **182** | `meta/candidates.stats.json` |
 | T2 反解出 base+patch | **70** | `meta/resolved.stats.json` |

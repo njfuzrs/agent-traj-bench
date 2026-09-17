@@ -160,6 +160,46 @@ jobs:
           PY
           echo "✅ 全历史私有仓源码物料 0 命中"
 
+      # ── 门禁⑦ card 引用的仓内路径必须可达（或已声明为外部来源）──────
+      # 🔴 补的是门禁①-⑥ 的共同盲区：它们盯的是「card 里的数字是不是现算的」，
+      # 而这条盯「card 指的文件在不在」。实测一期漏了两条真断链
+      # （`phase1/meta/*.stats.json`：card 印着取数源，公开仓却没有这两个文件），
+      # 六条门禁一条都没拦住 —— 单测里 3 处 card 断言验的是条数与体积区间。
+      #
+      # 🔴 ⛔ 不许写成裸 exists() 检查：card 里有两条**刻意不入库**的引用
+      #   （meta/batch-v0.2.json 含 8562 条会话 ID、reports/t8-rerun/tasks/ 1.9G），
+      #   裸检查会报红，然后逼下一个人去把它们补进来 —— 那是一次真实泄漏。
+      # ⚠️ 第三支（反向断言）不能省：没有它，白名单会退化成「把所有报红都登记进去」，
+      #   门禁⑦ 就变成永久绿，与 `|| true` 同一个下坡。
+      # ⚠️ 前缀表里必须含 phase1 —— 断链的那两条正是 `phase1/meta/...` 形态。
+      #   漏了它，门禁⑦ 恰好扫不到本次要修的问题（实测：漏 phase1 时只报 2 条，
+      #   补上后报 4 条）⇒ 一个「上线即假绿」的门禁。⛔ 修完也别删 phase1：
+      #   删了就等于把「旧形态复发」这条判据关掉。
+      - name: gate7 - card 取数源可达
+        run: |
+          # 🔴 同门禁⑥：`set -e` 必须显式写，否则本地跑时 python 报红仍会 exit 0（假绿）。
+          set -euo pipefail
+          python - <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          card = Path("DATASET_CARD.md").read_text(encoding="utf-8")
+          ext = json.loads(Path("meta/external-sources.json").read_text(encoding="utf-8"))
+          declared = {s["path"].rstrip("/") for s in ext["sources"]}
+          # card 里反引号包裹的仓内路径（跳过含通配符与占位符的）
+          cited = {p for p in re.findall(
+                       r'`((?:meta|reports|tasks|scripts|pipeline|phase1)/[A-Za-z0-9_./-]+)`', card)
+                   if "*" not in p}
+          bad = [p for p in sorted(cited)
+                 if not Path(p).exists() and p.rstrip("/") not in declared]
+          # 反向：登记为外部来源的，不许真的存在
+          stale = [p for p in sorted(declared) if Path(p).exists()]
+          for p in bad:   print(f"::error::card 引用了不存在且未声明的路径: {p}")
+          for p in stale: print(f"::error::external-sources 登记的 {p} 其实已入库 ⇒ 该删登记项")
+          print(f"card 引用 {len(cited)} 条，已声明外部来源 {len(declared)} 条")
+          sys.exit(1 if (bad or stale) else 0)
+          PY
+          echo "✅ card 取数源全部可达或已声明"
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。

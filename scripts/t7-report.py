@@ -115,27 +115,58 @@ def load_inputs() -> tuple[list[str], dict[str, list[str]], dict[str, list[str]]
 STAGING = Path(os.environ["STAGING_DIR"]) if os.environ.get("STAGING_DIR") else None
 BATCH_SUMMARY = c.MVP_META / "batch-v0.2.summary.json"
 
+#: 🔴 P0（二期 §2.2）：漏斗第 2/3 级的两个 stats.json 已入库到仓内 `meta/phase1/`。
+# 在此之前它们**只在 tp 的未入库 `data/bench-staging/` 里** ⇒ `--card` 在公开仓
+# 根本跑不起来（card 却把 `phase1/meta/...` 印成取数源，指向仓内不存在的路径）。
+# 取数顺序：仓内 → STAGING → summary。三条路径**必须算出同样的数** —— 仓内那两份
+# 与 STAGING 那两份 sha256 逐字符相同（45ba1d214afc / 007b8ec52d8e，已公开在
+# summary 的 `_source_sha256` 里），summary 的 `filtered`/`units` 子对象是它们的抄录。
+PHASE1_FILTERED = c.MVP_META / "phase1" / "filtered-v2.stats.json"
+PHASE1_UNITS = c.MVP_META / "phase1" / "units-v2.stats.json"
+
 
 def _funnel_sources() -> tuple[dict, dict, dict]:
     """漏斗前三行的三个取数源 ⇒ `(batch, filtered, units)`。
 
-    两条路径必须算出**同样的数**（阶段 5.3 的判据是逐字节 diff 两侧 card）：
-      - `STAGING_DIR` 指向 tp 的 `data/bench-staging/` ⇒ 读原始三个文件
-      - 否则（公开仓的默认）⇒ 读入库的 summary，字段名与原始保持一致
+    所有路径必须算出**同样的数**（阶段 5.3 的判据是逐字节 diff 两侧 card）。
+    第 2/3 级（filtered / units）与第 1 级（batch）取数**互相独立**，因为
+    `batch-v0.2.json` 含 8562 个会话 ID ⇒ **刻意不入库**，而那两个 stats.json 只有
+    聚合标量 ⇒ 已入库：
+
+      - filtered / units：仓内 `meta/phase1/*.stats.json` → `STAGING_DIR` → summary
+      - batch：`STAGING_DIR` → summary（仓内永远没有这一份，见
+        `meta/external-sources.json`）
     """
+    summary: dict | None = None
+
+    def _summary() -> dict:
+        nonlocal summary
+        if summary is None:
+            if not BATCH_SUMMARY.exists():
+                raise SystemExit(
+                    f"⛔ 缺 {BATCH_SUMMARY} —— 漏斗前三行无从取数。\n"
+                    f"   公开仓应有这个文件；在 tp 侧跑请 export STAGING_DIR=<…>/data/bench-staging"
+                )
+            summary = json.loads(BATCH_SUMMARY.read_text(encoding="utf-8"))
+        return summary
+
     if STAGING is not None:
-        return (
-            json.loads((STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8")),
-            json.loads((STAGING / "phase1/meta/filtered-v2.stats.json").read_text(encoding="utf-8")),
-            json.loads((STAGING / "phase1/meta/units-v2.stats.json").read_text(encoding="utf-8")),
-        )
-    if not BATCH_SUMMARY.exists():
-        raise SystemExit(
-            f"⛔ 缺 {BATCH_SUMMARY} —— 漏斗前三行无从取数。\n"
-            f"   公开仓应有这个文件；在 tp 侧跑请 export STAGING_DIR=<…>/data/bench-staging"
-        )
-    d = json.loads(BATCH_SUMMARY.read_text(encoding="utf-8"))
-    return d, d["filtered"], d["units"]
+        batch = json.loads((STAGING / "meta/batch-v0.2.json").read_text(encoding="utf-8"))
+    else:
+        batch = _summary()
+
+    def _stats(inrepo: Path, staging_rel: str, summary_key: str) -> dict:
+        if inrepo.exists():
+            return json.loads(inrepo.read_text(encoding="utf-8"))
+        if STAGING is not None:
+            return json.loads((STAGING / staging_rel).read_text(encoding="utf-8"))
+        return _summary()[summary_key]
+
+    return (
+        batch,
+        _stats(PHASE1_FILTERED, "phase1/meta/filtered-v2.stats.json", "filtered"),
+        _stats(PHASE1_UNITS, "phase1/meta/units-v2.stats.json", "units"),
+    )
 
 #: dataset card 的 Limitations —— 方案 §6 的 13 条（v1.3 起含 T4 新增的第 12/13 条）。
 #: 🔴 第 2 / 4 / 5 条的措辞是 T4/T6 实测后**改过**的，不是方案原文，别回改：
@@ -316,9 +347,9 @@ def load_funnel() -> list[tuple[str, int | str, str]]:
     # 不标单位会让读者以为漏斗算错了 —— 漏斗表是报告第一张表，读者拿它判整批可信度。
     return [
         (f"冻结批次**会话**（四通道：{chan}）", batch["session_count"], "meta/batch-v0.2.json"),
-        ("清洗后保留的**会话**（去空/过短/自指等）", filt["kept"], "phase1/meta/filtered-v2.stats.json"),
+        ("清洗后保留的**会话**（去空/过短/自指等）", filt["kept"], "meta/phase1/filtered-v2.stats.json"),
         (f"切分出的**任务单元**（⚠️ 换单位，{units['units_per_session']} 个/会话）",
-         units["kept_units"], "phase1/meta/units-v2.stats.json"),
+         units["kept_units"], "meta/phase1/units-v2.stats.json"),
         ("其中两端边界均 high 置信的单元", step1, "meta/candidates.stats.json"),
         ("T1 候选（八级筛选后）", cand["n_candidates"], "meta/candidates.stats.json"),
         ("T2 反解出 base+patch", resolved["n_ok"], "meta/resolved.stats.json"),

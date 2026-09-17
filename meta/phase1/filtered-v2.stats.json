@@ -1,0 +1,68 @@
+{
+  "batch_version": "v0.2",
+  "batch_fingerprint": "91be9a5d90d801dfd9d008cc158e71ce8bfc06e4d02684c8fd8a0a7096655b0a",
+  "generated_at": "2026-09-05T09:33:33Z",
+  "input_count": 8562,
+  "kept": 4381,
+  "dropped": 4181,
+  "keep_rate": 0.5117,
+  "drop_reason_dist": {
+    "R1_EMPTY": 2659,
+    "R2_TOO_SHORT": 1112,
+    "E_SELF_REFERENTIAL": 272,
+    "R4_TOO_FEW_TOKENS": 120,
+    "R3_NO_ACTION": 18
+  },
+  "forced_split": 29,
+  "keep_by_agent_source": {
+    "claude_code": 3850,
+    "codex": 224,
+    "short_id": 186,
+    "sid_code": 121
+  },
+  "drop_by_agent_source": {
+    "claude_code": 3970,
+    "codex": 93,
+    "short_id": 62,
+    "sid_code": 56
+  },
+  "kept_vendor_by_source": {
+    "claude_code": {
+      "anthropic": 3833,
+      "openai": 17
+    },
+    "codex": {
+      "deepseek": 103,
+      "zhipu": 49,
+      "openai": 46,
+      "xai": 12,
+      "moonshot": 9,
+      "alibaba": 5
+    },
+    "sid_code": {
+      "unknown": 63,
+      "openai": 24,
+      "deepseek": 21,
+      "alibaba": 6,
+      "zhipu": 5,
+      "xai": 1,
+      "anthropic": 1
+    },
+    "short_id": {
+      "deepseek": 75,
+      "openai": 47,
+      "anthropic": 39,
+      "alibaba": 25
+    }
+  },
+  "kept_repo_resolution": {
+    "voted": 2334,
+    "direct": 896,
+    "unresolved": 472,
+    "inferred": 410,
+    "conflict": 269
+  },
+  "kept_anchored": 3909,
+  "kept_conflict": 269,
+  "kept_has_raw": 4331
+}

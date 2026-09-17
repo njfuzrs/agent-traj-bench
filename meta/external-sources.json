@@ -1,0 +1,16 @@
+{
+  "_note": "card 引用但刻意不入库的路径。门禁⑦ 用它区分『真断链』与『已声明的外部来源』。⛔ 新增条目必须写明 reason 与 where_to_find，且门禁会反向验『登记的路径不许真的存在』。",
+  "sources": [
+    {
+      "path": "meta/batch-v0.2.json",
+      "reason": "2.51MB，sessions[] 含 8562 条会话 ID，repo_dist 含 13 个仓名条目（其中 5 个 ruijie/*，4 个未披露）⇒ 不可公开。实测 grep 命中：sid 形态 8256、内网名 1057。派生标量已入库为 meta/batch-v0.2.summary.json。",
+      "where_to_find": "trajectory-platform: data/bench-staging/meta/batch-v0.2.json",
+      "sha256_prefix": "7091e58a0c2a"
+    },
+    {
+      "path": "reports/t8-rerun/tasks/",
+      "reason": "1.9G harbor 跑批 stage 产物，.gitignore 已排除（reports/*/tasks/）。card 第 79 行自身已披露『已 gitignore』。",
+      "where_to_find": "采集机本地，t8-rerun.py 可重建"
+    }
+  ]
+}
