@@ -18,8 +18,8 @@
 # 产出数据里缺字段。所以必须机械化检查。
 #
 # 用法：
-#   ./scripts/phase0/check-collector-live.sh              # 检查，退出码非 0 即有问题
-#   ./scripts/phase0/check-collector-live.sh --self-test  # 反向自证（故意弄红）
+#   ./s0/check-collector-live.sh              # 检查，退出码非 0 即有问题
+#   ./s0/check-collector-live.sh --self-test  # 反向自证（故意弄红）
 #   REPO=/path/to/claude-trace ./check-collector-live.sh
 #
 # 退出码：0 一切最新；1 运行中的代码已过期（需 claude-trace restart）；2 无法判定

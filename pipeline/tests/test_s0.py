@@ -13,7 +13,7 @@
   ⑤ 排除前缀按 / 分段匹配，evals-foo/ 不能被 evals/ 误命中
 
 用法：
-    backend/venv/bin/python -m pytest tests/test_s0.py -v
+    python3 -m pytest ../tests/test_s0.py -v
     python3 -m pytest tests/test_s0.py -v
 """
 

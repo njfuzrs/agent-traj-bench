@@ -10,10 +10,10 @@
 
 ```bash
 # 验收当前状态。全绿才说明产物可用，可以进 Phase 2
-python3 scripts/phase1/verify-phase1.py
+python3 s1_s3/verify-phase1.py
 
 # 改了任何判定逻辑之后，必须再跑一次反向自证（约 4 分钟，CPU 密集）
-python3 scripts/phase1/verify-phase1.py --self-test
+python3 s1_s3/verify-phase1.py --self-test
 ```
 
 两条都是幂等只读检查。`--self-test` 慢是因为它把 S3 的独立信号对账（1313 条会话
@@ -68,11 +68,11 @@ data/pulled_sessions/          只读数据湖，一个字节都不改
 ## 完整重跑
 
 ```bash
-python3 scripts/phase1/s1-filter.py --batch v0.2
-python3 scripts/phase1/s3-split.py --batch v0.2 --workers 8   # 约 47 秒
-python3 scripts/phase1/s2-desensitize.py
-python3 scripts/phase1/label-units.py
-python3 scripts/phase1/verify-phase1.py                       # 必须全绿
+python3 s1_s3/s1-filter.py --batch v0.2
+python3 s1_s3/s3-split.py --batch v0.2 --workers 8   # 约 47 秒
+python3 s1_s3/s2-desensitize.py
+python3 s1_s3/label-units.py
+python3 s1_s3/verify-phase1.py                       # 必须全绿
 ```
 
 每个脚本都有 `--dry-run`（只打统计不写盘）和 `--limit N`（抽样试跑）。
@@ -113,14 +113,14 @@ python3 scripts/phase1/verify-phase1.py                       # 必须全绿
 
 ```bash
 # 按通道 × 边界置信度看分布
-python3 scripts/phase1/query-units.py --group agent_source,boundary_confidence
+python3 s1_s3/query-units.py --group agent_source,boundary_confidence
 
 # 只看 codex 通道里 deepseek 的 bug_fix，排除敏感与锚定矛盾的
-python3 scripts/phase1/query-units.py --agent-source codex --vendor deepseek \
+python3 s1_s3/query-units.py --agent-source codex --vendor deepseek \
     --category bug_fix --exclude-review --exclude-conflict --list
 
 # 筛出一批写文件，交给 Phase 2
-python3 scripts/phase1/query-units.py --boundary-confidence high \
+python3 s1_s3/query-units.py --boundary-confidence high \
     --min-edit-ops 3 --out /tmp/candidates.jsonl
 ```
 
@@ -233,7 +233,7 @@ raw.jsonl，为什么 1282 个单元标着 B_NO_RAW」这个对不上的数。
 ## 单元测试
 
 ```bash
-backend/venv/bin/python -m pytest tests/test_phase1.py -q     # 117 项
+python3 -m pytest ../tests/test_s1_s3.py -q     # 117 项
 ```
 
 固定住每条实测标定的结论：S1 的 R5「中断不淘汰而是转 S3」、脱敏正则的边界与

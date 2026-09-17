@@ -31,14 +31,14 @@ Phase 1 的产物是 7094 行 jsonl。没有检索入口的话，「按 claude c
 
 用法：
   # 各通道 × 类别的交叉分布
-  python3 scripts/phase1/query-units.py --group agent_source,category
+  python3 s1_s3/query-units.py --group agent_source,category
 
   # 只看 codex 通道里 deepseek 的 bug_fix，且切分边界可信
-  python3 scripts/phase1/query-units.py --agent-source codex --vendor deepseek \\
+  python3 s1_s3/query-units.py --agent-source codex --vendor deepseek \\
       --category bug_fix --boundary-confidence high --list
 
   # 导出可进 Phase 2 的高质量子集
-  python3 scripts/phase1/query-units.py --boundary-confidence high \\
+  python3 s1_s3/query-units.py --boundary-confidence high \\
       --confidence high --exclude-review --exclude-conflict \\
       --out data/bench-staging/phase1/meta/candidates-high.jsonl
 """

@@ -10,9 +10,9 @@
 
 ```bash
 # 验收当前状态。全绿才说明地基完好，可以进 Phase 1
-python3 scripts/phase0/verify-s0.py --sample 150
-./scripts/phase0/verify-archive.sh
-./scripts/phase0/check-collector-live.sh   # 采集器跑的是不是最新代码
+python3 s0/verify-s0.py --sample 150
+./s0/verify-archive.sh
+./s0/check-collector-live.sh   # 采集器跑的是不是最新代码
 ```
 
 两个脚本都是**幂等的只读检查**，随时可跑。报红时按下面的对应关系处理。
@@ -53,13 +53,13 @@ export TRAJ_AUTH_PASS="$(grep '^AUTH_PASSWORD=' backend/.env | cut -d= -f2-)"
 python3 pull.py --workers 2
 
 # ② 重跑 S0（全量幂等，8 进程约 20 秒）
-python3 scripts/phase0/s0-normalize.py --workers 8
+python3 s0/s0-normalize.py --workers 8
 
 # ③ 验收（必须全绿）
-python3 scripts/phase0/verify-s0.py --sample 150
+python3 s0/verify-s0.py --sample 150
 
 # ④ 冻结批次，Phase 1 只洗这一批
-python3 scripts/phase0/freeze-batch.py --version v0.2
+python3 s0/freeze-batch.py --version v0.2
 ```
 
 ## 三条不要踩的坑
@@ -99,7 +99,7 @@ hook 侧不受此影响：每次事件由 Claude Code 新起 `python3` 进程，
 **④ 改了门禁就要跑自证。**
 
 ```bash
-python3 scripts/phase0/verify-s0.py --self-test
+python3 s0/verify-s0.py --self-test
 ```
 
 七个 case：一个健康基线必须保持绿，六类注入缺陷必须变红**且变红原因对得上号**。
@@ -147,7 +147,7 @@ python3 scripts/phase0/verify-s0.py --self-test
 ## 单元测试
 
 ```bash
-backend/venv/bin/python -m pytest tests/test_phase0_s0.py -v
+python3 -m pytest ../tests/test_s0.py -v
 ```
 
 固定住每条实测标定的结论（三路权重、路径口径、正则边界、排除清单按段匹配、

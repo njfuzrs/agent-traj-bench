@@ -15,9 +15,9 @@ task 清单 + 版本号发布，没有版本边界的数据集不可引用。
   - 每条 sid 的 steps 与文件存在性，供后续阶段对账
 
 用法：
-  python3 scripts/phase0/freeze-batch.py --version v0.2
-  python3 scripts/phase0/freeze-batch.py --version v0.2 --dry-run
-  python3 scripts/phase0/freeze-batch.py --verify v0.2   # 校验批次是否仍完整
+  python3 s0/freeze-batch.py --version v0.2
+  python3 s0/freeze-batch.py --version v0.2 --dry-run
+  python3 s0/freeze-batch.py --verify v0.2   # 校验批次是否仍完整
 """
 
 import argparse

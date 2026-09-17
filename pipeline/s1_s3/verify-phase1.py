@@ -47,9 +47,9 @@ Phase 1 任务表要求「抽样 50 个单元人工确认边界正确率 ≥90%�
 处置方式与 §4.6 对未分类样本的做法一致。**这是对自身局限的披露，不是绕过验收。**
 
 用法：
-  python3 scripts/phase1/verify-phase1.py                 # 全部四组
-  python3 scripts/phase1/verify-phase1.py --stage s3
-  python3 scripts/phase1/verify-phase1.py --self-test     # 反向自证
+  python3 s1_s3/verify-phase1.py                 # 全部四组
+  python3 s1_s3/verify-phase1.py --stage s3
+  python3 s1_s3/verify-phase1.py --self-test     # 反向自证
 """
 
 import argparse

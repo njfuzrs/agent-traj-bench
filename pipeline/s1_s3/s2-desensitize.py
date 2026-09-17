@@ -25,10 +25,10 @@ v0.1 对 2441 条 session 逐条脱敏，把整个 `trajectory` + `history` 重�
 输入是 S3 产物 `units-v2.jsonl`。
 
 用法：
-  python3 scripts/phase1/s2-desensitize.py
-  python3 scripts/phase1/s2-desensitize.py --limit 500 --dry-run
+  python3 s1_s3/s2-desensitize.py
+  python3 s1_s3/s2-desensitize.py --limit 500 --dry-run
 
-验收：python3 scripts/phase1/verify-phase1.py --stage s2
+验收：python3 s1_s3/verify-phase1.py --stage s2
 """
 
 import argparse

@@ -61,10 +61,10 @@ pull.py 重复下载 1722 条）。
 `drop_reason: E_SELF_REFERENTIAL`，S4 可据此对账。
 
 用法：
-  python3 scripts/phase1/s1-filter.py --batch v0.2
-  python3 scripts/phase1/s1-filter.py --batch v0.2 --dry-run
+  python3 s1_s3/s1-filter.py --batch v0.2
+  python3 s1_s3/s1-filter.py --batch v0.2 --dry-run
 
-验收：python3 scripts/phase1/verify-phase1.py --stage s1
+验收：python3 s1_s3/verify-phase1.py --stage s1
 """
 
 import argparse

@@ -17,7 +17,7 @@
 移进 `_trash/` 正是如此（实测待拉取从 879 涨到 2601，多出来的 1722 条就是它们）。
 
 纪律：**原始层只增不删，淘汰在元数据层用字段表达**（S1 的 `drop_reason`）。
-`verify-s0.py` 与 `tests/test_phase0_s0.py` 各有一道门禁盯着 `_trash/` 不许回来。
+`verify-s0.py` 与 `../tests/test_s0.py` 各有一道门禁盯着 `_trash/` 不许回来。
 
 顺带一个量级理由：入选 4653 条的 `raw.jsonl` 合计 47.6GB，原地重写脱敏既危险
 又无必要 —— 只脱敏真正要用的那部分文本。
@@ -107,7 +107,7 @@ def load_s0_index(path: str | None = None) -> dict[str, dict]:
     """加载 S0 索引，返回 sid → 记录"""
     path = path or S0_INDEX
     if not os.path.exists(path):
-        raise SystemExit(f"S0 索引不存在：{path}\n  先跑 scripts/phase0/s0-normalize.py")
+        raise SystemExit(f"S0 索引不存在：{path}\n  先跑 s0/s0-normalize.py")
     out = {}
     with open(path) as f:
         for line in f:
@@ -130,7 +130,7 @@ def load_batch(version: str) -> dict:
     if not os.path.exists(path):
         raise SystemExit(
             f"批次不存在：{path}\n"
-            f"  先跑 python3 scripts/phase0/freeze-batch.py --version {version}"
+            f"  先跑 python3 s0/freeze-batch.py --version {version}"
         )
     with open(path) as f:
         return json.load(f)

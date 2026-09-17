@@ -27,11 +27,11 @@
 只 open() 读 `data/pulled_sessions/`，产物全部写 `data/bench-staging/phase1/`。
 
 用法：
-  python3 scripts/phase1/s3-split.py --batch v0.2
-  python3 scripts/phase1/s3-split.py --batch v0.2 --limit 200      # 抽样试跑
-  python3 scripts/phase1/s3-split.py --batch v0.2 --workers 8
+  python3 s1_s3/s3-split.py --batch v0.2
+  python3 s1_s3/s3-split.py --batch v0.2 --limit 200      # 抽样试跑
+  python3 s1_s3/s3-split.py --batch v0.2 --workers 8
 
-验收：python3 scripts/phase1/verify-phase1.py --stage s3
+验收：python3 s1_s3/verify-phase1.py --stage s3
 """
 
 import argparse
@@ -52,7 +52,7 @@ WRITE_TOOLS = {
 }
 SHELL_TOOLS = {"bash", "exec_command", "shell", "run_command", "run_terminal_cmd"}
 
-# 与 S0 同一份口径（scripts/phase0/s0-normalize.py:TEST_CMD_RE）
+# 与 S0 同一份口径（s0/s0-normalize.py:TEST_CMD_RE）
 import re  # noqa: E402
 
 TEST_CMD_RE = re.compile(

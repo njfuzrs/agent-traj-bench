@@ -14,13 +14,13 @@
 且可重复执行。
 
 ⚠️ 门禁自证（§9.0 的教训：任何门禁都必须故意弄红一次才算交付）：
-  python3 scripts/phase0/verify-s0.py --self-test
+  python3 s0/verify-s0.py --self-test
 会注入 4 类已知缺陷，每一类都必须让门禁变红。
 
 用法：
-  python3 scripts/phase0/verify-s0.py              # 正常验收
-  python3 scripts/phase0/verify-s0.py --sample 100 # 指定裁判抽样量
-  python3 scripts/phase0/verify-s0.py --self-test   # 反向自证
+  python3 s0/verify-s0.py              # 正常验收
+  python3 s0/verify-s0.py --sample 100 # 指定裁判抽样量
+  python3 s0/verify-s0.py --self-test   # 反向自证
 """
 
 import argparse
@@ -482,7 +482,7 @@ def self_test() -> int:
             print(f"✗ 索引与磁盘差 {drift} 条，无法自证。")
             print("  自证要先有一个「健康基线」，而过期索引本身就是不健康的 ——")
             print("  此时每个注入 case 都会因『索引过期』变红，验不出门禁的鉴别力。")
-            print("  请先跑：python3 scripts/phase0/s0-normalize.py")
+            print("  请先跑：python3 s0/s0-normalize.py")
             return 1
 
     # 每个 case 除了「必须变红」，还要校验**变红的原因对不上号就算失败**。

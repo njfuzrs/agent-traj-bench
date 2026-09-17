@@ -11,10 +11,10 @@
 客观量（改了几个文件、报错几次）。这就是「筛选查看」的检索面。
 
 用法：
-  python3 scripts/phase1/label-units.py
-  python3 scripts/phase1/label-units.py --dry-run
+  python3 s1_s3/label-units.py
+  python3 s1_s3/label-units.py --dry-run
 
-验收：python3 scripts/phase1/verify-phase1.py --stage label
+验收：python3 s1_s3/verify-phase1.py --stage label
 """
 
 import argparse

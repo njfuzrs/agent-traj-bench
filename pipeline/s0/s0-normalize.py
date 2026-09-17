@@ -21,11 +21,11 @@
 「哪些该淘汰」由 Phase 1 的 S1 按规则判定，S0 只负责如实归一化并标注。
 
 用法：
-  python3 scripts/phase0/s0-normalize.py                  # 全量
-  python3 scripts/phase0/s0-normalize.py --limit 200      # 抽样试跑
-  python3 scripts/phase0/s0-normalize.py --workers 8      # 指定并行度
+  python3 s0/s0-normalize.py                  # 全量
+  python3 s0/s0-normalize.py --limit 200      # 抽样试跑
+  python3 s0/s0-normalize.py --workers 8      # 指定并行度
 
-验收：python3 scripts/phase0/verify-s0.py
+验收：python3 s0/verify-s0.py
 """
 
 import argparse
