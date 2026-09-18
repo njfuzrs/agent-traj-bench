@@ -656,8 +656,8 @@ def main() -> int:
                 f"   数据湖 {c.SESSIONS_DIR} "
                 f"{'不存在' if not c.SESSIONS_DIR.exists() else '里没有对应会话'}。\n"
                 "   ⛔ 这**不是**「守卫失效」：守卫要有写操作才可能触发。\n"
-                "   → 要真跑这条自证，export SESSIONS_DIR 指到 trajectory-platform 的 "
-                "data/pulled_sessions/",
+                "   → 要真跑这条自证，先 python3 pipeline/s0/s0-pull.py，"
+                "或 export SESSIONS_DIR 指到已有的 data/pulled_sessions/",
                 file=sys.stderr)
             return EXIT_NO_INPUT
         if not leaked:

@@ -9,7 +9,7 @@
 #   属于历史事实，必须显式记录，否则这段 provenance 永久丢失。
 #
 # 为什么把目录移回主目录：
-#   pull.py:246 的去重只查 data/pulled_sessions/<sid>/.pulled。目录移走时标记
+#   s0-pull.py 的 should_skip 去重只查 data/pulled_sessions/<sid>/.pulled。目录移走时标记
 #   跟着走了，主目录下一个都不剩 → should_skip 判为「未拉取」→ 下次 pull 会把
 #   这 1722 条全部重新下载（实测 --list-only：待拉取 2601 条里 1722 条正是它们）。
 #   改为「原始层只增不删，淘汰在元数据层表达」：目录留在原处，S0 索引里用

@@ -20,7 +20,7 @@
 
 ## 四条纪律（方案 §4 T0「关键约定」，每条都有单测盯着）
 
-1. **`data/pulled_sessions/` 只读**。`pull.py:246` 的去重只查
+1. **`data/pulled_sessions/` 只读**。`s0-pull.py` 的 `should_skip` 去重只查
    `data/pulled_sessions/<sid>/.pulled`，把会话目录移走/改名/删除，标记就跟着走，
    下次同步判为「未拉取」并重新下载 —— 上一轮把 1722 条移进 `_trash/` 正是如此。
 2. **mirror 只读**。所有 git 操作走 `git -C $MIRROR`，不 clone 到工作区（T4 例外）。
@@ -58,9 +58,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # 只读数据湖。本模块及下游脚本**只允许 open() 读**，不许写、不许移、不许删。
-# 🔴 公开仓**不含** `data/`（66G，未入库）⇒ 这两个常量在本仓指向不存在的路径是**预期的**。
-# 它们只被 T1/T2（从原始轨迹反解题面）用到，而公开仓的 tasks/ 已是成品 ⇒ 无需重跑 T1/T2。
-# 要重跑须用环境变量指到 trajectory-platform 那侧的真实目录。
+# 🔴 公开仓**不含** `data/`（gitignore，s0-pull.py 写入）⇒ fresh clone 上这两个
+# 常量指向不存在的路径是**预期的**。它们只被 T1/T2（从原始轨迹反解题面）用到，
+# 而公开仓的 tasks/ 已是成品 ⇒ 无需重跑 T1/T2。
+# 要重跑：python3 pipeline/s0/s0-pull.py，或 export SESSIONS_DIR 指已有湖。
 SESSIONS_DIR = Path(os.environ.get("SESSIONS_DIR", REPO_ROOT / "data/pulled_sessions"))
 
 # Phase 1 的产物（7692 个已标注单元），只读 —— T1 的唯一输入

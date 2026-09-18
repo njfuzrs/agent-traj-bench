@@ -657,7 +657,7 @@ def test_sessions_dir_is_readonly_by_convention():
     「常量指向的是那个只读湖，且本模块没有任何写它的辅助函数」——
     真正的护栏是 code review 与这条测试的存在本身。
 
-    背景：`pull.py:246` 的去重只查 `<sid>/.pulled`，移走/改名/删除会让下次
+    背景：`s0-pull.py` 的 `should_skip` 去重只查 `<sid>/.pulled`，移走/改名/删除会让下次
     同步判为「未拉取」并重复下载 —— 上一轮 1722 条就是这么来的。
     """
     assert c.SESSIONS_DIR.name == "pulled_sessions"
@@ -967,8 +967,8 @@ def test_selftest_fuzzy_path_reds_out():
         assert "不是」「守卫失效" not in proc.stderr
         assert "守卫是失效的" not in proc.stderr, "无输入时不许指控守卫失效"
         assert "SESSIONS_DIR" in proc.stderr, "得告诉人怎么把这条自证真跑起来"
-        pytest.skip("没有原始轨迹（data/pulled_sessions/ 未随公开仓迁出）—— "
-                    "自证已如实报 EXIT_NO_INPUT；要真跑请 export SESSIONS_DIR")
+        pytest.skip("没有原始轨迹（data/pulled_sessions/ 未入库）—— "
+                    "自证已如实报 EXIT_NO_INPUT；要真跑请 s0-pull.py 或 export SESSIONS_DIR")
     assert proc.returncode == 3, f"期望退出码 3，实得 {proc.returncode}\n{proc.stderr[-500:]}"
     assert "泄漏守卫生效" in proc.stderr
     assert ".claude/projects" in proc.stderr

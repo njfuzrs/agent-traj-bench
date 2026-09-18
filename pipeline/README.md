@@ -6,9 +6,11 @@
 **采集与清洗的代码入库，原始语料不入库。**
 
 ```
-data/pulled_sessions/        原始轨迹数据湖（66G，未随仓迁出）
+   s0/  s0-pull.py           平台 HTTP → 本地湖（URL/口令走环境变量）
+        ▼
+data/pulled_sessions/        原始轨迹数据湖（gitignore，不入库）
         │
-   s0/  ├─ s0-normalize.py   归一化 + working_directory 三路反解
+        ├─ s0-normalize.py   归一化 + working_directory 三路反解
         ▼
    s1_s3/  s1-filter.py      S1 硬过滤（六条规则）
            s3-split.py       S3 会话切分成任务单元
@@ -25,16 +27,22 @@ data/pulled_sessions/        原始轨迹数据湖（66G，未随仓迁出）
 
 ### 1. 本层在公开仓里跑不起来 —— 这是预期的
 
-原始轨迹 **66G 未随仓迁出**（只有清洗代码入库，语料不入库）。
-`SESSIONS_DIR` 默认值 `data/pulled_sessions` 在公开仓不存在，所有读盘脚本都会空跑。
+原始轨迹 **不入库**（只有清洗代码入库，语料不入库）。
+`SESSIONS_DIR` 默认值 `data/pulled_sessions` 在 fresh clone 里不存在，所有读盘脚本都会空跑。
 
-要真跑：
+要真跑（有平台凭据 + 磁盘）：
 
 ```bash
-export SESSIONS_DIR=<trajectory-platform>/data/pulled_sessions
+export TRAJ_PLATFORM_URL=...          # 必填，仓内无默认
+export TRAJ_AUTH_PASS=...             # 必填
+export TRAJ_AUTH_USER=admin           # 可选
+python3 pipeline/s0/s0-pull.py --workers 2
+export SESSIONS_DIR="$PWD/data/pulled_sessions"
 ```
 
-单测不受影响 —— 195 条用构造输入，另 2 条依赖原始轨迹，会 **skip 并说明原因**。
+已经有一份湖时，只 `export SESSIONS_DIR=` 指过去即可，不必重拉。
+
+单测不受影响 —— 构造输入默认跑；依赖真湖的那 2 条会 **skip 并说明原因**。
 
 ### 2. 真实仓库清单要自己提供
 
@@ -80,7 +88,7 @@ import、不共享目录。
 只用标准库。跑单测只需 `pytest`：
 
 ```bash
-cd pipeline && python -m pytest tests -q      # 195 passed, 2 skipped
+cd pipeline && python -m pytest tests -q      # 构造输入全绿；真湖缺失时 2 条 skip
 ```
 
 ⚠️ 这条性质是本层的卖点之一，**加依赖前先想清楚**。CI 门禁⑩ 用 ast 遍历盯着它
@@ -127,8 +135,8 @@ python3 s1_s3/verify-phase1.py --self-test    # 约 4 分钟，CPU 密集
 ### 完整重跑
 
 ```bash
-export SESSIONS_DIR=<trajectory-platform>/data/pulled_sessions
-export REPO_MAP_CONFIG=<你的 repos.json>
+export SESSIONS_DIR="$PWD/data/pulled_sessions"   # 先 s0-pull.py，或指已有湖
+export REPO_MAP_CONFIG=<你的 repos.json>          # 完整清单仓外，见 config/repos.example.json
 
 python3 s0/s0-normalize.py --workers 8            # 约 20 秒
 python3 s0/verify-s0.py --sample 150              # 必须全绿
@@ -149,10 +157,10 @@ python3 s1_s3/verify-phase1.py                    # 必须全绿
 
 | 路径 | 内容 |
 |---|---|
-| `s0/` | 归一化、仓库反解、mirror 归档、批次冻结（11 文件） |
+| `s0/` | 入湖、归一化、仓库反解、mirror 归档、批次冻结（12 文件） |
 | `s1_s3/` | S1 过滤、S3 切分、S2 脱敏、分类标注（11 文件） |
 | `config/repos.example.json` | 仓库清单示例，真实清单靠 `REPO_MAP_CONFIG` 外置 |
-| `tests/` | `test_s0.py` + `test_s1_s3.py`，195 passed / 2 skipped |
+| `tests/` | `test_s0.py` + `test_s0_pull.py` + `test_s1_s3.py`；真湖缺失时 2 条 skip |
 
 各层细节见 `s0/README.md` 与 `s1_s3/README.md`。
 

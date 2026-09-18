@@ -10,7 +10,7 @@
 
 产物是一份新的 jsonl，`data/pulled_sessions/` 一个字节都不动。「这条不要」用
 `keep: false` + `drop_reason` 表达。原因见 common.py 顶部注释（移目录会让
-pull.py 重复下载 1722 条）。
+s0-pull.py 重复下载 1722 条）。
 
 ## 六条规则
 
