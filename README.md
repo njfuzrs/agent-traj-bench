@@ -80,7 +80,10 @@ tasks/T####/              39 条题目
 meta/                     漏斗取数源：candidates / resolved / p2p / gate / snapshots
                           + batch-v0.2.summary.json（漏斗前三行的标量）
 reports/                  T1–T7 全部报告 + trials.json（trial 级取数源）
-scripts/                  生成与复算脚本（T1→T8），含单测 tests/test_mvp.py
+scripts/                  题集生产链路（T1→T8），含单测 tests/test_mvp.py
+pipeline/                 清洗链路 S0→S3（对标 SWE-bench collect/）—— 详见 pipeline/README.md
+                          本层终点 labeled-v2.jsonl，scripts/t1 从这里接手
+data/                     原始轨迹湖（gitignore，不入库）；有凭据用 pipeline/s0/s0-pull.py 拉
 docs/eval-criteria/       ⚠️ 过程评测判据词汇表 —— 判据文档，不是可运行的评测集
                           mechanical-assertions.md  27 个机械断言键（零成本 / 不需要 judge）
                           rubric-dimensions.md      64 个 rubric 维度 / 84 条措辞原文
@@ -101,6 +104,27 @@ done   # → 全部 0
 ⚠️ **⛔ 别用裸关键词扫全仓**：`grep -rli rubric .` 现在会命中**这两份新文档本身**（自我推翻），
 而 `grep -rli fidelity` 的命中是 `tasks/` 里被测仓库的**测试文件名**、
 `unique_tools` 的命中是采集侧的**会话统计字段** —— 三者都是**同名不同源**，不是过程评测实现。
+
+## 清洗链路
+
+`pipeline/` 是这 39 道题的上游，对标 SWE-bench 的 `collect/`：**清洗代码入库，原始语料不入库。**
+
+```
+s0-pull → s0-normalize → s1-filter → s3-split → s2-desensitize → label-units
+                                                              ↓
+                                              labeled-v2.jsonl  ★ 与 scripts/ 的唯一接口
+                                                              ↓
+                                              scripts/t1-select-candidates.py
+```
+
+fresh clone 上本层跑不起来是预期的（湖未分发）。有平台凭据：
+
+```bash
+export TRAJ_PLATFORM_URL=... TRAJ_AUTH_PASS=...
+python3 pipeline/s0/s0-pull.py
+```
+
+已有湖则 `export SESSIONS_DIR=` 指过去。仓库清单外置、零第三方依赖、与 `scripts/` 的边界，见 [`pipeline/README.md`](pipeline/README.md)。
 
 ## 漏斗（从 8562 条会话到 39 道题）
 

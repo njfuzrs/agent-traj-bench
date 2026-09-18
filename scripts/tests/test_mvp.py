@@ -638,6 +638,10 @@ def test_mvp_dir_is_separate_from_v01():
     v0.1 的 844 条压根没搬过来 ⇒ 「与 v0.1 平级不混」在这里由**仓库边界**保证，
     比目录名更硬。所以判据按布局分两支，⛔ 不许直接断言 `name == "v0.2-mini"`：
     那会让公开仓的测试永久红着，而它红的不是纪律被破坏，是纪律换了实现方式。
+
+    v0.1 在 GitHub private `njfuzrs/agent-traj-corpus`（二期 §5.3）。
+    公开仓这条 `assert not (REPO_ROOT/"bench").exists()` 守的是**分仓边界**，
+    ⛔ 不是历史遗留 —— 删掉它等于允许 v0.1 的 844 条（含 273 题泄漏面）混进本仓。
     """
     if c.MVP_DIR.parent.name == "bench":
         # 源仓（trajectory-platform）：bench/v0.2-mini 与 bench/ 下 v0.1 平级
@@ -646,7 +650,9 @@ def test_mvp_dir_is_separate_from_v01():
     else:
         # 公开仓：题集在仓库根，且**不含** v0.1 的任何痕迹
         assert c.MVP_DIR == c.REPO_ROOT, f"题集根应是仓库根，实为 {c.MVP_DIR}"
-        assert not (c.REPO_ROOT / "bench").exists(), "公开仓不该有 bench/（v0.1 没搬过来）"
+        assert not (c.REPO_ROOT / "bench").exists(), (
+            "公开仓不该有 bench/ —— v0.1 在 njfuzrs/agent-traj-corpus，不是没搬完"
+        )
         assert c.MVP_TASKS.is_dir() and any(c.MVP_TASKS.iterdir())
 
 
