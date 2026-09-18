@@ -161,7 +161,47 @@ def _dist(rows: list[dict], key: str) -> dict[str, int]:
     return dict(sorted(d.items()))
 
 
-def build_readme(tasks_jsonl: str, snaps_jsonl: str, ver: str) -> str:
+def _evidence_section(evidence_jsonl: str | None) -> str:
+    """从 evidence.jsonl 现算 HF README 的 evidence 章节。文件不存在则空串。
+
+    🔴 所有数字从 jsonl 现算，⛔ 不手写。jsonl 不在时不加这一节 ——
+    这样在证据归档落地前，`t9 --check` 仍与线上逐字节一致。
+    """
+    if not evidence_jsonl or not evidence_jsonl.strip():
+        return ""
+    rows = [json.loads(x) for x in evidence_jsonl.splitlines() if x.strip()]
+    n = len(rows)
+    n_stage = sum(1 for r in rows if str(r.get("job_path", "")).startswith("_"))
+    n_jobs = n - n_stage
+    src = sum(int(r["src_bytes"] or 0) for r in rows)
+    arch = sum(int(r["archive_bytes"] or 0) for r in rows)
+    redacted = [r for r in rows if str(r.get("redacted", "no")).startswith("yes")]
+    red_lines = "\n".join(
+        f"- `{r['job_path']}`：{r['redacted']}" for r in redacted
+    ) or "（无）"
+    return f"""
+## 评测过程证据
+
+本仓 `evidence/v0.2-mini/` 含 **{n}** 个包（{n_jobs} 个 job + {n_stage} 个 stage 题面），
+合计 **{arch / 1024 / 1024:.1f} MiB**（压缩前 {src / 1024 / 1024:.1f} MiB）。
+索引：`evidence.jsonl`（{n} 行，与 GitHub `reports/evidence/MANIFEST.tsv` 同字段）。
+
+```bash
+# 只取证据层（与 39 份快照同仓，一次 clone 全拿也行）
+hf download {HF_REPO} --repo-type dataset --include "evidence/**" --local-dir ./atb-hf
+```
+
+⚠️ **{len(redacted)}** 个包经过脱敏（门禁⑤ 盯的私有仓源码路径 → `<REDACTED-PRIVATE-PATH>`）：
+{red_lines}
+其余包原样。⛔ 不许说成「证据层全部原样公开」。
+
+26 条 T6 淘汰题快照**判弃**归档（可从 `base_commit` 重建），详见 GitHub
+[`reports/evidence/README.md`](https://github.com/njfuzrs/agent-traj-bench/blob/main/reports/evidence/README.md)。
+"""
+
+
+def build_readme(tasks_jsonl: str, snaps_jsonl: str, ver: str,
+                 evidence_jsonl: str | None = None) -> str:
     """现算 HF README。⛔ 本函数里不许出现任何统计数字的字面量。
 
     7 处现算：band 分布 / category 分布 / 来源仓库 / 判分命令 / F2P·P2P 计数 /
@@ -193,6 +233,19 @@ def build_readme(tasks_jsonl: str, snaps_jsonl: str, ver: str) -> str:
     repo_txt = "、".join(f"`{r}`" for r in repos)
     single = "（**单仓库** —— 见下方局限）" if len(repos) == 1 else ""
 
+    ev_rows = [json.loads(x) for x in (evidence_jsonl or "").splitlines() if x.strip()]
+    ev_cfg = ("  - config_name: evidence\n    data_files: evidence.jsonl\n"
+              if ev_rows else "")
+    ev_sec = _evidence_section(evidence_jsonl)
+    if ev_rows:
+        ev_mib = sum(int(r["archive_bytes"] or 0) for r in ev_rows) / 1024 / 1024
+        lead_ev = f" + {len(ev_rows)} 个评测过程证据包（{ev_mib:.1f} MiB）"
+        src_ev = " / `evidence.jsonl`"
+        ev_file_row = (f"| `evidence/v0.2-mini/*.tar.zst` | {len(ev_rows)} 个评测过程证据包"
+                       f"（{ev_mib:.1f} MiB），索引见 `evidence.jsonl` |\n")
+    else:
+        lead_ev = src_ev = ev_file_row = ""
+
     return f"""---
 license: mit
 language:
@@ -214,16 +267,17 @@ configs:
     data_files: tasks.jsonl
   - config_name: snapshots
     data_files: snapshots.jsonl
----
+{ev_cfg}---
 
 # Agent-Traj-Bench {ver} — 仓库快照（{n} 份）
 
-> 🔴 **这个 HF 仓只放「跑起来必需的大文件」** —— {n} 份 base 仓库快照 + 两份索引。
+> 🔴 **这个 HF 仓只放「跑起来必需的大文件」** —— {n} 份 base 仓库快照
+> + 两份索引{lead_ev}。
 > **题目本体、判分脚本、漏斗报告、Dataset Card 全在 GitHub**：
 > <https://github.com/njfuzrs/agent-traj-bench>
 >
-> ⚠️ 本页数字全部由 `scripts/t9-publish-hf.py` 从 `tasks.jsonl` / `snapshots.jsonl`
-> 现算，⛔ 没有手写数字。复现：`python3 scripts/t9-publish-hf.py --check`（$0、免凭证，
+> ⚠️ 本页数字全部由 `scripts/t9-publish-hf.py` 从 `tasks.jsonl` / `snapshots.jsonl`{src_ev} 现算，
+> ⛔ 没有手写数字。复现：`python3 scripts/t9-publish-hf.py --check`（$0、免凭证，
 > 与本页逐字节比对）。
 
 ## 为什么拆成两个仓
@@ -239,7 +293,7 @@ configs:
 | `snapshots/T####.tar.gz` | {n} 份 base 仓库快照，文件名 = task_id |
 | `snapshots.jsonl` | {n} 行，每行含 `task_id` / `base_commit` / `tar_sha256` / `tar_bytes` / `test_cmd` 等 |
 | `tasks.jsonl` | {n} 行题目索引：`band` / `category` / `f2p` / `p2p` / `instruction_len` |
-
+{ev_file_row}
 ⚠️ `snapshots.jsonl` 已**裁到交付的 {n} 条**。上游 `meta/snapshots.jsonl` 是 {n_up} 条
 （含 {n_t6} 条 T6 复核淘汰 + {n_registry} 条因私有 registry 被排除）⇒ ⛔ 别拿那份的条数对本仓。
 
@@ -305,7 +359,7 @@ cd ../agent-traj-bench && python scripts/t4-build-env.py --from-snapshots ../atb
 Agent-Traj-Bench {ver}. njfuzrs, 2026.
 https://github.com/njfuzrs/agent-traj-bench
 ```
-"""
+{ev_sec}"""
 
 
 def verify_tars(tars_dir: Path, snaps_jsonl: str) -> tuple[int, list[str]]:
@@ -446,7 +500,9 @@ def main() -> int:
     ids = delivered_ids()
     tasks_jsonl = build_tasks_jsonl(ids)
     snaps_jsonl = build_snapshots_jsonl(ids)
-    readme = build_readme(tasks_jsonl, snaps_jsonl, version())
+    ev_path = c.MVP_REPORTS / "evidence" / "evidence.jsonl"
+    ev_text = ev_path.read_text(encoding="utf-8") if ev_path.is_file() else None
+    readme = build_readme(tasks_jsonl, snaps_jsonl, version(), evidence_jsonl=ev_text)
     built = {"README.md": readme, "tasks.jsonl": tasks_jsonl,
              "snapshots.jsonl": snaps_jsonl}
 
