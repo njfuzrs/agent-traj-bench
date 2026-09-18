@@ -47,7 +47,7 @@ from pathlib import Path
 #
 # 仓内默认值只含**已公开披露**的 10 个仓。真实清单 18 个，另外 8 个是未披露的
 # 内网仓，不入库 ⇒ 跑真清洗要指到仓外的完整清单：
-#   export REPO_MAP_CONFIG=<trajectory-platform>/data/bench-staging/repos.json
+#   export REPO_MAP_CONFIG=<仓外完整清单，采集机上可指 data/bench-staging/repos.json>
 # 清单不全的后果是「少反解出几个仓」（那些会话记 unresolved），不会算错。
 _CFG = os.environ.get(
     "REPO_MAP_CONFIG",
@@ -248,7 +248,7 @@ def load_legacy_trashed(path: str | None = None) -> set[str]:
     **不完整** —— 移出 1721 条，主目录里还剩 769 条同样 steps==0 的没被移。
     所以「谁进过 _trash」不可由规则复现，属于历史事实。
 
-    为什么目录移回了主目录：pull.py:246 的去重只查
+    为什么目录移回了主目录：s0-pull.py 的 should_skip 去重只查
     `data/pulled_sessions/<sid>/.pulled`，目录移走时标记跟着走了，
     should_skip 判为「未拉取」→ 下次 pull 会把这 1722 条全部重下（实测
     --list-only：待拉取 2601 条里 1722 条正是它们）。改为「原始层只增不删，

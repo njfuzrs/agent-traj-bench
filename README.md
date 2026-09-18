@@ -134,9 +134,11 @@ done   # → 全部 0
 1. **快照不在 git 里**（259.9MB）⇒ fresh clone 跑不起来，须走上文 ② 重建。
 2. **`mirror` 只在采集机**：`scripts/t4-build-env.py` 的默认模式从 19 个 bare 仓重建，
    那些仓没有分发 ⇒ **别人只能用 `--from-snapshots`**。
-3. **原始轨迹（66G）未随仓迁出** ⇒ T1/T2（从轨迹反解题面）在本仓跑不了，
-   相关自证会如实报「跑不起来」（退出码 5）而**不是**假装守卫失效。
-   要真跑请 `export SESSIONS_DIR=<trajectory-platform>/data/pulled_sessions`。
+3. **原始轨迹不入库**（66G，gitignore 的 `data/pulled_sessions/`）⇒
+   T1/T2（从轨迹反解题面）在 fresh clone 上跑不了，相关自证会如实报
+   「跑不起来」（退出码 5）而**不是**假装守卫失效。
+   有平台凭据时用 `python3 pipeline/s0/s0-pull.py` 拉到本仓 `data/`；
+   已有湖则 `export SESSIONS_DIR=` 指过去。
 4. **`tasks/T0011/instruction.md` 含一句带真实用户名与主机名的 shell 提示符**
    （`zhourusheng@zhourushengdeMacBook-Pro sid-code % sc`）。它是开发者当时那句话的原文；
    两个字符串在公开的 sid-code 仓里已经存在（用户名是其 MIT LICENSE 的署名人）。

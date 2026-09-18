@@ -24,7 +24,8 @@ python3 s0/verify-s0.py --sample 150
 | `archive-repos.sh` | `git clone --mirror` 冻结全部仓库的完整 refs | 进入新阶段前重跑一次（幂等，只增量拉新 refs） |
 | `verify-archive.sh` | 归档验收：抽样 commit 对象完整 + 逐 ref 比对 + worktree tip | 每次进入新阶段（当作入口门禁） |
 | `repo_map.py` | 路径→仓库映射、`working_directory` 三路加权反解、会话目录枚举、两份清单加载 | 被下面几个脚本引用，不单独跑 |
-| `s0-normalize.py` | S0 归一化：`session.traj` → `sessions-v2.jsonl` + `instructions/<sid>.txt` | 每次 `pull.py` 拉了新数据之后 |
+| `s0-pull.py` | 平台 HTTP → `data/pulled_sessions/`（gitignore）。URL/口令走环境变量，仓内无默认端点 | 有凭据要填湖时 |
+| `s0-normalize.py` | S0 归一化：`session.traj` → `sessions-v2.jsonl` + `instructions/<sid>.txt` | 每次 `s0-pull.py` 拉了新数据之后 |
 | `verify-s0.py` | 七组验收门禁 + `--self-test` 反向自证 | S0 之后；改动 S0 逻辑后跑自证 |
 | `freeze-batch.py` | 冻结批次：sid 清单 + 内容指纹 + 截止时间戳 | 决定「这一批就洗到这里」时 |
 | `excluded-paths.txt` | 自指污染排除清单，S4 强制引用 | 数据文件，不跑 |
@@ -45,12 +46,15 @@ python3 s0/verify-s0.py --sample 150
 ## 标准流程：拉了新数据之后
 
 ```bash
-# ① 拉取（凭据从 backend/.env 取，不要写进命令历史）
-#    ⚠️ 用 --workers 2，别用默认值 5 —— 实测 8 并发会把服务端压出 HTTP 502：
-#    8 并发 653 条失败 / 3 并发 357 / 2 并发 219，串行重试则全部成功。
+# ① 拉取（地址和口令走环境变量，仓内无默认、不要写进命令历史）
+#    ⚠️ 用 --workers 2：实测 8 并发会把服务端压出 HTTP 502
+#    （8 并发 653 条失败 / 3 并发 357 / 2 并发 219，串行重试则全部成功）。
 #    502 不是数据损坏（无一条 missing），纯粹是并发承载问题。
-export TRAJ_AUTH_PASS="$(grep '^AUTH_PASSWORD=' backend/.env | cut -d= -f2-)"
-python3 pull.py --workers 2
+export TRAJ_PLATFORM_URL=...          # 必填
+export TRAJ_AUTH_PASS=...             # 必填
+export TRAJ_AUTH_USER=admin           # 可选
+python3 s0/s0-pull.py --workers 2
+# 若当前目录不是仓根：python3 pipeline/s0/s0-pull.py --workers 2
 
 # ② 重跑 S0（全量幂等，8 进程约 20 秒）
 python3 s0/s0-normalize.py --workers 8
@@ -66,7 +70,7 @@ python3 s0/freeze-batch.py --version v0.2
 
 **① 不要靠移目录来表达「淘汰」。**
 
-`pull.py:246` 的去重只查 `data/pulled_sessions/<sid>/.pulled`。把会话目录移走，
+`s0-pull.py` 的 `should_skip` 去重只查 `data/pulled_sessions/<sid>/.pulled`。把会话目录移走，
 标记跟着走，下次拉取就判为「未拉取」并重新下载 —— 上一轮的 `_trash/` 正是如此，
 实测让 1722 条会话进了待拉取清单（占 2601 条的 66%）。
 

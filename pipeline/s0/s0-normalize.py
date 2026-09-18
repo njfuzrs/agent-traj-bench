@@ -288,7 +288,7 @@ def process_one(sid: str) -> dict | None:
         # 字段集与模型分布都不同，混在一起统计会得出错误结论。见 repo_map.detect_agent_source
         "agent_source": repo_map.detect_agent_source(sid, metadata),
         # 上一轮被手工移入 _trash/ 的会话。原始层只增不删，淘汰在元数据层表达 ——
-        # 目录已移回主目录（否则 pull.py 会把这 1722 条全部重下）
+        # 目录已移回主目录（否则 s0-pull.py 会把这 1722 条全部重下）
         "legacy_trashed": sid in repo_map.load_legacy_trashed(),
         "has_raw": os.path.exists(raw_path),
         "has_events": os.path.exists(events_path),

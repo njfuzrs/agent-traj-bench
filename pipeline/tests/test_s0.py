@@ -493,7 +493,7 @@ def test_legacy_trashed_cache_not_poisoned():
 def test_legacy_trashed_all_still_on_disk():
     """清单里的会话必须都在主目录 —— 这是「移回主目录」这个修复的核心断言
 
-    若哪天有人又把它们移走，pull.py 会再次把 1722 条全部重下（去重只查
+    若哪天有人又把它们移走，s0-pull.py 会再次把 1722 条全部重下（去重只查
     data/pulled_sessions/<sid>/.pulled）。这条测试就是防这个回归。
     """
     sessions_dir = Path(os.environ.get("SESSIONS_DIR", "data/pulled_sessions"))
@@ -502,7 +502,7 @@ def test_legacy_trashed_all_still_on_disk():
     sids = repo_map.load_legacy_trashed()
     missing = [s for s in sids if not (sessions_dir / s).is_dir()]
     assert not missing, (
-        f"{len(missing)} 条已不在主目录，pull.py 会把它们重新下载一遍："
+        f"{len(missing)} 条已不在主目录，s0-pull.py 会把它们重新下载一遍："
         f"{missing[:5]}"
     )
 
@@ -514,7 +514,7 @@ def test_no_trash_dir_reintroduced():
         pytest.skip(f"数据目录不存在：{sessions_dir}")
     trash = sessions_dir / "_trash"
     assert not trash.exists(), (
-        "_trash/ 又出现了。移目录会让 pull.py 的 .pulled 去重失效并重复下载；"
+        "_trash/ 又出现了。移目录会让 s0-pull.py 的 .pulled 去重失效并重复下载；"
         "淘汰请用 S0 索引的字段标注（legacy_trashed / excluded_hit）表达。"
     )
 

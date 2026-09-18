@@ -128,7 +128,7 @@ python3 s1_s3/query-units.py --boundary-confidence high \
 
 **① 淘汰不移目录，不删记录。**
 
-与 Phase 0 同一条纪律，原因也一样（`pull.py:246` 的去重只看
+与 Phase 0 同一条纪律，原因也一样（`s0-pull.py` 的 `should_skip` 去重只看
 `data/pulled_sessions/<sid>/.pulled`，移目录会让 1722 条重复下载）。S1 和 S3 的
 产物都是**全量记录 + `keep` 字段 + `drop_reason`**，淘汰的条目留在文件里。
 `common.py` 顶部与两处门禁盯着这件事。

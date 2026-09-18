@@ -4,7 +4,7 @@
     {
       "path": "meta/batch-v0.2.json",
       "reason": "2.51MB，sessions[] 含 8562 条会话 ID，repo_dist 含 13 个仓名条目（其中 5 个 ruijie/*，4 个未披露）⇒ 不可公开。实测 grep 命中：sid 形态 8256、内网名 1057。派生标量已入库为 meta/batch-v0.2.summary.json。",
-      "where_to_find": "trajectory-platform: data/bench-staging/meta/batch-v0.2.json",
+      "where_to_find": "采集机本地（gitignore）：data/bench-staging/meta/batch-v0.2.json",
       "sha256_prefix": "7091e58a0c2a"
     },
     {

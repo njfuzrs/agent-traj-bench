@@ -12,7 +12,7 @@
 ## 为什么产物要另建目录而不在原始层加工
 
 `data/pulled_sessions/`（62GB、8562 条）是**只读数据湖**。这不是洁癖，是踩过的坑：
-`pull.py:246` 的去重只查 `data/pulled_sessions/<sid>/.pulled`，把会话目录移走、
+`s0-pull.py` 的 `should_skip` 去重只查 `data/pulled_sessions/<sid>/.pulled`，把会话目录移走、
 改名或删除，标记就跟着走，下次同步判为「未拉取」并重新下载 —— 上一轮把 1722 条
 移进 `_trash/` 正是如此（实测待拉取从 879 涨到 2601，多出来的 1722 条就是它们）。
 

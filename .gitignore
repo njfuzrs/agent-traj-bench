@@ -23,6 +23,12 @@ reports/t8-fix/exp-fix/
 reports/t8-fix/exp-concurrency-n6/
 reports/t8-fix/stage/
 
+# ── 分析湖与清洗 staging（62G + 4.4G）────────────────────────────────
+#
+# 🔴 走 pipeline/s0/s0-pull.py 从平台 HTTP 拉到本机，⛔ 不入 git。
+# clone 后这两个目录不存在是预期的；有凭据再拉，或 export SESSIONS_DIR / TRAJ_PULL_DIR。
+data/
+
 # ── Python ────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

@@ -137,10 +137,10 @@ def check_index(records: list[dict]):
         else:
             ok(f"与磁盘对账一致（{len(on_disk)} 条 session.traj 全部进索引）")
 
-        # _trash/ 不应再出现：移目录会让 pull.py 的 .pulled 去重失效并重复下载
+        # _trash/ 不应再出现：移目录会让 s0-pull.py 的 .pulled 去重失效并重复下载
         if os.path.isdir(os.path.join(SESSIONS_DIR, "_trash")):
             fail("_trash/ 又出现了 —— 淘汰须用索引字段标注表达，不靠移目录"
-                 "（移走会让 pull.py 把这批会话全部重新下载）")
+                 "（移走会让 s0-pull.py 把这批会话全部重新下载）")
         else:
             ok("无 _trash/ 目录（淘汰在元数据层表达）")
 
@@ -425,7 +425,7 @@ def check_agent_source(records: list[dict]):
                 no_traj.append(sid)
         if gone:
             fail(f"清单里有 {len(gone)} 条会话的目录已不在 {SESSIONS_DIR} —— "
-                 f"又被移出主目录了，会让 pull.py 重复下载"
+                 f"又被移出主目录了，会让 s0-pull.py 重复下载"
                  f"（§9.2 问题 1）：{sorted(gone)[:3]}")
         else:
             ok(f"清单 {len(listed)} 条的目录全部在主目录内（未再被移走）")

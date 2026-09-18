@@ -815,7 +815,7 @@ def test_all_agent_sources_covered():
 
 
 def test_output_paths_outside_data_lake():
-    """产物目录必须在数据湖之外 —— 移动/改写原始层会让 pull.py 重复下载
+    """产物目录必须在数据湖之外 —— 移动/改写原始层会让 s0-pull.py 重复下载
 
     上一轮把 1722 条移进 _trash/，实测让待拉取从 879 涨到 2601 条。
     """
