@@ -93,3 +93,41 @@ python3 scripts/t10-archive-evidence.py --root <runs根> --out <近线目录> --
 
 `--scan-packed` 会把每个包解到临时目录再跑门禁⑤。⛔ 不许用 `grep -I` 扫 `.tar.zst`
 本身（跳过二进制 ⇒ 恒绿）。
+
+## 验「归档够不够用」
+
+```bash
+python3 scripts/t11-attribute-from-hf.py        # 只从 HF 取包，⛔ 不读任何本地副本
+```
+
+判据是**复现两份报告里已发表的数字**，⛔ 不是「跑完没报错」：
+
+| 批次 | 报告 | 已发表 | 复算 |
+|---|---|---|---|
+| `baseline/2026-09-12__23-46-37` | `reports/baseline-v0.2-mini.md` | pass@1 = 0/39 | ✅ |
+| `t8-rerun/2026-09-13__19-35-38` | `reports/baseline-v0.2-mini-t8-rerun.md` | 14/37 = 37.8% | ✅ |
+
+⚠️ **分母不是数出来的，是报告的结论。** 那两批把 `T0009`、`T0022` 按 infra 排除出分母，
+而这两条**都写了 `verifier/reward.json`**（reward 0.0）⇒ 光看分数分不出「答错」与「仪器坏了」。
+⇒ 脚本另外逐条验证 infra 特征在归档证据里找得到 —— 这才是「证据够用」的真判据：
+
+- `T0022`：`socket connection was closed unexpectedly` 命中 6 个文件
+- `T0009`：`exception.txt` 尾部 `ValueError: embedded null byte`，且 `agent/` 下
+  **没有** `sid-code.jsonl` ⇒ agent 一个字没跑
+
+🔴 `T0009` 那条要注意：报告散文写的成因是容器内 `Argument list too long`，
+但**归档证据里的特征是 harbor 侧那个 ValueError** —— 实测 `Argument list too long`
+在包内命中 **0**。⛔ 别拿报告的散文当 grep 模式：成因与特征是两件事。
+
+## 原件已删（2026-09-18）
+
+`_archive/bench-evidence-raw/v0.2-mini-reports/`（3.8 G）已删除。删除前的判据：
+
+1. 22 个包**逐包**核对 tar 成员与源树条目数，无缺无多（⛔ 不只比 sha256 ——
+   那只证明包没坏，不证明包含全了源树）
+2. 从 HF 下回 22 个包 sha256 与清单逐份相符
+3. `t11-attribute-from-hf.py` 从 HF 取包复现了两份报告的已发表数字
+
+⚠️ `_archive/bench-evidence-raw/pre-redact-originals/`（49 M，10 个文件）**未删**：
+它是那 823 处私有仓源码路径的**唯一剩余副本**（HF 上只有脱敏后版本）。
+留着是为了「万一要证明脱敏改了什么」；⛔ 它不许进任何公开落点。
