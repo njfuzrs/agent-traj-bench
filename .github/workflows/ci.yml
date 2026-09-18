@@ -322,13 +322,28 @@ jobs:
           PY
           echo "✅ pipeline 零第三方依赖"
 
+      # ── 门禁⑫ tasks/ 无 5 个污染字段 ──────────────────────────────
+      # 5 个字段（tool_result_content / response_content / patch_content /
+      # observation_content / completion_text）是上一轮 agent 输出。
+      # 进了 tasks/ 等于让被测 agent 看到答案。sid-code 原扫描器扫的是
+      # evals/real-tasks/**.yaml；本仓没有 yaml case，同等扫描 = 扫 tasks/。
+      #
+      # 🔴 空集必须红（脚本 exit 2）：sid-code 删掉 real-tasks 后原扫描器对
+      # 空集仍返回 0，那是已知中间态。这边不许复发成「防线全在、调用全 0」。
+      # ⚠️ 作用域只扫 tasks/：scripts/ 与 reports/ 讨论这条防线时会写出字段名，
+      # 那不是污染。⛔ 别改成全仓 grep —— 上线即红，然后被人加 || true 关掉。
+      - name: gate12 - tasks/ 无 5 个污染字段
+        run: |
+          set -euo pipefail
+          python3 scripts/check-contamination.py
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。
       - name: 单测
         run: |
           pip install --quiet pytest
-          cd scripts && python -m pytest tests/test_mvp.py -q
+          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py -q
       # ── pipeline 单测 ──────────────────────────────────────────────
       # ⚠️ 没有原始轨迹的那 2 条会 skip 并说明原因（实测 195 passed / 2 skipped）。
       # ⛔ 不许因为 CI 里 skip 就删掉它们 —— 在采集机上是真跑的。
