@@ -337,6 +337,12 @@ jobs:
           set -euo pipefail
           python3 scripts/check-contamination.py
 
+      # ── 门禁⑮ 判分加固自洽（T02，traj 缺陷 2）──────────────────────
+      # 39 份 test.sh 必须走判分方配置（bun test --config）+ 按 base blob 还原，且等于现拼结果。
+      # 🔴 只还原 *.test.ts 时，改 bunfig.toml 的 preload 一行源码不改即拿 reward=1（容器实证）。
+      - name: gate15 - 判分加固自洽
+        run: python scripts/build-verifier-pins.py --check
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。

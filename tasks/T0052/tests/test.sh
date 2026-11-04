@@ -20,40 +20,51 @@ cd /repo
 # （src/ 3 个、packages/ 2 个），只还原 tests/ 会漏掉它们；
 # 而 `git clean -fd src/` 会删掉 agent 新建的源码，即删掉它的解答本体。
 # 名单由 T3 生成时字面写入。
-git checkout -- 'tests/goal/evaluator.test.ts' 2>/dev/null || true
-git checkout -- 'tests/goal/goal-gate.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/provider-anthropic-conformance.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/stream-lifecycle.test.ts' 2>/dev/null || true
-git checkout -- 'tests/goal/blocked-detector.test.ts' 2>/dev/null || true
-git checkout -- 'tests/goal/budget.test.ts' 2>/dev/null || true
-git checkout -- 'tests/goal/evidence-collector.test.ts' 2>/dev/null || true
-git checkout -- 'tests/goal/state-and-reminder.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/availability.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/capabilities.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/effort.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/error-messages.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/errors.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/fallback.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/mock-provider.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/openai-protocol-edge.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/openai-responses.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/openai.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/parseSSE-signal-abort.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/protocol-sentinel.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/provider-conformance.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/provider-protocol-contract.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/quota.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/registry.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/retry-telemetry.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/router-mock-integration.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/sanitize-unicode.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/secret-redact.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/sse-chunk-dumper.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/sse-reasoning-leak-e2e.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/stream-guard-content-progress.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/stream-interrupt-recovery.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/stream-level-error.test.ts' 2>/dev/null || true
-git checkout -- 'tests/llm/token-estimator.test.ts' 2>/dev/null || true
+# 🔴 按 base blob 还原（T02）：git checkout -- 会还原出 agent 自己 commit 进去的版本
+restore_pinned() {
+  mkdir -p "$(dirname "$1")"
+  if ! git cat-file blob "$2" > "$1" 2>/dev/null; then
+    echo "PROTECTED_BLOB_MISSING $1 $2" >> /logs/verifier/apply.log
+    # error_code=6 = 被保护文件的 base blob 取不到（对象库被动过）
+    printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error_code":6}\n' > /logs/verifier/reward.json
+    echo 0 > /logs/verifier/reward.txt
+    exit 0
+  fi
+}
+restore_pinned 'tests/goal/blocked-detector.test.ts' '5668730bab23c6de47c5a96b5643f27986e14100'
+restore_pinned 'tests/goal/budget.test.ts' '2e5bd5ed19bd9010c8bf1dc3ead037867670e6f8'
+restore_pinned 'tests/goal/evaluator.test.ts' '8ccda13437a8960bb2e8b6aa8a954b4339c96aa2'
+restore_pinned 'tests/goal/evidence-collector.test.ts' '7383720f65998bf3f8537928451455756a1a6ac7'
+restore_pinned 'tests/goal/goal-gate.test.ts' 'cf895decf41854087426361f1f93aa51b1830a3c'
+restore_pinned 'tests/goal/state-and-reminder.test.ts' '75bb1658a477beae31ecce0b872c350ae3a8002a'
+restore_pinned 'tests/llm/availability.test.ts' '7aa5b2c8597fe62b498151f1d89f4c4080e53dd2'
+restore_pinned 'tests/llm/capabilities.test.ts' 'd89e24b2f45f2726de13db4289acecd5155581af'
+restore_pinned 'tests/llm/effort.test.ts' 'e1deb0356c4ab1b53a0bc41384016b6bfb5a4967'
+restore_pinned 'tests/llm/error-messages.test.ts' '8787a9f15f21c544b471f28f2d573edd12c75543'
+restore_pinned 'tests/llm/errors.test.ts' '1498d7ce3c696807b60487be822401ef541d468d'
+restore_pinned 'tests/llm/fallback.test.ts' 'c5ed2543efd93251a92ce3b732861f3e3b59db22'
+restore_pinned 'tests/llm/mock-provider.test.ts' '8c330d0ea7bff82146fe7ede2f578b322d1ab877'
+restore_pinned 'tests/llm/openai-protocol-edge.test.ts' 'c2019424270a7879022a20784fef3568634d86cc'
+restore_pinned 'tests/llm/openai-responses.test.ts' '5e4f77bfd35db1b12026724447a6d38d8a00dcfc'
+restore_pinned 'tests/llm/openai.test.ts' '80e26c6abb1c4438c7e3eaa29e6a27175efbe227'
+restore_pinned 'tests/llm/parseSSE-signal-abort.test.ts' '4d3dabbcab244d5e41d912cdc74205d91de69d77'
+restore_pinned 'tests/llm/protocol-sentinel.test.ts' '8febdce3c47d1dceeea396cea3c12f820a7fa584'
+restore_pinned 'tests/llm/provider-anthropic-conformance.test.ts' '46fee72098570a37848c5d4efff8dcaad585143b'
+restore_pinned 'tests/llm/provider-conformance.test.ts' '9808b3dda7c6baf4011ff6b09ead5e48ea90e92e'
+restore_pinned 'tests/llm/provider-protocol-contract.test.ts' 'd1a413421fc69165ca85b0130e208d89f000c6e8'
+restore_pinned 'tests/llm/quota.test.ts' '2997a739aa369422ac9f04b4b183dfda98390c0a'
+restore_pinned 'tests/llm/registry.test.ts' 'aa18fb8d52442ff010e3551daa6e93fd172af26f'
+restore_pinned 'tests/llm/retry-telemetry.test.ts' '62ac965ed105df9135904406de38afeda54ee6c5'
+restore_pinned 'tests/llm/router-mock-integration.test.ts' '118209ae15234a7e8a59e69fc3fb975320b68922'
+restore_pinned 'tests/llm/sanitize-unicode.test.ts' '5908ade75efbfed79dc267053c35015b45e924aa'
+restore_pinned 'tests/llm/secret-redact.test.ts' '048fa05523661cd9f799392f7ec4d2666237c2bf'
+restore_pinned 'tests/llm/sse-chunk-dumper.test.ts' 'f0733db4dd84b4dee226a61f42d1b4752c2b4991'
+restore_pinned 'tests/llm/sse-reasoning-leak-e2e.test.ts' 'f6fcf25f005d54c505bcdb1569cba3dad7a261ff'
+restore_pinned 'tests/llm/stream-guard-content-progress.test.ts' '45a04818a67a47cc28af45887e2e6e4c00c70799'
+restore_pinned 'tests/llm/stream-interrupt-recovery.test.ts' '4e4e9b9fa7a7daa1c8061fd334c8bc0039d565ee'
+restore_pinned 'tests/llm/stream-level-error.test.ts' '80256bb5c7e2a696c5df5318c4eaea3e967d33f1'
+restore_pinned 'tests/llm/stream-lifecycle.test.ts' '42325f9d3aed1990582754a7833887516ce2989b'
+restore_pinned 'tests/llm/token-estimator.test.ts' '690efd9d0d455a0807c754d3160d5f34d7a28746'
 # （本条 task 无 agent 可能新建的测试文件需删除）
 
 # ── 规则3：test_patch 在 verifier 阶段应用，不在 agent 阶段 ────────
@@ -72,9 +83,9 @@ fi
 # ── 规则5+6：名单字面写入，走 --reporter=junit 结构化输出 ──────────
 # ⚠️ 不许 grep 日志文本判分（R1 经典成因：格式一变就恒真/恒假且不报错）
 # ⚠️ test_cmd 取自 base 时点的 package.json（§3.5），不同 base 可能不同
-bun test --reporter=junit --reporter-outfile=/logs/verifier/f2p.xml 'tests/goal/evaluator.test.ts' 'tests/goal/goal-gate.test.ts' 'tests/llm/provider-anthropic-conformance.test.ts' 'tests/llm/stream-lifecycle.test.ts' \
+bun test --config=/tests/bunfig.verifier.toml --reporter=junit --reporter-outfile=/logs/verifier/f2p.xml 'tests/goal/evaluator.test.ts' 'tests/goal/goal-gate.test.ts' 'tests/llm/provider-anthropic-conformance.test.ts' 'tests/llm/stream-lifecycle.test.ts' \
   > /logs/verifier/f2p.log 2>&1 || true
-bun test --reporter=junit --reporter-outfile=/logs/verifier/p2p.xml 'tests/llm/errors.test.ts' 'tests/llm/fallback.test.ts' 'tests/llm/effort.test.ts' 'tests/llm/openai-protocol-edge.test.ts' 'tests/llm/mock-provider.test.ts' 'tests/llm/capabilities.test.ts' 'tests/llm/token-estimator.test.ts' 'tests/llm/provider-conformance.test.ts' 'tests/llm/secret-redact.test.ts' 'tests/llm/quota.test.ts' 'tests/llm/registry.test.ts' 'tests/llm/error-messages.test.ts' 'tests/llm/openai.test.ts' 'tests/llm/availability.test.ts' 'tests/llm/stream-interrupt-recovery.test.ts' 'tests/goal/evidence-collector.test.ts' 'tests/llm/stream-level-error.test.ts' 'tests/llm/provider-protocol-contract.test.ts' 'tests/llm/router-mock-integration.test.ts' 'tests/llm/sanitize-unicode.test.ts' 'tests/goal/budget.test.ts' 'tests/goal/state-and-reminder.test.ts' 'tests/llm/openai-responses.test.ts' 'tests/goal/blocked-detector.test.ts' 'tests/llm/protocol-sentinel.test.ts' 'tests/llm/sse-chunk-dumper.test.ts' 'tests/llm/parseSSE-signal-abort.test.ts' 'tests/llm/retry-telemetry.test.ts' 'tests/llm/sse-reasoning-leak-e2e.test.ts' 'tests/llm/stream-guard-content-progress.test.ts' \
+bun test --config=/tests/bunfig.verifier.toml --reporter=junit --reporter-outfile=/logs/verifier/p2p.xml 'tests/llm/errors.test.ts' 'tests/llm/fallback.test.ts' 'tests/llm/effort.test.ts' 'tests/llm/openai-protocol-edge.test.ts' 'tests/llm/mock-provider.test.ts' 'tests/llm/capabilities.test.ts' 'tests/llm/token-estimator.test.ts' 'tests/llm/provider-conformance.test.ts' 'tests/llm/secret-redact.test.ts' 'tests/llm/quota.test.ts' 'tests/llm/registry.test.ts' 'tests/llm/error-messages.test.ts' 'tests/llm/openai.test.ts' 'tests/llm/availability.test.ts' 'tests/llm/stream-interrupt-recovery.test.ts' 'tests/goal/evidence-collector.test.ts' 'tests/llm/stream-level-error.test.ts' 'tests/llm/provider-protocol-contract.test.ts' 'tests/llm/router-mock-integration.test.ts' 'tests/llm/sanitize-unicode.test.ts' 'tests/goal/budget.test.ts' 'tests/goal/state-and-reminder.test.ts' 'tests/llm/openai-responses.test.ts' 'tests/goal/blocked-detector.test.ts' 'tests/llm/protocol-sentinel.test.ts' 'tests/llm/sse-chunk-dumper.test.ts' 'tests/llm/parseSSE-signal-abort.test.ts' 'tests/llm/retry-telemetry.test.ts' 'tests/llm/sse-reasoning-leak-e2e.test.ts' 'tests/llm/stream-guard-content-progress.test.ts' \
   > /logs/verifier/p2p.log 2>&1 || true
 
 # 规则7：score.py 写 reward / f2p / p2p 三个键（缺一个 T5 就退化成单值判定）
