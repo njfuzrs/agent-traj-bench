@@ -60,6 +60,30 @@ RECHECK = c.MVP_REPORTS / "t6-recheck"
 #: 🔴 所以 card 里凡是引用某批读数的地方都必须**写明是哪一批** —— 见 `build_card()`。
 CARD = c.MVP_DIR / "DATASET_CARD.md"
 
+#: card 唯一允许引用的批次。
+#: 🔴 traj 缺陷 11：card 顶行与 README 曾写 `t7-report.py --card`（缺 `--runs`），
+#: 照抄会用 `--runs` 默认值 `baseline`（第一轮，已作废）把 card 覆盖成 0.0%（0/39），
+#: 退出码 0、无警告。⛔ 不改 `--runs` 默认值来修：`baseline` 默认是为了保住第一轮复现
+#: （`test_both_scripts_expose_the_same_runs_switch` 锁着），要拦的是「拿非正式批次写 card」。
+#: 换正式批次时只改这一个常量，card 顶行印出的复算命令跟着变。
+CARD_RUNS = "t8-rerun"
+
+
+def card_replay_command() -> str:
+    """card 顶行印出的复算命令。⛔ 必须是**原样照抄就能逐字节复现 card** 的那条。"""
+    return f"{SCRIPTS_REL}/t7-report.py --runs {CARD_RUNS} --card"
+
+
+def denominator_sentence(n_scored: int, n_total: int, note: str) -> str:
+    """「分母是 X 而不是 Y」。
+
+    🔴 X == Y 时原模板会拼出「分母是 39 而不是 39」这种废话且不报错（缺陷 11 实测）。
+    相等是合法状态（某批恰好没有 infra 排除），所以不 assert，换一句如实的话。
+    """
+    if n_scored == n_total:
+        return f"> **分母 = 存活数 {n_total}**：本批没有 infra 排除。{note}"
+    return f"> **分母是 {n_scored} 而不是 {n_total}**：{note}"
+
 
 def _retarget(runs_name: str) -> None:
     """把取数源与产物路径整组切到另一批。
@@ -1578,7 +1602,7 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         "# Agent-Traj-Bench v0.2-mini — Dataset Card",
         "",
         f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，"
-        f"由 `{SCRIPTS_REL}/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
+        f"由 `{card_replay_command()}` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
         "",
         "## 这是什么",
         "",
@@ -1636,7 +1660,7 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         f"| k | {k}（`-n {n_conc}`） |",
         f"| 实付 | ${cost['total']}（{cost['n_with_cost']}/{cost['n_trials']} 个 trial 有成本值） |",
         "",
-        f"> **分母是 {res['n']} 而不是 {len(surv)}**：{res['denominator_note']}",
+        denominator_sentence(res["n"], len(surv), res["denominator_note"]),
         "",
         f"完整报告（13 节，含真 0/假 0 逐条归因）：`{_rel(REPORT)}`　"
         f"机器可读取数源：`{_rel(SUMMARY)}`",
@@ -1693,6 +1717,15 @@ def main() -> int:
                     help="同时写 DATASET_CARD.md（方案 §6 点名要的那份）。"
                          "⚠️ card 只有一份、不随 --runs 切，里面引用读数处会写明是哪一批")
     args = ap.parse_args()
+
+    # 🔴 traj 缺陷 11：card 只有一份，任何批次的 --card 都写同一个文件 ⇒
+    # 拿作废批次跑 --card 会静默覆盖正式 card。在读任何产物、写任何文件**之前**拒绝。
+    if args.card and args.runs != CARD_RUNS:
+        raise SystemExit(
+            f"⛔ 拒绝写 dataset card：--runs {args.runs} 不是 card 引用的批次（{CARD_RUNS}）。\n"
+            f"   复算 card 用：{card_replay_command()}\n"
+            "   只想看这一批的报告就去掉 --card（报告文件名带批次名，不会覆盖别的批次）。"
+        )
 
     if args.runs != "baseline":
         _retarget(args.runs)

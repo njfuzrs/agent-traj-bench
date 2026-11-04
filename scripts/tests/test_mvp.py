@@ -4750,3 +4750,46 @@ def test_common_module_is_not_shared_with_pipeline_layer():
     """
     assert Path(c.__file__).resolve().is_relative_to(MVP), \
         f"import common 拿到了 {c.__file__} —— 不是本层那份，说明与 pipeline/ 层撞了"
+
+
+# T01 / traj 缺陷 11：card 自述的复算命令必须原样照抄就能复现，作废批次不许写 card
+
+def test_card_refuses_non_card_batch_without_touching_any_file():
+    """🔴 缺 `--runs` 跑 `--card` 曾静默把 card 覆盖成作废批次的 0.0%（退出码 0）。
+
+    判据看**磁盘**，不只看退出码：拒绝必须发生在写任何产物之前。
+    """
+    tracked = [REPO_ROOT / "DATASET_CARD.md",
+               REPO_ROOT / "reports" / "baseline" / "summary.json",
+               REPO_ROOT / "reports" / "baseline-v0.2-mini.md"]
+    before = {p: p.read_bytes() for p in tracked if p.exists()}
+    proc = subprocess.run([sys.executable, str(MVP / "t7-report.py"), "--card"],
+                          capture_output=True, text=True, cwd=REPO_ROOT)
+    assert proc.returncode != 0, "缺 --runs 跑 --card 必须报错，而不是静默写 card"
+    assert "拒绝写 dataset card" in (proc.stdout + proc.stderr)
+    assert "--runs t8-rerun --card" in (proc.stdout + proc.stderr), "报错里要给出正确命令"
+    after = {p: p.read_bytes() for p in tracked if p.exists()}
+    assert before == after, "拒绝路径上仍改写了已提交产物"
+
+
+def test_committed_card_states_the_command_that_reproduces_it():
+    """card 顶行印的命令 == 脚本认定的复算命令，且带 `--runs <card 批次>`。
+
+    防的是「被记录 ≠ 被执行的那条」：命令写在所有人照抄的第一行，
+    纪律却只写在 docstring 里。
+    """
+    rep = _load("t7-report")
+    head = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8").splitlines()[2]
+    assert f"`{rep.card_replay_command()}`" in head, f"card 顶行与复算命令不一致：{head}"
+    assert f"--runs {rep.CARD_RUNS}" in rep.card_replay_command()
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "t7-report.py --card" not in readme, "README 仍给出缺 --runs 的复算命令"
+
+
+def test_denominator_sentence_never_says_x_rather_than_x():
+    """「分母是 39 而不是 39」：模板在两值相等时拼出废话。"""
+    rep = _load("t7-report")
+    same = rep.denominator_sentence(39, 39, "note")
+    assert "而不是" not in same and "39" in same
+    diff = rep.denominator_sentence(37, 39, "note")
+    assert "分母是 37 而不是 39" in diff
