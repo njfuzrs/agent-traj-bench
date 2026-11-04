@@ -343,7 +343,7 @@ jobs:
       - name: 单测
         run: |
           pip install --quiet pytest
-          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py -q
+          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py tests/test_prompt_leak.py -q
       # ── pipeline 单测 ──────────────────────────────────────────────
       # ⚠️ 没有原始轨迹的那 2 条会 skip 并说明原因（实测 195 passed / 2 skipped）。
       # ⛔ 不许因为 CI 里 skip 就删掉它们 —— 在采集机上是真跑的。
