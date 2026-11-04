@@ -1,12 +1,12 @@
 {
-  "version": "v0.2-mini",
+  "version": "v0.2.1",
   "status": "frozen",
-  "frozen_at": "2026-09-14T04:43:44.885926+00:00",
+  "frozen_at": "2026-11-04T13:13:38.374933+00:00",
   "schema_version": "harbor-1.4",
-  "task_count": 39,
+  "task_count": 32,
   "plan": "docs-research/trajectory-platform/bench-mvp-plan.md@v1.2",
   "execution_base": "harbor 0.22.0（sid-code/evals/external-benchmarks/harbor，只调用不修改）",
-  "note": "拆仓后本仓只含 v0.2-mini 交付 39 条，产物根即仓库根（tasks/ meta/ reports/ 与 scripts/ 平级）；源仓 trajectory-platform 里这一层是 bench/v0.2-mini/，与 v0.1（844 条已冻结）平级，不覆盖、不迁移。task_count 与 frozen_at 由 T7 冻结时写入。",
+  "note": "拆仓后本仓只含 v0.2-mini 交付 39 条，产物根即仓库根（tasks/ meta/ reports/ 与 scripts/ 平级）；源仓 trajectory-platform 里这一层是 bench/v0.2-mini/，与 v0.1（844 条已冻结）平级，不覆盖、不迁移。task_count 与 frozen_at 由 T7 冻结时写入。 ｜ v0.2.1：计分集 32 题（task_count），交付集仍 39 题（delivered_count）；新基线必须绑 taskset_digest。",
   "progress": {
     "TZ": {
       "state": "done",
@@ -105,5 +105,20 @@
       "network_policy": "allowlist（只放宿主网关 IP），**非题面写的 --network none**；对被测模型而言 github/npm 全不可达（实测 SSL EOF），证据 reports/t7-regate/netpolicy-probe.json",
       "known_caveat": "修复①已内联文档：34/39 条题面含被点名文档原文，「题面缺 docs/」不再是低分解释；true_zero_no_attempt=0 ⇒ A2 低分是真能力信号"
     }
+  },
+  "previous": {
+    "version": "v0.2-mini",
+    "frozen_at": "2026-09-14T04:43:44.885926+00:00",
+    "task_count": 39,
+    "note": "v0.2-mini 的 37.8% 基线属于这个题集；与 v0.2.1 的读数不可比较"
+  },
+  "delivered_count": 39,
+  "taskset_digest": "1457035c9cc64e722fd37b56f972e0c05783ba20b7eebb32125edacca745da66",
+  "release": {
+    "dir": "dist/v0.2.1/tasks（scripts/export-release.py 生成，不入库）",
+    "scoring_set": "meta/scoring-set.json",
+    "prompt": "tasks/*/instruction.eval.md",
+    "oracle": "reports/v0.2.1-oracle/trials.json：32/32 reward=1",
+    "fixes": "traj 缺陷 1/2/3/6/8/11（B1），决策记录 docs/decisions/2026-11-04-v0.2.1-B1-P0修复.md"
   }
 }

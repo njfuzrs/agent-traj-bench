@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — Dataset Card
 
-> 生成于 2026-11-04 12:55 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
+> 生成于 2026-11-04 13:14 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
 
 ## 这是什么
 
