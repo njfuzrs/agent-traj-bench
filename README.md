@@ -14,7 +14,7 @@
 | 批次指纹 | `91be9a5d90d8`（冻结于 2026-09-05） |
 | 快照 | 39 份 / **259.9MB**（1.2–13.1MB），走 HF LFS，**不在本仓** |
 
-- 数据集卡：[`DATASET_CARD.md`](DATASET_CARD.md) —— ⛔ 里面**没有一个手写数字**，全部由 `scripts/t7-report.py --card` 从产物复算
+- 数据集卡：[`DATASET_CARD.md`](DATASET_CARD.md) —— ⛔ 里面**没有一个手写数字**，全部由 `scripts/t7-report.py --runs t8-rerun --card` 从产物复算（⛔ 缺 `--runs` 会被脚本拒绝，不再静默覆盖成作废批次）
 - 完整报告：[`reports/baseline-v0.2-mini-t8-rerun.md`](reports/baseline-v0.2-mini-t8-rerun.md)（13 节，含真 0/假 0 逐条归因）
 - 快照仓：<https://huggingface.co/datasets/njfuzrs/agent-traj-bench>
 - 过程评测判据：[`docs/eval-criteria/`](docs/eval-criteria/) —— ⚠️ 判据词汇表，与本仓 `pass@1` 口径**不互比**（见「目录」）
