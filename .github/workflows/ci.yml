@@ -337,13 +337,23 @@ jobs:
           set -euo pipefail
           python3 scripts/check-contamination.py
 
+      # ── 门禁⑬ 评测题面零泄漏（T03/T04，traj 缺陷 1/6）───────────────
+      # 只扫模型真正看到的题面 instruction.eval.md：gold patch 代码行逐字出现即红。
+      # 🔴 ①-⑫ 的泄漏扫描都扫容器或 tasks/ 的字段，没有一条扫题面 —— 37.8% 那批
+      #   8/34 题面含答案时它们全绿。⚠️ 空集退出 2，不当通过。
+      # 第二步防手改：入库题面必须等于生成器现拼结果。
+      - name: gate13 - 评测题面零泄漏 + 与生成器一致
+        run: |
+          python scripts/check-prompt-leak.py
+          python scripts/build-eval-instruction.py --check
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。
       - name: 单测
         run: |
           pip install --quiet pytest
-          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py -q
+          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py tests/test_prompt_leak.py -q
       # ── pipeline 单测 ──────────────────────────────────────────────
       # ⚠️ 没有原始轨迹的那 2 条会 skip 并说明原因（实测 195 passed / 2 skipped）。
       # ⛔ 不许因为 CI 里 skip 就删掉它们 —— 在采集机上是真跑的。
