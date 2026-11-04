@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import statistics
@@ -59,6 +60,30 @@ RECHECK = c.MVP_REPORTS / "t6-recheck"
 #: 只有一份；报告才是「某一批跑出了什么」，一批一份。
 #: 🔴 所以 card 里凡是引用某批读数的地方都必须**写明是哪一批** —— 见 `build_card()`。
 CARD = c.MVP_DIR / "DATASET_CARD.md"
+
+#: card 唯一允许引用的批次。
+#: 🔴 traj 缺陷 11：card 顶行与 README 曾写 `t7-report.py --card`（缺 `--runs`），
+#: 照抄会用 `--runs` 默认值 `baseline`（第一轮，已作废）把 card 覆盖成 0.0%（0/39），
+#: 退出码 0、无警告。⛔ 不改 `--runs` 默认值来修：`baseline` 默认是为了保住第一轮复现
+#: （`test_both_scripts_expose_the_same_runs_switch` 锁着），要拦的是「拿非正式批次写 card」。
+#: 换正式批次时只改这一个常量，card 顶行印出的复算命令跟着变。
+CARD_RUNS = "t8-rerun"
+
+
+def card_replay_command() -> str:
+    """card 顶行印出的复算命令。⛔ 必须是**原样照抄就能逐字节复现 card** 的那条。"""
+    return f"{SCRIPTS_REL}/t7-report.py --runs {CARD_RUNS} --card"
+
+
+def denominator_sentence(n_scored: int, n_total: int, note: str) -> str:
+    """「分母是 X 而不是 Y」。
+
+    🔴 X == Y 时原模板会拼出「分母是 39 而不是 39」这种废话且不报错（缺陷 11 实测）。
+    相等是合法状态（某批恰好没有 infra 排除），所以不 assert，换一句如实的话。
+    """
+    if n_scored == n_total:
+        return f"> **分母 = 存活数 {n_total}**：本批没有 infra 排除。{note}"
+    return f"> **分母是 {n_scored} 而不是 {n_total}**：{note}"
 
 
 def _retarget(runs_name: str) -> None:
@@ -183,10 +208,14 @@ LIMITATIONS = [
     "定位是「真实生产交互衍生的补充 benchmark」，不是通用 SWE 基准。",
     "**自指污染**：sid-code 本身就是 coding agent，仓库含 SWE-bench 判分逻辑与 prompt 模板，"
     "约 14% commit 与 evals 相关。已用 `excluded-paths.txt` 强制排除四个前缀，但仍须披露。",
-    "🔴 **任务类型覆盖窄**：交付 39 条实测**只有两类** —— `bug_fix` 18 / `test_authoring` 21。"
+    "🔴 **任务类型覆盖窄**：上游会话分类器的标签只有两类 —— `bug_fix` 18 / `test_authoring` 21。"
     "`feature_impl` 10 与 `refactor` 1 在 T1/T2 尚存，但 T3 生成的 65 条里已一条不剩"
     "（与另外 106 条一并未生成，未逐条归因）。⛔ 别写成「未过门禁」—— 门禁那层看到的 65 条里本就没有。"
-    "且 `test_authoring` 占 21/39，须连带披露「测试自己测自己」的退化风险。",
+    # 🔴 traj 缺陷 8 / T05：旧文写「须披露『测试自己测自己』的退化风险」，前提是标签语义没翻转。
+    # 实算 39/39 的 gold patch 不含测试文件 —— 测试全在 test_patch 里、判分时注入。
+    "⚠️ `test_authoring` 是**会话**层面的标签（那次会话的产物含测试），反解成 task 后语义已翻转："
+    "按 gold patch 实算 **39/39 都是改源码**（`meta/scoring-set.json` 的 `task_kind`），"
+    "测试全在判分阶段注入。⛔ 不要把这 21 条读成「写测试」任务。",
     "🔴 **难度锚点是代理指标**：用 `edit_ops` 而非真实解题难度，**且 S 档实测为 0 条**，"
     "只剩 M 12 / L 27 两档 ⇒ **不构成三档单调性证据**。"
     "⛔ 不要写成「锚点无效」—— 样本量为 0 时锚点既未被证伪也未被证实，那是两回事。",
@@ -478,14 +507,19 @@ def _error_code_note(ec, zd: dict | None) -> list[str]:
         "（文件加载失败 ⇒ bun 不写 XML），那是**真 0**。",
     ]
     v = (zd or {}).get("verdicts") or {}
-    n_ms = v.get("true_zero_missing_symbol", 0)
+    # 🔴 T07 后没做完的缺符号条改标成 `true_zero_unfinished`，但 xml_missing 的**成因**没变
+    # ⇒ 按原判定（`unfinished_from`）计回来，否则这句会说 0 条、与上面的 error_code 分布对不上。
+    n_ms = v.get("true_zero_missing_symbol", 0) + sum(
+        1 for r in (zd or {}).get("trials") or []
+        if r.get("unfinished_from") == "true_zero_missing_symbol")
     n_gi = v.get("grader_incomplete", 0)
     if zd is None:
         lines.append("> → 本批未做真 0/假 0 归因 ⇒ **无法判定**这些条属于哪一类，见 §10。")
     else:
         lines.append(
             f"> → 本批 §10 已逐条核实：`true_zero_missing_symbol` {n_ms} 条"
-            f"（**真 0**，模型没写出 gold patch 创建的符号）、"
+            f"（**真 0**，模型没写出 gold patch 创建的符号；含没做完的，"
+            f"判定表里记在 `true_zero_unfinished`）、"
             f"`grader_incomplete` {n_gi} 条（**判分侧没看全**，⛔ 不可读作答错）。"
             + ("" if n_gi else " ⇒ 本批没有一条是判分缺陷。"))
     return lines
@@ -897,6 +931,11 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
         f"| `true_zero_missing_symbol` | {v.get('true_zero_missing_symbol', 0)} | "
         "真 0：测试跑到了，但模型没写出被 import 的 src 符号"
         "（那些正是 gold patch 要创建的）⇒ **也是能力信号**，⛔ 不是判分缺陷 |",
+        # 🔴 T07 / traj 缺陷 3：没做完（撞轮数上限 / 被墙钟 kill）的真 0 单独一档。
+        # 旧口径把它们记成 wrong_fix（「改动不对」），而它们根本没有改完的结果。
+        f"| `true_zero_unfinished` | {v.get('true_zero_unfinished', 0)} | "
+        "真 0·**没做完**：撞轮数上限或被墙钟 kill ⇒ 仍计入分母，"
+        "但 ⛔ **不是**「改错了」，也不是能力信号 |",
         f"| `infra_upstream_disconnect` | {v.get('infra_upstream_disconnect', 0)} | "
         "**假 0**：上游 LLM 链路断连，verifier 照常打了分 ⇒ 已按 infra 排除出分母 |",
         # 🔴 2026-09-14 抓到的第二类假 0：agent **一次都没启动**（题面超
@@ -1329,6 +1368,39 @@ def _card_usage(cfg: dict) -> list[str]:
         f"> - **有 mirror 在手**（仅采集机）：`{SCRIPTS_REL}/t4-build-env.py` 从 mirror 重建。\n"
         "> `meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果。",
         "",
+        *_release_usage(),
+    ]
+
+
+def _release_usage() -> list[str]:
+    """v0.2.1 发布目录的用法（T06）。digest 现算，⛔ 不写死。"""
+    ss = c.MVP_META / "scoring-set.json"
+    if not ss.exists():
+        return []
+    spec = importlib.util.spec_from_file_location("_export_release", Path(__file__).parent / "export-release.py")
+    assert spec and spec.loader
+    ex = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ex)
+    tasks = ex.scored_tasks()
+    d = ex.digest(ex.plan(tasks))
+    return [
+        f"### v0.2.1：后续基线用这个（{len(tasks)} 题计分集）",
+        "",
+        "🔴 **v0.2.1 起，新基线不再走 `t8-rerun.py` 现拼题面**。评测题面是入库的 "
+        "`tasks/*/instruction.eval.md`（原句 + 剥掉代码块的内联文档 + F2P 路径清单），"
+        "判分加固（判分方 bun 配置 + 按 base blob 还原）在各题 `tests/` 里。"
+        "harbor 只读 `instruction.md`，所以先导出发布目录：",
+        "",
+        "```bash",
+        "hf download njfuzrs/agent-traj-bench --repo-type dataset --local-dir <hf> --include 'snapshots/*'",
+        f"python3 {SCRIPTS_REL}/export-release.py --snapshots <hf>/snapshots   # → dist/{ex.VERSION}/tasks/",
+        f"harbor run -p dist/{ex.VERSION}/tasks -a <agent> -n 1",
+        "```",
+        "",
+        f"- 计分集：`meta/scoring-set.json`（交付 39 / 计分 {len(tasks)}，处置理由逐条在里面）",
+        f"- `taskset_digest` = `{d}`（`export-release.py --digest-only` 现算）",
+        "- ⛔ 上面 37.8% 的读数属于 v0.2-mini 题集，**不能**与 v0.2.1 上跑出的数字比较。",
+        "",
     ]
 
 
@@ -1535,6 +1607,43 @@ def build_report(res: dict, trials: list[lib.Trial],
     return "\n".join(L)
 
 
+def _budget_qualifier(zd: dict | None) -> list[str]:
+    """card 基线读数的预算限定词（T07 / traj 缺陷 3）。
+
+    🔴 30/39 撞 120 轮上限 ⇒ pass@1 是「这个预算内的完成率」，且是下界：
+    9 条解出的题也是 error_max_turns（压线做完），抬预算大概率抬分。
+    条数全部从 zero-diag 现取，⛔ 不写死。
+    """
+    if not zd:
+        return []
+    v = zd.get("verdicts") or {}
+    term = zd.get("termination_subtypes") or {}
+    n_unfin = v.get("true_zero_unfinished", 0)
+    n_cap = v.get("true_zero_wrong_fix", 0) + v.get("true_zero_missing_symbol", 0)
+    n_mt = term.get("error_max_turns", 0)
+    # 被墙钟 kill：没有结果事件（subtype 缺失）但 agent 跑过 —— 排除 agent 未启动的 infra 假 0
+    n_kill = sum(1 for r in zd.get("trials") or []
+                 if (r.get("termination") or {}).get("subtype") is None
+                 and not str(r.get("verdict", "")).startswith("infra_"))
+    return [
+        "",
+        f"> 🔴 **这是「{zd.get('max_turns', '?')} 轮预算内完成率」，⛔ 不是能力读数**："
+        f"{zd.get('n_diagnosed', '?')} 条里 {n_mt} 条撞轮数上限（`error_max_turns`）"
+        + (f"、{n_kill} 条被墙钟 kill" if n_kill else "") + "。"
+        f"真 0 里 {n_unfin} 条是**没做完**（`true_zero_unfinished`），"
+        f"只有 {n_cap} 条是做完了才错。抬预算大概率抬分，所以它是下界，不是点估计。",
+    ]
+
+def _task_kind_cell(surv: list[str]) -> str:
+    """「任务类型」从 `meta/scoring-set.json` 的 `task_kind` 取（T05），⛔ 不再用上游 category。"""
+    ss = c.MVP_META / "scoring-set.json"
+    if not ss.exists():
+        return "（未生成 `meta/scoring-set.json`，跑 `scripts/build-scoring-set.py`）"
+    per = json.loads(ss.read_text(encoding="utf-8"))["per_task"]
+    cnt = Counter(per[t]["task_kind"] for t in surv if t in per)
+    return " / ".join(f"`{k}` {v}" for k, v in cnt.most_common())
+
+
 def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                funnel: list, attrib: dict, n_surv: int, zd: dict | None,
                n_conc: int, fingerprint: str) -> str:
@@ -1578,7 +1687,7 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         "# Agent-Traj-Bench v0.2-mini — Dataset Card",
         "",
         f"> 生成于 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}，"
-        f"由 `{SCRIPTS_REL}/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
+        f"由 `{card_replay_command()}` 从产物**纯复算**。⛔ 本文没有一个手写数字。",
         "",
         "## 这是什么",
         "",
@@ -1594,7 +1703,8 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         "|---|---|",
         f"| 交付 task 数 | **{len(surv)}** |",
         f"| 来源仓库 | {_dist(repo)} |",
-        f"| 任务类型 | {_dist(cat)} |",
+        f"| 任务类型（按 gold patch 实算） | {_task_kind_cell(surv)} |",
+        f"| 上游会话标签（provenance，⚠️ 语义已翻转，见 Limitations 第 4 条） | {_dist(cat)} |",
         f"| 难度分档（`edit_ops` 代理指标） | "
         f"{' / '.join(f'`{kk}` {len(v.tasks)}' for kk, v in bcells.items())}"
         "　⚠️ **S 档为 0** |",
@@ -1636,7 +1746,8 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         f"| k | {k}（`-n {n_conc}`） |",
         f"| 实付 | ${cost['total']}（{cost['n_with_cost']}/{cost['n_trials']} 个 trial 有成本值） |",
         "",
-        f"> **分母是 {res['n']} 而不是 {len(surv)}**：{res['denominator_note']}",
+        denominator_sentence(res["n"], len(surv), res["denominator_note"]),
+        *_budget_qualifier(zd),
         "",
         f"完整报告（13 节，含真 0/假 0 逐条归因）：`{_rel(REPORT)}`　"
         f"机器可读取数源：`{_rel(SUMMARY)}`",
@@ -1693,6 +1804,15 @@ def main() -> int:
                     help="同时写 DATASET_CARD.md（方案 §6 点名要的那份）。"
                          "⚠️ card 只有一份、不随 --runs 切，里面引用读数处会写明是哪一批")
     args = ap.parse_args()
+
+    # 🔴 traj 缺陷 11：card 只有一份，任何批次的 --card 都写同一个文件 ⇒
+    # 拿作废批次跑 --card 会静默覆盖正式 card。在读任何产物、写任何文件**之前**拒绝。
+    if args.card and args.runs != CARD_RUNS:
+        raise SystemExit(
+            f"⛔ 拒绝写 dataset card：--runs {args.runs} 不是 card 引用的批次（{CARD_RUNS}）。\n"
+            f"   复算 card 用：{card_replay_command()}\n"
+            "   只想看这一批的报告就去掉 --card（报告文件名带批次名，不会覆盖别的批次）。"
+        )
 
     if args.runs != "baseline":
         _retarget(args.runs)

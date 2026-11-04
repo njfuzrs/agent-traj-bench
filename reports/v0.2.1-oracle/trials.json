@@ -1,0 +1,300 @@
+{
+ "_note": "v0.2.1 发布目录上 harbor 全量 oracle（T06）。run 产物在采集机 ~/.cache/atb-v021-jobs/，未入库；本文件是逐题结果。",
+ "run_dir": "2026-11-04__20-49-48",
+ "harbor": "0.22.0",
+ "agent": "oracle",
+ "n_concurrent": 1,
+ "taskset_digest": "1457035c9cc64e722fd37b56f972e0c05783ba20b7eebb32125edacca745da66",
+ "n_trials": 32,
+ "n_reward_1": 32,
+ "trials": [
+  {
+   "task": "T0002",
+   "trial_dir": "T0002__mKHiyDj",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0003",
+   "trial_dir": "T0003__SmuMrrK",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0007",
+   "trial_dir": "T0007__GoYjZTA",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0008",
+   "trial_dir": "T0008__QydcPRU",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0010",
+   "trial_dir": "T0010__MWGNHpm",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0011",
+   "trial_dir": "T0011__cwL6R8m",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0013",
+   "trial_dir": "T0013__DfzrqAS",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0014",
+   "trial_dir": "T0014__RTFoVAx",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0018",
+   "trial_dir": "T0018__QyQK2ak",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0020",
+   "trial_dir": "T0020__zMoK5D3",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0022",
+   "trial_dir": "T0022__wGQcpjy",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0024",
+   "trial_dir": "T0024__yuBiqvZ",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0028",
+   "trial_dir": "T0028__5x23tC6",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0029",
+   "trial_dir": "T0029__dSCgckL",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0031",
+   "trial_dir": "T0031__DVuP2ez",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0033",
+   "trial_dir": "T0033__FBFaoJb",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0036",
+   "trial_dir": "T0036__EqGzgqU",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0038",
+   "trial_dir": "T0038__wZZ4XJH",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0039",
+   "trial_dir": "T0039__wzK9Muu",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0040",
+   "trial_dir": "T0040__nqBJzuX",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0042",
+   "trial_dir": "T0042__ESv89J3",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0045",
+   "trial_dir": "T0045__ioV9fgv",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0047",
+   "trial_dir": "T0047__8tHp5i3",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0049",
+   "trial_dir": "T0049__gHKh5nn",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0050",
+   "trial_dir": "T0050__6Snv2kv",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0051",
+   "trial_dir": "T0051__XFtAoef",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0054",
+   "trial_dir": "T0054__ioeKxWi",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0055",
+   "trial_dir": "T0055__zbtduEX",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0059",
+   "trial_dir": "T0059__Nr9FS2s",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0062",
+   "trial_dir": "T0062__nzirzej",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0063",
+   "trial_dir": "T0063__4r9cyui",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  },
+  {
+   "task": "T0064",
+   "trial_dir": "T0064__nSWavdy",
+   "reward": 1.0,
+   "f2p": 1.0,
+   "p2p": 1.0,
+   "error_code": 0,
+   "exception": null
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — Dataset Card
 
-> 生成于 2026-09-17 02:32 UTC，由 `scripts/t7-report.py --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
+> 生成于 2026-11-04 13:14 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
 
 ## 这是什么
 
@@ -14,7 +14,8 @@
 |---|---|
 | 交付 task 数 | **39** |
 | 来源仓库 | `person/sid-code` 39 |
-| 任务类型 | `test_authoring` 21 / `bug_fix` 18 |
+| 任务类型（按 gold patch 实算） | `source_change` 39 |
+| 上游会话标签（provenance，⚠️ 语义已翻转，见 Limitations 第 4 条） | `test_authoring` 21 / `bug_fix` 18 |
 | 难度分档（`edit_ops` 代理指标） | `M` 12 / `L` 27　⚠️ **S 档为 0** |
 | 题面信息量分级 | `C` 4 / `B` 4 / `A1` 11 / `A2` 20 |
 | 轨迹采集工具 | `claude_code` 39 |
@@ -63,6 +64,8 @@
 
 > **分母是 37 而不是 39**：分母是 scored（参与计分的 task）。基础设施故障（抛异常 / verifier 未写分）排除出分母 —— 算进去等于把它记成答错。⛔ 不是 40（那是 T5 门禁的结论，含 T0005）。
 
+> 🔴 **这是「120 轮预算内完成率」，⛔ 不是能力读数**：39 条里 26 条撞轮数上限（`error_max_turns`）、3 条被墙钟 kill。真 0 里 20 条是**没做完**（`true_zero_unfinished`），只有 3 条是做完了才错。抬预算大概率抬分，所以它是下界，不是点估计。
+
 完整报告（13 节，含真 0/假 0 逐条归因）：`reports/baseline-v0.2-mini-t8-rerun.md`　机器可读取数源：`reports/t8-rerun/summary.json`
 
 🔴 **只跑了 1 个模型 × k=1** ⇒ ⛔ **不能**用本数据集比较模型强弱（方案要求 ≥2 模型 × k=3 才谈模型间差异），也**不能**把这个点估计当作「模型在真实任务上的能力」—— 半宽 ±14.9pp 的区间比多数模型间差距还宽。
@@ -90,6 +93,20 @@
 > - **有 mirror 在手**（仅采集机）：`scripts/t4-build-env.py` 从 mirror 重建。
 > `meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果。
 
+### v0.2.1：后续基线用这个（32 题计分集）
+
+🔴 **v0.2.1 起，新基线不再走 `t8-rerun.py` 现拼题面**。评测题面是入库的 `tasks/*/instruction.eval.md`（原句 + 剥掉代码块的内联文档 + F2P 路径清单），判分加固（判分方 bun 配置 + 按 base blob 还原）在各题 `tests/` 里。harbor 只读 `instruction.md`，所以先导出发布目录：
+
+```bash
+hf download njfuzrs/agent-traj-bench --repo-type dataset --local-dir <hf> --include 'snapshots/*'
+python3 scripts/export-release.py --snapshots <hf>/snapshots   # → dist/v0.2.1/tasks/
+harbor run -p dist/v0.2.1/tasks -a <agent> -n 1
+```
+
+- 计分集：`meta/scoring-set.json`（交付 39 / 计分 32，处置理由逐条在里面）
+- `taskset_digest` = `1457035c9cc64e722fd37b56f972e0c05783ba20b7eebb32125edacca745da66`（`export-release.py --digest-only` 现算）
+- ⛔ 上面 37.8% 的读数属于 v0.2-mini 题集，**不能**与 v0.2.1 上跑出的数字比较。
+
 ## Limitations（主动披露）
 
 🔴 **16 条，与报告 §11 同源**（`_limitations()`，⛔ 两处不各写一份）。不读这一节就引用上面的数字，会把已知缺陷当成结论。
@@ -97,7 +114,7 @@
 1. **仅采用高置信切分单元**（2937/7692，38.2%）—— 低置信部分的切分债务**隔离未清**，是没用，不是修好了。
 2. 🔴 **单一开发者、单一仓库**。原计划双仓库，T4 实测后 `ruijie/iam-studio-fe` 的 5 条**全部被挡**（见第 12 条），交付 39 条**全部**来自 `person/sid-code`。⛔ 这不是「以某仓库为主」，是**彻底**单仓库。定位是「真实生产交互衍生的补充 benchmark」，不是通用 SWE 基准。
 3. **自指污染**：sid-code 本身就是 coding agent，仓库含 SWE-bench 判分逻辑与 prompt 模板，约 14% commit 与 evals 相关。已用 `excluded-paths.txt` 强制排除四个前缀，但仍须披露。
-4. 🔴 **任务类型覆盖窄**：交付 39 条实测**只有两类** —— `bug_fix` 18 / `test_authoring` 21。`feature_impl` 10 与 `refactor` 1 在 T1/T2 尚存，但 T3 生成的 65 条里已一条不剩（与另外 106 条一并未生成，未逐条归因）。⛔ 别写成「未过门禁」—— 门禁那层看到的 65 条里本就没有。且 `test_authoring` 占 21/39，须连带披露「测试自己测自己」的退化风险。
+4. 🔴 **任务类型覆盖窄**：上游会话分类器的标签只有两类 —— `bug_fix` 18 / `test_authoring` 21。`feature_impl` 10 与 `refactor` 1 在 T1/T2 尚存，但 T3 生成的 65 条里已一条不剩（与另外 106 条一并未生成，未逐条归因）。⛔ 别写成「未过门禁」—— 门禁那层看到的 65 条里本就没有。⚠️ `test_authoring` 是**会话**层面的标签（那次会话的产物含测试），反解成 task 后语义已翻转：按 gold patch 实算 **39/39 都是改源码**（`meta/scoring-set.json` 的 `task_kind`），测试全在判分阶段注入。⛔ 不要把这 21 条读成「写测试」任务。
 5. 🔴 **难度锚点是代理指标**：用 `edit_ops` 而非真实解题难度，**且 S 档实测为 0 条**，只剩 M 12 / L 27 两档 ⇒ **不构成三档单调性证据**。⛔ 不要写成「锚点无效」—— 样本量为 0 时锚点既未被证伪也未被证实，那是两回事。
 6. **样本量小、统计功效低**：n=39 的 pass@1 置信区间宽，模型间差异须谨慎解读 ——所以本报告每格都给 Wilson 区间，不只给点估计。
 7. **gold patch 来自轨迹反解，不是开发者真实 commit**。优点是自包含，缺点是可能不是最优解法。

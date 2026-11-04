@@ -280,7 +280,14 @@ def solve_sh() -> str:
     )
 
 
-def test_sh(task_id: str, f2p: list[str], p2p: list[str], restore: list[str], remove: list[str], test_cmd: str) -> str:
+#: 判分方自带的 bun 配置，与 test_patch 一起在 verifier 阶段上传到 /tests（agent 阶段看不见、改不到）。
+VERIFIER_BUNFIG = "/tests/bunfig.verifier.toml"
+#: 被保护文件的 base blob 名单（{路径: blob sha}），由 scripts/build-verifier-pins.py 生成。
+PROTECTED_JSON = "protected.json"
+
+
+def test_sh(task_id: str, f2p: list[str], p2p: list[str], restore: list[str], remove: list[str], test_cmd: str,
+            *, pinned: dict[str, str] | None = None, verifier_config: bool = False) -> str:
     """判分入口。**整条链路最容易「绿着坏掉」的文件**，七条规则逐条落地。
 
     规则1 每条路径都写 reward   规则2 先无条件覆盖为 0    规则3 test_patch 在此应用
@@ -289,10 +296,35 @@ def test_sh(task_id: str, f2p: list[str], p2p: list[str], restore: list[str], re
 
     ⚠️ `exit 0` 不是笔误（§4 T3）：test_patch 打不上时要的结果是「这条 task 得 0 分」，
     而不是「trial 崩了」—— 后者是 harbor 的 error 状态，会被误读成基础设施问题。
+
+    🔴 traj 缺陷 2 / T02（2026-11-04 容器实证，T0064）：只还原 `*.test.ts` 时，
+    agent 改 `bunfig.toml` 的 `[test] preload` 指向自写插件，把每个测试文件换成恒绿，
+    **一行源码不改即拿 reward=1**。两处加固：
+
+      - `verifier_config=True`：`bun test --config=/tests/bunfig.verifier.toml`。
+        实测带 `--config` 时 `/repo/bunfig.toml` 被整个忽略（不合并）。
+      - `pinned`：按 base blob sha 还原（`git cat-file blob`），⛔ 不用 `git checkout --`。
+        实测 agent 把改过的测试 `git add && git commit` 后，`git checkout --` 还原出来的是它自己的版本。
+        blob 缺失（agent 删了对象库）⇒ error_code=6、reward=0，fail closed。
+
+    ⚠️ 不覆盖的面（同一容器、agent 是 root）：替换 bun/git 二进制、改 node_modules。
+    那需要把判分挪出 agent 容器，不是改脚本能解决的。
+
+    两个参数默认关闭 ⇒ 旧调用逐字节不变（39 份入库 test.sh 曾逐字节复现）。
     """
+    if pinned is not None:
+        unpinned = sorted(set(restore) - set(pinned))
+        if unpinned:
+            raise ValueError(f"{task_id}: 还原名单里有路径没有 base blob：{unpinned[:5]}")
+    if verifier_config:
+        test_cmd = f"{test_cmd} --config={VERIFIER_BUNFIG}"
     f2p_arg = " ".join(sh_single_quote(p) for p in f2p)
     p2p_arg = " ".join(sh_single_quote(p) for p in p2p)
-    restore_lines = "\n".join(f"git checkout -- {sh_single_quote(p)} 2>/dev/null || true" for p in restore)
+    if pinned is None:
+        restore_lines = "\n".join(f"git checkout -- {sh_single_quote(p)} 2>/dev/null || true" for p in restore)
+    else:
+        restore_lines = "\n".join(
+            [_PIN_FN] + [f"restore_pinned {sh_single_quote(p)} {sh_single_quote(h)}" for p, h in sorted(pinned.items())])
     remove_lines = "\n".join(f"rm -f {sh_single_quote(p)}" for p in remove)
     return f"""#!/bin/bash
 # T3 生成，勿手改。task={task_id}
@@ -343,6 +375,27 @@ fi
 # 规则7：score.py 写 reward / f2p / p2p 三个键（缺一个 T5 就退化成单值判定）
 python3 /tests/score.py
 """
+
+
+#: 按 blob sha 还原一个文件；拿不到 blob 就 fail closed。
+_PIN_FN = r"""# 🔴 按 base blob 还原（T02）：git checkout -- 会还原出 agent 自己 commit 进去的版本
+restore_pinned() {
+  mkdir -p "$(dirname "$1")"
+  if ! git cat-file blob "$2" > "$1" 2>/dev/null; then
+    echo "PROTECTED_BLOB_MISSING $1 $2" >> /logs/verifier/apply.log
+    # error_code=6 = 被保护文件的 base blob 取不到（对象库被动过）
+    printf '{"reward":0.0,"f2p":0.0,"p2p":0.0,"error_code":6}\n' > /logs/verifier/reward.json
+    echo 0 > /logs/verifier/reward.txt
+    exit 0
+  fi
+}"""
+
+
+def load_protection(task_dir: Path) -> tuple[dict[str, str] | None, bool]:
+    """读 `tests/protected.json` 与 `tests/bunfig.verifier.toml`（T02 产物）。没有就走旧路径。"""
+    pj = task_dir / "tests" / PROTECTED_JSON
+    pinned = json.loads(pj.read_text(encoding="utf-8"))["blobs"] if pj.exists() else None
+    return pinned, (task_dir / "tests" / "bunfig.verifier.toml").exists()
 
 
 def score_py() -> str:
@@ -544,8 +597,11 @@ def build_one(task_id: str, row: dict, snap: dict, p2p: list[str], instruction: 
     )
 
     test = task_dir / "tests" / "test.sh"
+    # ⚠️ T02 的加固产物若已存在就沿用 —— 否则重跑 T3 会静默退回「可被 preload 绕过」的旧判分
+    pinned, vcfg = load_protection(task_dir)
     test.write_text(
-        test_sh(task_id, f2p, p2p, restore, remove, snap["test_cmd"]), encoding="utf-8"
+        test_sh(task_id, f2p, p2p, restore, remove, snap["test_cmd"],
+                pinned=pinned, verifier_config=vcfg), encoding="utf-8"
     )
     test.chmod(0o755)
     (task_dir / "tests" / "test_patch.diff").write_text(

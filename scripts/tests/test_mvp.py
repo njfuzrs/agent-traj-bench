@@ -4750,3 +4750,196 @@ def test_common_module_is_not_shared_with_pipeline_layer():
     """
     assert Path(c.__file__).resolve().is_relative_to(MVP), \
         f"import common 拿到了 {c.__file__} —— 不是本层那份，说明与 pipeline/ 层撞了"
+
+
+# T01 / traj 缺陷 11：card 自述的复算命令必须原样照抄就能复现，作废批次不许写 card
+
+def test_card_refuses_non_card_batch_without_touching_any_file():
+    """🔴 缺 `--runs` 跑 `--card` 曾静默把 card 覆盖成作废批次的 0.0%（退出码 0）。
+
+    判据看**磁盘**，不只看退出码：拒绝必须发生在写任何产物之前。
+    """
+    tracked = [REPO_ROOT / "DATASET_CARD.md",
+               REPO_ROOT / "reports" / "baseline" / "summary.json",
+               REPO_ROOT / "reports" / "baseline-v0.2-mini.md"]
+    before = {p: p.read_bytes() for p in tracked if p.exists()}
+    proc = subprocess.run([sys.executable, str(MVP / "t7-report.py"), "--card"],
+                          capture_output=True, text=True, cwd=REPO_ROOT)
+    assert proc.returncode != 0, "缺 --runs 跑 --card 必须报错，而不是静默写 card"
+    assert "拒绝写 dataset card" in (proc.stdout + proc.stderr)
+    assert "--runs t8-rerun --card" in (proc.stdout + proc.stderr), "报错里要给出正确命令"
+    after = {p: p.read_bytes() for p in tracked if p.exists()}
+    assert before == after, "拒绝路径上仍改写了已提交产物"
+
+
+def test_committed_card_states_the_command_that_reproduces_it():
+    """card 顶行印的命令 == 脚本认定的复算命令，且带 `--runs <card 批次>`。
+
+    防的是「被记录 ≠ 被执行的那条」：命令写在所有人照抄的第一行，
+    纪律却只写在 docstring 里。
+    """
+    rep = _load("t7-report")
+    head = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8").splitlines()[2]
+    assert f"`{rep.card_replay_command()}`" in head, f"card 顶行与复算命令不一致：{head}"
+    assert f"--runs {rep.CARD_RUNS}" in rep.card_replay_command()
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "t7-report.py --card" not in readme, "README 仍给出缺 --runs 的复算命令"
+
+
+def test_denominator_sentence_never_says_x_rather_than_x():
+    """「分母是 39 而不是 39」：模板在两值相等时拼出废话。"""
+    rep = _load("t7-report")
+    same = rep.denominator_sentence(39, 39, "note")
+    assert "而不是" not in same and "39" in same
+    diff = rep.denominator_sentence(37, 39, "note")
+    assert "分母是 37 而不是 39" in diff
+# T07 / traj 缺陷 3：没做完的真 0 单独一档，不再记成「改错了」
+
+def test_reclassify_splits_true_zero_by_termination():
+    zd = _load("t7-zero-diag")
+    row = lambda v, sub: {"task": "T9", "verdict": v, "why": "w",
+                          "termination": {"subtype": sub}}
+    # 干净终止 ⇒ 原判定不动
+    assert zd.reclassify(row("true_zero_wrong_fix", "success"))["verdict"] == "true_zero_wrong_fix"
+    # 撞轮数上限 / 被墙钟 kill ⇒ 没做完，保留原判定作溯源
+    for sub in ("error_max_turns", None):
+        for v in ("true_zero_wrong_fix", "true_zero_missing_symbol", "true_zero_no_attempt"):
+            r = zd.reclassify(row(v, sub))
+            assert r["verdict"] == "true_zero_unfinished" and r["unfinished_from"] == v
+            assert "不是" in r["why"]
+    # 解出 / infra 假 0 不受影响（压线解出仍是解出）
+    for v in ("solved", "infra_agent_not_launched", "infra_upstream_disconnect", "grader_incomplete"):
+        assert zd.reclassify(row(v, "error_max_turns"))["verdict"] == v
+    # 幂等
+    once = zd.reclassify(row("true_zero_wrong_fix", "error_max_turns"))
+    assert zd.reclassify(once) == once
+
+
+def test_committed_zero_diag_matches_defect3_split():
+    """用入库的 t8-rerun 归因复算：20 条没做完、3 条做完但错（缺陷 3 实测数）。"""
+    import json as _json
+    d = _json.loads((REPO_ROOT / "reports/t8-rerun/zero-diag.json").read_text(encoding="utf-8"))
+    v = d["verdicts"]
+    assert v.get("true_zero_unfinished") == 20 and v.get("true_zero_wrong_fix") == 3, v
+    assert all((r.get("termination") or {}).get("subtype") == "success"
+               for r in d["trials"] if r["verdict"] == "true_zero_wrong_fix")
+    assert "能力信号共 3 条" in d["conclusion_guard"]
+    # 预注册的对照组判读不许被换标签改写
+    assert d["control_group"]["supports"] is True
+
+
+def test_guard_never_counts_unfinished_as_capability_signal():
+    from collections import Counter
+    zd = _load("t7-zero-diag")
+    g = zd._guard_text(Counter({"true_zero_unfinished": 20, "true_zero_wrong_fix": 3, "solved": 14}), 37)
+    assert "能力信号共 3 条" in g and "没做完（预算触顶）20" in g and "不是**能力信号" in g, g
+
+
+def test_card_states_budget_qualifier():
+    card = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8")
+    assert "轮预算内完成率" in card and "true_zero_unfinished" in card
+
+# T05 / traj 缺陷 8：计分集按 T00 裁决②③，任务类型按 gold patch 实算
+
+def _scoring():
+    import json as _json
+    return _json.loads((c.MVP_META / "scoring-set.json").read_text(encoding="utf-8"))
+
+
+def test_scoring_set_matches_t00_ruling():
+    d = _scoring()
+    g = d["groups"]
+    assert set(g["audit"]) == {"T0026", "T0034", "T0052", "T0056", "T0065"}
+    assert g["excluded_context"] == ["T0012"] and g["excluded_infra"] == ["T0009"]
+    assert d["n_delivered"] == 39 and d["n_scored"] == len(g["scored"]) == 32
+    # 关键词误报 / bug 报告型保留计分
+    for t in ("T0014", "T0055", "T0007", "T0011", "T0063"):
+        assert t in g["scored"], t
+    # 分组互斥且覆盖交付集
+    allt = [t for ts in g.values() for t in ts]
+    assert len(allt) == len(set(allt)) == 39
+
+
+def test_scoring_set_is_generated_not_hand_edited():
+    spec = importlib.util.spec_from_file_location("_bss", MVP / "build-scoring-set.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main(["--check"]) == 0
+
+
+def test_task_kind_is_computed_and_card_stops_calling_them_test_authoring():
+    d = _scoring()
+    assert d["task_kind"]["delivered"] == {"source_change": 39}, d["task_kind"]
+    card = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8")
+    assert "| 任务类型（按 gold patch 实算） | `source_change` 39 |" in card
+    assert "测试自己测自己" not in card, "仍在按翻转的标签语义做披露"
+
+
+def test_delivered_set_and_survivors_unchanged():
+    """计分集不许改写交付集：37.8% 那批的分母（survivors.json）必须原样保留。"""
+    import json as _json
+    surv = _json.loads((c.MVP_REPORTS / "t6-recheck/survivors.json").read_text(encoding="utf-8"))
+    assert len(surv["survivors"]) == 39
+
+# T02 / traj 缺陷 2：判分方自带 bun 配置 + 被保护文件按 base blob 还原
+
+def _pins():
+    spec = importlib.util.spec_from_file_location("_bvp", MVP / "build-verifier-pins.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_t3_test_sh_legacy_output_unchanged_without_hardening_flags():
+    """两个新参数默认关闭 ⇒ 旧调用不变（防加固时顺手改坏旧路径）。"""
+    t3 = load_t3()
+    sh = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], ["b.test.ts"], [], "bun test")
+    assert "git checkout -- 'b.test.ts'" in sh
+    assert "--config=" not in sh and "restore_pinned" not in sh
+
+
+def test_t3_hardened_test_sh_uses_verifier_config_and_pinned_blobs():
+    t3 = load_t3()
+    sh = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], ["b.test.ts"], [], "bun test",
+                    pinned={"b.test.ts": "a" * 40}, verifier_config=True)
+    body = code_lines(sh)
+    # 两次 bun test 都必须带判分方配置
+    assert body.count("bun test --config=/tests/bunfig.verifier.toml") == 2, body
+    # 🔴 不许再用 git checkout -- 还原：agent commit 过的文件会被还原成 agent 的版本
+    assert "git checkout --" not in body
+    assert "restore_pinned 'b.test.ts' '" + "a" * 40 + "'" in sh
+    # blob 取不到 ⇒ error_code=6 且 exit 0（fail closed，不是 trial error）
+    fn = sh.split("restore_pinned() {")[1].split("\n}")[0]
+    assert '"error_code":6' in fn and "exit 0" in fn
+    assert subprocess.run(["bash", "-n"], input=sh, capture_output=True, text=True).returncode == 0
+
+
+def test_t3_hardened_test_sh_refuses_unpinned_restore_path():
+    t3 = load_t3()
+    with pytest.raises(ValueError):
+        t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts", "c.test.ts"], ["b.test.ts", "c.test.ts"], [],
+                   "bun test", pinned={"b.test.ts": "a" * 40}, verifier_config=True)
+
+
+def test_committed_tasks_are_all_hardened_and_self_consistent():
+    """入库 39 题的 test.sh 全部走加固路径，且等于现拼结果（离线，不需要 mirror）。"""
+    assert _pins().main(["--check"]) == 0
+    for d in sorted(c.MVP_TASKS.iterdir()):
+        sh = (d / "tests" / "test.sh").read_text(encoding="utf-8")
+        assert "--config=/tests/bunfig.verifier.toml" in sh and "git checkout --" not in code_lines(sh), d.name
+
+
+def test_preload_targets_present_on_base_are_pinned():
+    """base 的 bunfig 指向的 preload 文件（T0002/T0024/T0056）也必须 pin 住 —— 它是 .ts 不是 .test.ts。"""
+    import json as _json
+    for t in ("T0002", "T0024", "T0056"):
+        blobs = _json.loads((c.MVP_TASKS / t / "tests" / "protected.json").read_text(encoding="utf-8"))["blobs"]
+        assert "tests/preload-isolate-sid-home.ts" in blobs, t
+
+
+def test_t0010_verifier_config_is_gold_version():
+    """T0010 的 gold patch 改了 bunfig ⇒ 判分方配置取 gold 版本，否则 oracle 拿不到满分。"""
+    cfg = (c.MVP_TASKS / "T0010" / "tests" / "bunfig.verifier.toml").read_text(encoding="utf-8")
+    assert 'preload = ["./tests/preload-isolate-sid-home.ts"]' in cfg
