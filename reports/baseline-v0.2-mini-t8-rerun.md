@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — 基线评测报告
 
-> 生成于 2026-11-04 10:07 UTC，由 `scripts/t7-report.py` 从 run 产物**纯复算**。
+> 生成于 2026-11-04 12:32 UTC，由 `scripts/t7-report.py` 从 run 产物**纯复算**。
 > 取数源唯一：`reports/t8-rerun/`（39 条 task × k=1）。
 
 ## 1. 主结果
@@ -77,7 +77,7 @@ reward.json 的 error_code 分布：{4: 3}
 
 > `error_code != 0` 表示**判分侧没产出可读的 XML**（4=`xml_missing` / 5=`xml_parse_error` / 3=`empty_file_list`）。
 > ⛔ 但这**不等于**「判分缺陷、与模型答错无关」——`xml_missing` 的成因也可能是**模型没写出被 import 的 src 符号**（文件加载失败 ⇒ bun 不写 XML），那是**真 0**。
-> → 本批 §10 已逐条核实：`true_zero_missing_symbol` 5 条（**真 0**，模型没写出 gold patch 创建的符号）、`grader_incomplete` 0 条（**判分侧没看全**，⛔ 不可读作答错）。 ⇒ 本批没有一条是判分缺陷。
+> → 本批 §10 已逐条核实：`true_zero_missing_symbol` 5 条（**真 0**，模型没写出 gold patch 创建的符号；含没做完的，判定表里记在 `true_zero_unfinished`）、`grader_incomplete` 0 条（**判分侧没看全**，⛔ 不可读作答错）。 ⇒ 本批没有一条是判分缺陷。
 
 ## 6. F2P / P2P 两个分量（⛔ 不压成单个 reward）
 
@@ -152,8 +152,9 @@ pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」
 |---|---|---|
 | `grader_incomplete` | 0 | 判分侧没看全 f2p（missing / no_tests / error_code≠0）⇒ ⛔ **不能**读作「模型答错」 |
 | `true_zero_no_attempt` | 0 | 真 0，但模型**一次都没改文件** ⇒ 它没提交解法，不是解法不对 |
-| `true_zero_wrong_fix` | 18 | 真 0：测试跑起来了且模型改过文件 ⇒ 改动不对（**能力信号**） |
-| `true_zero_missing_symbol` | 5 | 真 0：测试跑到了，但模型没写出被 import 的 src 符号（那些正是 gold patch 要创建的）⇒ **也是能力信号**，⛔ 不是判分缺陷 |
+| `true_zero_wrong_fix` | 3 | 真 0：测试跑起来了且模型改过文件 ⇒ 改动不对（**能力信号**） |
+| `true_zero_missing_symbol` | 0 | 真 0：测试跑到了，但模型没写出被 import 的 src 符号（那些正是 gold patch 要创建的）⇒ **也是能力信号**，⛔ 不是判分缺陷 |
+| `true_zero_unfinished` | 20 | 真 0·**没做完**：撞轮数上限或被墙钟 kill ⇒ 仍计入分母，但 ⛔ **不是**「改错了」，也不是能力信号 |
 | `infra_upstream_disconnect` | 1 | **假 0**：上游 LLM 链路断连，verifier 照常打了分 ⇒ 已按 infra 排除出分母 |
 | `infra_agent_not_launched` | 1 | **假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒，退出码 255），verifier 照常打了分 ⇒ 已按 infra 排除出分母 |
 | `solved` | 14 | 解出 |
@@ -172,14 +173,14 @@ pass@1 = 37.8% 已达健康度下限（20%）⇒ 预案「优先怀疑 grader」
 
 存活 39 条里有 **4 条题面不点名 `docs/`**（T0011, T0012, T0018, T0028）—— 天然对照组。已跑 4 条。
 
-判读：✅ 归因**成立**：对照组里有条目进入了「改代码」阶段（wrong_fix 3 / solved 1） ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数
+判读：✅ 归因**成立**：对照组里有条目进入了「改代码」阶段（wrong_fix 3，含没做完的 / solved 1） ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数
 
 > 预注册：写下判读时这 4 条都还没跑（2026-09-13），不是事后挑的。n=4 < 5 ⇒ 只报绝对条数不报比例
 > 归因**可被这组数据推翻**：若对照组也全是「零改动 + 轮次耗尽」，就说明 120 轮上限本身不够用，⛔ 那时不许只把责任推给题面缺陷。
 
-> 🔴 已判 39 条：解出 14、改了但改错 18、未提交解法 0、缺 src 符号 5、判分未看全 0、上游断连 1、agent 未启动 1。🔴 那 1 条 `infra_agent_not_launched` 是**假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。那 5 条 `true_zero_missing_symbol` 是**真 0**：测试跑到了，但模型没写出被 import 的 src 符号（那些正是 gold patch 创建的）⇒ ⛔ **不是**判分缺陷。✅ 能力信号共 23 条：18 条 `true_zero_wrong_fix`（改了但改错） + 5 条 `true_zero_missing_symbol`（没写出 gold patch 创建的符号）。
+> 🔴 已判 39 条：解出 14、改了但改错 3、未提交解法 0、缺 src 符号 0、判分未看全 0、没做完（预算触顶）20、上游断连 1、agent 未启动 1。🔴 那 1 条 `infra_agent_not_launched` 是**假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。⛔ 那 20 条 `true_zero_unfinished` 是**预算内没做完**（撞轮数上限或被墙钟 kill），没有「改完的结果」可判对错 ⇒ 仍计入 pass@1 分母，但 ⛔ **不是**能力信号，pass@1 只能读作「本批轮数/墙钟预算内的完成率」。✅ 能力信号共 3 条：3 条 `true_zero_wrong_fix`（改了但改错）。
 
-⇒ 对照组支持归因，但本批仍有 **18 条 `true_zero_wrong_fix`**（改了代码但改错）—— 那些条的 0 分**是能力信号**。⛔ 不许把本批的低分整体归给题面缺陷：题面缺 `docs/` 已被修复① 消除（见 §2②），而 `--max-turns` 本批显式跑的是 120 轮。
+⇒ 对照组支持归因，但本批仍有 **3 条 `true_zero_wrong_fix`**（改了代码但改错）—— 那些条的 0 分**是能力信号**。⛔ 不许把本批的低分整体归给题面缺陷：题面缺 `docs/` 已被修复① 消除（见 §2②），而 `--max-turns` 本批显式跑的是 120 轮。
 
 **v0.3 的两个动作**（本轮无法自救，如实记下）：① T1 筛选链排除「题面主体是引用本地不可见文档」的会话，或引入指令重写；② `--max-turns` 显式写进跑批命令而不是用 agent 默认值 —— 方案原就要求「`task.toml` 与 CLI 的 timeout 都显式写」，轮次上限是同一类隐式约束。
 

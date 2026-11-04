@@ -4793,3 +4793,48 @@ def test_denominator_sentence_never_says_x_rather_than_x():
     assert "而不是" not in same and "39" in same
     diff = rep.denominator_sentence(37, 39, "note")
     assert "分母是 37 而不是 39" in diff
+# T07 / traj 缺陷 3：没做完的真 0 单独一档，不再记成「改错了」
+
+def test_reclassify_splits_true_zero_by_termination():
+    zd = _load("t7-zero-diag")
+    row = lambda v, sub: {"task": "T9", "verdict": v, "why": "w",
+                          "termination": {"subtype": sub}}
+    # 干净终止 ⇒ 原判定不动
+    assert zd.reclassify(row("true_zero_wrong_fix", "success"))["verdict"] == "true_zero_wrong_fix"
+    # 撞轮数上限 / 被墙钟 kill ⇒ 没做完，保留原判定作溯源
+    for sub in ("error_max_turns", None):
+        for v in ("true_zero_wrong_fix", "true_zero_missing_symbol", "true_zero_no_attempt"):
+            r = zd.reclassify(row(v, sub))
+            assert r["verdict"] == "true_zero_unfinished" and r["unfinished_from"] == v
+            assert "不是" in r["why"]
+    # 解出 / infra 假 0 不受影响（压线解出仍是解出）
+    for v in ("solved", "infra_agent_not_launched", "infra_upstream_disconnect", "grader_incomplete"):
+        assert zd.reclassify(row(v, "error_max_turns"))["verdict"] == v
+    # 幂等
+    once = zd.reclassify(row("true_zero_wrong_fix", "error_max_turns"))
+    assert zd.reclassify(once) == once
+
+
+def test_committed_zero_diag_matches_defect3_split():
+    """用入库的 t8-rerun 归因复算：20 条没做完、3 条做完但错（缺陷 3 实测数）。"""
+    import json as _json
+    d = _json.loads((REPO_ROOT / "reports/t8-rerun/zero-diag.json").read_text(encoding="utf-8"))
+    v = d["verdicts"]
+    assert v.get("true_zero_unfinished") == 20 and v.get("true_zero_wrong_fix") == 3, v
+    assert all((r.get("termination") or {}).get("subtype") == "success"
+               for r in d["trials"] if r["verdict"] == "true_zero_wrong_fix")
+    assert "能力信号共 3 条" in d["conclusion_guard"]
+    # 预注册的对照组判读不许被换标签改写
+    assert d["control_group"]["supports"] is True
+
+
+def test_guard_never_counts_unfinished_as_capability_signal():
+    from collections import Counter
+    zd = _load("t7-zero-diag")
+    g = zd._guard_text(Counter({"true_zero_unfinished": 20, "true_zero_wrong_fix": 3, "solved": 14}), 37)
+    assert "能力信号共 3 条" in g and "没做完（预算触顶）20" in g and "不是**能力信号" in g, g
+
+
+def test_card_states_budget_qualifier():
+    card = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8")
+    assert "轮预算内完成率" in card and "true_zero_unfinished" in card

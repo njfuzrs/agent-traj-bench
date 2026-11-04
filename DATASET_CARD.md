@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — Dataset Card
 
-> 生成于 2026-11-04 10:07 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
+> 生成于 2026-11-04 12:32 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
 
 ## 这是什么
 
@@ -62,6 +62,8 @@
 | 实付 | $26.214353（38/39 个 trial 有成本值） |
 
 > **分母是 37 而不是 39**：分母是 scored（参与计分的 task）。基础设施故障（抛异常 / verifier 未写分）排除出分母 —— 算进去等于把它记成答错。⛔ 不是 40（那是 T5 门禁的结论，含 T0005）。
+
+> 🔴 **这是「120 轮预算内完成率」，⛔ 不是能力读数**：39 条里 26 条撞轮数上限（`error_max_turns`）、3 条被墙钟 kill。真 0 里 20 条是**没做完**（`true_zero_unfinished`），只有 3 条是做完了才错。抬预算大概率抬分，所以它是下界，不是点估计。
 
 完整报告（13 节，含真 0/假 0 逐条归因）：`reports/baseline-v0.2-mini-t8-rerun.md`　机器可读取数源：`reports/t8-rerun/summary.json`
 

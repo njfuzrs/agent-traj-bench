@@ -7,11 +7,11 @@
  "max_turns": 120,
  "n_diagnosed": 39,
  "verdicts": {
-  "true_zero_wrong_fix": 18,
+  "true_zero_wrong_fix": 3,
+  "true_zero_unfinished": 20,
   "solved": 14,
   "infra_agent_not_launched": 1,
-  "infra_upstream_disconnect": 1,
-  "true_zero_missing_symbol": 5
+  "infra_upstream_disconnect": 1
  },
  "n_write_tool_calls_total": 860,
  "bash_hunting_doc": {
@@ -26,7 +26,7 @@
   "null": 4,
   "error_during_execution": 1
  },
- "conclusion_guard": "已判 39 条：解出 14、改了但改错 18、未提交解法 0、缺 src 符号 5、判分未看全 0、上游断连 1、agent 未启动 1。🔴 那 1 条 `infra_agent_not_launched` 是**假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。那 5 条 `true_zero_missing_symbol` 是**真 0**：测试跑到了，但模型没写出被 import 的 src 符号（那些正是 gold patch 创建的）⇒ ⛔ **不是**判分缺陷。✅ 能力信号共 23 条：18 条 `true_zero_wrong_fix`（改了但改错） + 5 条 `true_zero_missing_symbol`（没写出 gold patch 创建的符号）。",
+ "conclusion_guard": "已判 39 条：解出 14、改了但改错 3、未提交解法 0、缺 src 符号 0、判分未看全 0、没做完（预算触顶）20、上游断连 1、agent 未启动 1。🔴 那 1 条 `infra_agent_not_launched` 是**假 0**：agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。⛔ 那 20 条 `true_zero_unfinished` 是**预算内没做完**（撞轮数上限或被墙钟 kill），没有「改完的结果」可判对错 ⇒ 仍计入 pass@1 分母，但 ⛔ **不是**能力信号，pass@1 只能读作「本批轮数/墙钟预算内的完成率」。✅ 能力信号共 3 条：3 条 `true_zero_wrong_fix`（改了但改错）。",
  "control_group": {
   "definition": "题面不含 `docs/` 引用的存活 task（天然对照组）",
   "supports": true,
@@ -39,12 +39,12 @@
   "n_control": 4,
   "n_control_done": 4,
   "verdicts": {
-   "true_zero_wrong_fix": 3,
+   "true_zero_unfinished": 3,
    "solved": 1
   },
   "n_with_write_calls": 4,
   "prereg_note": "预注册：写下判读时这 4 条都还没跑（2026-09-13），不是事后挑的。n=4 < 5 ⇒ 只报绝对条数不报比例",
-  "reading": "✅ 归因**成立**：对照组里有条目进入了「改代码」阶段（wrong_fix 3 / solved 1） ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数"
+  "reading": "✅ 归因**成立**：对照组里有条目进入了「改代码」阶段（wrong_fix 3，含没做完的 / solved 1） ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数"
  },
  "trials": [
   {
@@ -121,10 +121,11 @@
    },
    "f2p_ran_line": "Ran 27 tests across 2 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（0 个 fail）且模型改过文件（30 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（0 个 fail）且模型改过文件（30 次）⇒ 改动不对）",
    "grade": "A1",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0007",
@@ -160,10 +161,11 @@
    },
    "f2p_ran_line": "Ran 158 tests across 3 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（20 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（20 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0008",
@@ -269,10 +271,11 @@
    },
    "f2p_ran_line": "Ran 91 tests across 11 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：被外部终止（无结果事件，多为墙钟超时 kill） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0011",
@@ -309,10 +312,11 @@
    },
    "f2p_ran_line": "Ran 5 tests across 1 file",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（30 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（30 次）⇒ 改动不对）",
    "grade": "C",
-   "instruction_names_docs": false
+   "instruction_names_docs": false,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0012",
@@ -351,10 +355,11 @@
    },
    "f2p_ran_line": "Ran 7 tests across 1 file",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（28 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（28 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": false
+   "instruction_names_docs": false,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0013",
@@ -391,10 +396,11 @@
    },
    "f2p_ran_line": "Ran 25 tests across 3 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对）",
    "grade": "A1",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0014",
@@ -432,10 +438,11 @@
    },
    "f2p_ran_line": "Ran 117 tests across 6 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（2 个 fail）且模型改过文件（32 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（2 个 fail）且模型改过文件（32 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0018",
@@ -664,10 +671,11 @@
    },
    "f2p_ran_line": "Ran 46 tests across 2 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（32 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（32 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": false
+   "instruction_names_docs": false,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0029",
@@ -781,10 +789,11 @@
    },
    "f2p_ran_line": "Ran 6 tests across 2 files",
    "n_f2p_load_failures": 1,
-   "verdict": "true_zero_missing_symbol",
-   "why": "真 0：测试跑起来了（Ran 6 tests across 2 files）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_missing_symbol`（真 0：测试跑起来了（Ran 6 tests across 2 files）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷）",
    "grade": "A1",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_missing_symbol"
   },
   {
    "task": "T0034",
@@ -860,10 +869,11 @@
    },
    "f2p_ran_line": "Ran 40 tests across 2 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（17 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（17 次）⇒ 改动不对）",
    "grade": "C",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0038",
@@ -900,10 +910,11 @@
    },
    "f2p_ran_line": "Ran 64 tests across 5 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（23 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（23 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0039",
@@ -939,10 +950,11 @@
    },
    "f2p_ran_line": "Ran 2 tests across 2 files",
    "n_f2p_load_failures": 2,
-   "verdict": "true_zero_missing_symbol",
-   "why": "真 0：测试跑起来了（Ran 2 tests across 2 files）但有 2 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_missing_symbol`（真 0：测试跑起来了（Ran 2 tests across 2 files）但有 2 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_missing_symbol"
   },
   {
    "task": "T0040",
@@ -1016,10 +1028,11 @@
    },
    "f2p_ran_line": "Ran 100 tests across 2 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（7 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（7 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0045",
@@ -1134,10 +1147,11 @@
    },
    "f2p_ran_line": "Ran 1 test across 1 file",
    "n_f2p_load_failures": 1,
-   "verdict": "true_zero_missing_symbol",
-   "why": "真 0：测试跑起来了（Ran 1 test across 1 file）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_missing_symbol`（真 0：测试跑起来了（Ran 1 test across 1 file）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷）",
    "grade": "A1",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_missing_symbol"
   },
   {
    "task": "T0050",
@@ -1172,10 +1186,11 @@
    },
    "f2p_ran_line": "Ran 1 test across 1 file",
    "n_f2p_load_failures": 1,
-   "verdict": "true_zero_missing_symbol",
-   "why": "真 0：测试跑起来了（Ran 1 test across 1 file）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_missing_symbol`（真 0：测试跑起来了（Ran 1 test across 1 file）但有 1 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_missing_symbol"
   },
   {
    "task": "T0051",
@@ -1211,10 +1226,11 @@
    },
    "f2p_ran_line": "Ran 17 tests across 2 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：被外部终止（无结果事件，多为墙钟超时 kill） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（21 次）⇒ 改动不对）",
    "grade": "C",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0052",
@@ -1328,10 +1344,11 @@
    },
    "f2p_ran_line": "Ran 23 tests across 1 file",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（32 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（32 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0056",
@@ -1367,10 +1384,11 @@
    },
    "f2p_ran_line": "Ran 70 tests across 3 files",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（3 个 fail）且模型改过文件（20 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（3 个 fail）且模型改过文件（20 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0059",
@@ -1405,10 +1423,11 @@
    },
    "f2p_ran_line": "Ran 7 tests across 1 file",
    "n_f2p_load_failures": 0,
-   "verdict": "true_zero_wrong_fix",
-   "why": "真 0：测试跑起来了（1 个 fail）且模型改过文件（51 次）⇒ 改动不对",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：被外部终止（无结果事件，多为墙钟超时 kill） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_wrong_fix`（真 0：测试跑起来了（1 个 fail）且模型改过文件（51 次）⇒ 改动不对）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_wrong_fix"
   },
   {
    "task": "T0062",
@@ -1521,10 +1540,11 @@
    },
    "f2p_ran_line": "Ran 11 tests across 5 files",
    "n_f2p_load_failures": 7,
-   "verdict": "true_zero_missing_symbol",
-   "why": "真 0：测试跑起来了（Ran 11 tests across 5 files）但有 7 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷",
+   "verdict": "true_zero_unfinished",
+   "why": "真 0·没做完：轮数上限耗尽（error_max_turns） ⇒ 预算内没做完，⛔ **不是**「改错了」。仍计入 pass@1 分母；原判据给的是 `true_zero_missing_symbol`（真 0：测试跑起来了（Ran 11 tests across 5 files）但有 7 处加载失败（`Cannot find module` / `Export named ... not found`）—— 被 import 的 src 符号**正是 gold patch 创建的**，模型没写出来 ⇒ ⛔ 这**不是**判分缺陷）",
    "grade": "A2",
-   "instruction_names_docs": true
+   "instruction_names_docs": true,
+   "unfinished_from": "true_zero_missing_symbol"
   },
   {
    "task": "T0065",
