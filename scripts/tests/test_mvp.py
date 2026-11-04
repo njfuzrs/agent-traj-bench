@@ -4881,3 +4881,65 @@ def test_delivered_set_and_survivors_unchanged():
     import json as _json
     surv = _json.loads((c.MVP_REPORTS / "t6-recheck/survivors.json").read_text(encoding="utf-8"))
     assert len(surv["survivors"]) == 39
+
+# T02 / traj 缺陷 2：判分方自带 bun 配置 + 被保护文件按 base blob 还原
+
+def _pins():
+    spec = importlib.util.spec_from_file_location("_bvp", MVP / "build-verifier-pins.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_t3_test_sh_legacy_output_unchanged_without_hardening_flags():
+    """两个新参数默认关闭 ⇒ 旧调用不变（防加固时顺手改坏旧路径）。"""
+    t3 = load_t3()
+    sh = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], ["b.test.ts"], [], "bun test")
+    assert "git checkout -- 'b.test.ts'" in sh
+    assert "--config=" not in sh and "restore_pinned" not in sh
+
+
+def test_t3_hardened_test_sh_uses_verifier_config_and_pinned_blobs():
+    t3 = load_t3()
+    sh = t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts"], ["b.test.ts"], [], "bun test",
+                    pinned={"b.test.ts": "a" * 40}, verifier_config=True)
+    body = code_lines(sh)
+    # 两次 bun test 都必须带判分方配置
+    assert body.count("bun test --config=/tests/bunfig.verifier.toml") == 2, body
+    # 🔴 不许再用 git checkout -- 还原：agent commit 过的文件会被还原成 agent 的版本
+    assert "git checkout --" not in body
+    assert "restore_pinned 'b.test.ts' '" + "a" * 40 + "'" in sh
+    # blob 取不到 ⇒ error_code=6 且 exit 0（fail closed，不是 trial error）
+    fn = sh.split("restore_pinned() {")[1].split("\n}")[0]
+    assert '"error_code":6' in fn and "exit 0" in fn
+    assert subprocess.run(["bash", "-n"], input=sh, capture_output=True, text=True).returncode == 0
+
+
+def test_t3_hardened_test_sh_refuses_unpinned_restore_path():
+    t3 = load_t3()
+    with pytest.raises(ValueError):
+        t3.test_sh("T0001", ["a.test.ts"], ["b.test.ts", "c.test.ts"], ["b.test.ts", "c.test.ts"], [],
+                   "bun test", pinned={"b.test.ts": "a" * 40}, verifier_config=True)
+
+
+def test_committed_tasks_are_all_hardened_and_self_consistent():
+    """入库 39 题的 test.sh 全部走加固路径，且等于现拼结果（离线，不需要 mirror）。"""
+    assert _pins().main(["--check"]) == 0
+    for d in sorted(c.MVP_TASKS.iterdir()):
+        sh = (d / "tests" / "test.sh").read_text(encoding="utf-8")
+        assert "--config=/tests/bunfig.verifier.toml" in sh and "git checkout --" not in code_lines(sh), d.name
+
+
+def test_preload_targets_present_on_base_are_pinned():
+    """base 的 bunfig 指向的 preload 文件（T0002/T0024/T0056）也必须 pin 住 —— 它是 .ts 不是 .test.ts。"""
+    import json as _json
+    for t in ("T0002", "T0024", "T0056"):
+        blobs = _json.loads((c.MVP_TASKS / t / "tests" / "protected.json").read_text(encoding="utf-8"))["blobs"]
+        assert "tests/preload-isolate-sid-home.ts" in blobs, t
+
+
+def test_t0010_verifier_config_is_gold_version():
+    """T0010 的 gold patch 改了 bunfig ⇒ 判分方配置取 gold 版本，否则 oracle 拿不到满分。"""
+    cfg = (c.MVP_TASKS / "T0010" / "tests" / "bunfig.verifier.toml").read_text(encoding="utf-8")
+    assert 'preload = ["./tests/preload-isolate-sid-home.ts"]' in cfg
