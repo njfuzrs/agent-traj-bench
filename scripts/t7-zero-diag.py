@@ -316,6 +316,39 @@ def diagnose_one(trial_dir: Path, max_turns: int) -> dict:
     return out
 
 
+#: 「真 0」里能当「做完了但错」读的，只有**干净终止**的那些。
+#: 🔴 traj 缺陷 3：23 条「能力信号」里 17 条 `error_max_turns`、3 条被墙钟外部 kill
+#: （subtype 缺失 + AgentTimeoutError），只有 3 条 `success`。没做完的 trial 没有「改完的结果」，
+#: ⛔ 不许叫它「改错了」。它们**仍在 pass@1 分母里**（预算内没做出来就是没过，
+#: 同 `t7_report_lib.budget_exhausted` 的口径），只是换一个如实的标签。
+CLEAN_FINISH = {"success"}
+UNFINISHED_FROM = {"true_zero_wrong_fix", "true_zero_missing_symbol", "true_zero_no_attempt"}
+
+
+def reclassify(row: dict) -> dict:
+    """真 0 按终止形态拆档：干净终止留原判定，否则改判 `true_zero_unfinished`。
+
+    纯函数，只读 row 里已有的 `verdict` 与 `termination.subtype` ⇒
+    公开仓没有 run 目录也能从入库的 zero-diag.json 复算（`--reclassify`）。
+    幂等：已是 unfinished 的行原样返回。
+    """
+    v = row.get("verdict")
+    if v not in UNFINISHED_FROM:
+        return row
+    sub = (row.get("termination") or {}).get("subtype")
+    if sub in CLEAN_FINISH:
+        return row
+    out = dict(row)
+    out["verdict"] = "true_zero_unfinished"
+    out["unfinished_from"] = v
+    how = ("轮数上限耗尽（error_max_turns）" if sub == "error_max_turns"
+           else "被外部终止（无结果事件，多为墙钟超时 kill）" if sub is None
+           else f"非正常终止（{sub}）")
+    out["why"] = (f"真 0·没做完：{how} ⇒ 预算内没做完，⛔ **不是**「改错了」。"
+                  f"仍计入 pass@1 分母；原判据给的是 `{v}`（{row.get('why', '')}）")
+    return out
+
+
 def _guard_text(v: Counter, n_done: int) -> str:
     """结论护栏文案 —— **按实际判定生成，不写死**。
 
@@ -331,11 +364,13 @@ def _guard_text(v: Counter, n_done: int) -> str:
     # 🔴 两类**假 0**（题没跑完 / 没跑起来）必须在句子里出现，否则条数加不平：
     # 读者拿「解出 + 改错 + 未提交 + 缺符号 + 判分未看全」去凑 n_done 会差几条，
     # 而差掉的恰好是不该算进能力分母的那几条。
+    n_unfin = v.get("true_zero_unfinished", 0)
     n_disc = v.get("infra_upstream_disconnect", 0)
     n_nolaunch = v.get("infra_agent_not_launched", 0)
 
     bits = [f"已判 {n_done} 条：解出 {n_solved}、改了但改错 {n_wrong}、"
             f"未提交解法 {n_no_attempt}、缺 src 符号 {n_missing_sym}、判分未看全 {n_grader}"
+            + (f"、没做完（预算触顶）{n_unfin}" if n_unfin else "")
             + (f"、上游断连 {n_disc}" if n_disc else "")
             + (f"、agent 未启动 {n_nolaunch}" if n_nolaunch else "")
             + "。"]
@@ -343,6 +378,11 @@ def _guard_text(v: Counter, n_done: int) -> str:
         bits.append(f"🔴 那 {n_nolaunch} 条 `infra_agent_not_launched` 是**假 0**："
                     "agent 进程一次都没启动（题面超 `MAX_ARG_STRLEN`，exec 被拒），"
                     "verifier 却照常打了分 ⇒ ⛔ 已排除出分母，**不是**能力信号。")
+    if n_unfin:
+        bits.append(f"⛔ 那 {n_unfin} 条 `true_zero_unfinished` 是**预算内没做完**"
+                    "（撞轮数上限或被墙钟 kill），没有「改完的结果」可判对错 ⇒ "
+                    "仍计入 pass@1 分母，但 ⛔ **不是**能力信号，"
+                    "pass@1 只能读作「本批轮数/墙钟预算内的完成率」。")
     if n_grader:
         bits.append(f"⛔ 那 {n_grader} 条 `grader_incomplete` **不能**读作模型答错"
                     "（判分侧没拿全测试节点，且 f2p 日志无加载失败签名）。")
@@ -409,6 +449,11 @@ def control_group(done: list[dict]) -> dict:
     rows = [r for r in done if r["task"] in set(ctrl_ids)]
     v = Counter(r["verdict"] for r in rows)
     n_attempted = sum(1 for r in rows if r.get("n_write_tool_calls", 0) > 0)
+    # 🔴 预注册判据是「进入了改代码阶段」，当时用 `true_zero_wrong_fix` 表达。
+    # T07 把没做完的 wrong_fix 改标成 `true_zero_unfinished` ⇒ 按原判定（`unfinished_from`）
+    # 计回来，⛔ 不许让一次换标签改写预注册判读的结论。
+    n_wrong_orig = sum(1 for r in rows if r["verdict"] == "true_zero_wrong_fix"
+                       or r.get("unfinished_from") == "true_zero_wrong_fix")
 
     # 🔴 `supports` 是给下游的**结构化判据**，⛔ 下游不许再靠子串匹配
     # （报告侧原来用 `"成立" in reading` ⇒ 新增的否定句「不许用部分样本宣布归因
@@ -430,10 +475,10 @@ def control_group(done: list[dict]) -> dict:
                 f"已跑的形态：{dict(v)}（wrong_fix 进入了改代码阶段 / no_attempt 未提交解法）。"
                 "⛔ 不许用部分样本宣布归因成立：对照组的价值在于**能推翻**归因，"
                 "拿第一条就确认等于把反证做成单向确认。")
-    elif v.get("true_zero_wrong_fix", 0) or v.get("solved", 0):
+    elif n_wrong_orig or v.get("solved", 0):
         supports = True
         read = ("✅ 归因**成立**：对照组里有条目进入了「改代码」阶段"
-                f"（wrong_fix {v.get('true_zero_wrong_fix', 0)} / solved {v.get('solved', 0)}）"
+                f"（wrong_fix {n_wrong_orig}，含没做完的 / solved {v.get('solved', 0)}）"
                 " ⇒ 题面缺陷（点名容器内不存在的文档）确实压着分数")
     elif n_attempted == 0 and all(
             (r.get("termination") or {}).get("subtype") == "error_max_turns" for r in rows):
@@ -468,10 +513,16 @@ def main() -> int:
     ap.add_argument("--runs", default="baseline", metavar="DIR",
                     help="取数源目录名（reports/ 下）。默认 baseline；整改后那批传 t8-rerun。"
                          "🔴 必须与 t7-report.py --runs 取同一个值")
+    ap.add_argument("--reclassify", action="store_true",
+                    help="不读 run 目录，只把已入库的 zero-diag.json 按 reclassify() 重判一遍"
+                         "（公开仓没有 1.9G 的 run 产物时用这个复算）")
     args = ap.parse_args()
 
     if args.runs != "baseline":
         _retarget(args.runs)
+
+    if args.reclassify:
+        return _reclassify_existing(args)
 
     run = lib.latest_run(RUNS)
     if run is None:
@@ -488,13 +539,16 @@ def main() -> int:
         for d in sorted(r.glob("T0*/")):
             if d.is_dir():
                 trial_dirs[d.name.split("__")[0]] = d
-    rows = [diagnose_one(d, args.max_turns) for _, d in sorted(trial_dirs.items())]
+    rows = [reclassify(diagnose_one(d, args.max_turns)) for _, d in sorted(trial_dirs.items())]
     done = [r for r in rows if r["verdict"] != "running"]
     for r in done:
         r["grade"] = grade.get(r["task"])
         ins = c.MVP_TASKS / r["task"] / "instruction.md"
         r["instruction_names_docs"] = ("docs/" in ins.read_text(encoding="utf-8")) if ins.exists() else None
+    return _write(run, done, args)
 
+
+def _write(run, done: list[dict], args) -> int:
     control = control_group(done)
     verdicts = Counter(r["verdict"] for r in done)
     n_bash = sum(r.get("n_bash", 0) for r in done)
@@ -503,9 +557,10 @@ def main() -> int:
         # ⚠️ 归因本身**跨所有 run 目录**扫（见上面 trial_dirs 那段），
         # 这里的 run_dir 只是**最新**那个 ⇒ 必须同时记 run_dirs，
         # 否则补跑后读者会以为归因只覆盖了一个目录（同 t8-rerun.summarize 的处理）。
-        "run_dir": _rel(run),
-        "run_dirs": [r.name for r in sorted(
-            q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20")],
+        "run_dir": _rel(run) if isinstance(run, Path) else run,
+        "run_dirs": ([r.name for r in sorted(
+            q for q in RUNS.iterdir() if q.is_dir() and q.name[:2] == "20")]
+            if isinstance(run, Path) else getattr(args, "_prev_run_dirs", [])),
         "max_turns": args.max_turns,
         "n_diagnosed": len(done),
         "verdicts": dict(verdicts),
@@ -554,6 +609,19 @@ def main() -> int:
     print(f"\n{summary['conclusion_guard']}")
     print(f"\n已写 {_rel(OUT)}")
     return 0
+
+
+def _reclassify_existing(args) -> int:
+    """从入库的 zero-diag.json 复算：只改判档，其余字段（逐条证据）原样保留。"""
+    if not OUT.exists():
+        raise SystemExit(f"{_rel(OUT)} 不存在 —— 没有可重判的归因快照")
+    prev = json.loads(OUT.read_text(encoding="utf-8"))
+    if prev.get("max_turns") != args.max_turns:
+        raise SystemExit(f"⛔ --max-turns {args.max_turns} 与快照的 {prev.get('max_turns')} 不一致"
+                         " —— 「撞上限」判据会用错阈值")
+    done = [reclassify(r) for r in prev["trials"]]
+    args._prev_run_dirs = prev.get("run_dirs", [])
+    return _write(prev.get("run_dir"), done, args)
 
 
 if __name__ == "__main__":

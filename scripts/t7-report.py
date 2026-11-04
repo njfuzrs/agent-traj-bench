@@ -478,14 +478,19 @@ def _error_code_note(ec, zd: dict | None) -> list[str]:
         "（文件加载失败 ⇒ bun 不写 XML），那是**真 0**。",
     ]
     v = (zd or {}).get("verdicts") or {}
-    n_ms = v.get("true_zero_missing_symbol", 0)
+    # 🔴 T07 后没做完的缺符号条改标成 `true_zero_unfinished`，但 xml_missing 的**成因**没变
+    # ⇒ 按原判定（`unfinished_from`）计回来，否则这句会说 0 条、与上面的 error_code 分布对不上。
+    n_ms = v.get("true_zero_missing_symbol", 0) + sum(
+        1 for r in (zd or {}).get("trials") or []
+        if r.get("unfinished_from") == "true_zero_missing_symbol")
     n_gi = v.get("grader_incomplete", 0)
     if zd is None:
         lines.append("> → 本批未做真 0/假 0 归因 ⇒ **无法判定**这些条属于哪一类，见 §10。")
     else:
         lines.append(
             f"> → 本批 §10 已逐条核实：`true_zero_missing_symbol` {n_ms} 条"
-            f"（**真 0**，模型没写出 gold patch 创建的符号）、"
+            f"（**真 0**，模型没写出 gold patch 创建的符号；含没做完的，"
+            f"判定表里记在 `true_zero_unfinished`）、"
             f"`grader_incomplete` {n_gi} 条（**判分侧没看全**，⛔ 不可读作答错）。"
             + ("" if n_gi else " ⇒ 本批没有一条是判分缺陷。"))
     return lines
@@ -897,6 +902,11 @@ def _zero_diag_section(zd: dict | None, p: float | None = None) -> list[str]:
         f"| `true_zero_missing_symbol` | {v.get('true_zero_missing_symbol', 0)} | "
         "真 0：测试跑到了，但模型没写出被 import 的 src 符号"
         "（那些正是 gold patch 要创建的）⇒ **也是能力信号**，⛔ 不是判分缺陷 |",
+        # 🔴 T07 / traj 缺陷 3：没做完（撞轮数上限 / 被墙钟 kill）的真 0 单独一档。
+        # 旧口径把它们记成 wrong_fix（「改动不对」），而它们根本没有改完的结果。
+        f"| `true_zero_unfinished` | {v.get('true_zero_unfinished', 0)} | "
+        "真 0·**没做完**：撞轮数上限或被墙钟 kill ⇒ 仍计入分母，"
+        "但 ⛔ **不是**「改错了」，也不是能力信号 |",
         f"| `infra_upstream_disconnect` | {v.get('infra_upstream_disconnect', 0)} | "
         "**假 0**：上游 LLM 链路断连，verifier 照常打了分 ⇒ 已按 infra 排除出分母 |",
         # 🔴 2026-09-14 抓到的第二类假 0：agent **一次都没启动**（题面超
@@ -1535,6 +1545,34 @@ def build_report(res: dict, trials: list[lib.Trial],
     return "\n".join(L)
 
 
+def _budget_qualifier(zd: dict | None) -> list[str]:
+    """card 基线读数的预算限定词（T07 / traj 缺陷 3）。
+
+    🔴 30/39 撞 120 轮上限 ⇒ pass@1 是「这个预算内的完成率」，且是下界：
+    9 条解出的题也是 error_max_turns（压线做完），抬预算大概率抬分。
+    条数全部从 zero-diag 现取，⛔ 不写死。
+    """
+    if not zd:
+        return []
+    v = zd.get("verdicts") or {}
+    term = zd.get("termination_subtypes") or {}
+    n_unfin = v.get("true_zero_unfinished", 0)
+    n_cap = v.get("true_zero_wrong_fix", 0) + v.get("true_zero_missing_symbol", 0)
+    n_mt = term.get("error_max_turns", 0)
+    # 被墙钟 kill：没有结果事件（subtype 缺失）但 agent 跑过 —— 排除 agent 未启动的 infra 假 0
+    n_kill = sum(1 for r in zd.get("trials") or []
+                 if (r.get("termination") or {}).get("subtype") is None
+                 and not str(r.get("verdict", "")).startswith("infra_"))
+    return [
+        "",
+        f"> 🔴 **这是「{zd.get('max_turns', '?')} 轮预算内完成率」，⛔ 不是能力读数**："
+        f"{zd.get('n_diagnosed', '?')} 条里 {n_mt} 条撞轮数上限（`error_max_turns`）"
+        + (f"、{n_kill} 条被墙钟 kill" if n_kill else "") + "。"
+        f"真 0 里 {n_unfin} 条是**没做完**（`true_zero_unfinished`），"
+        f"只有 {n_cap} 条是做完了才错。抬预算大概率抬分，所以它是下界，不是点估计。",
+    ]
+
+
 def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                funnel: list, attrib: dict, n_surv: int, zd: dict | None,
                n_conc: int, fingerprint: str) -> str:
@@ -1637,6 +1675,7 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         f"| 实付 | ${cost['total']}（{cost['n_with_cost']}/{cost['n_trials']} 个 trial 有成本值） |",
         "",
         f"> **分母是 {res['n']} 而不是 {len(surv)}**：{res['denominator_note']}",
+        *_budget_qualifier(zd),
         "",
         f"完整报告（13 节，含真 0/假 0 逐条归因）：`{_rel(REPORT)}`　"
         f"机器可读取数源：`{_rel(SUMMARY)}`",
