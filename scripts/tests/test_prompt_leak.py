@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 MVP = Path(__file__).resolve().parent.parent
 
@@ -95,3 +98,72 @@ def test_empty_scope_is_not_a_pass(tmp_path):
     assert leak.main(["--tasks", str(tmp_path)]) == 2
     (tmp_path / "T9002").mkdir()  # 有题目录但没有 eval 题面
     assert leak.main(["--tasks", str(tmp_path)]) == 2
+
+
+# ── 豁免清单 ─────────────────────────────────────────────────────────
+
+def test_allowlist_suppresses_only_listed_lines_and_flags_stale(tmp_path):
+    clean = "请修复 matcher。\n"
+    line = "return matcher.split('|').some((n) => n === toolName);"
+    _mk_task(tmp_path, "T9001", clean + line + "\n", GOLD)
+    allow = tmp_path / "allow.json"
+    allow.write_text(json.dumps({"T9001": [{"line": line, "reason": "r", "evidence": "e"}]}))
+    assert leak.main(["--tasks", str(tmp_path), "--allowlist", str(allow)]) == 0
+    # 再泄一行没豁免的 ⇒ 红
+    (tmp_path / "T9001" / "instruction.eval.md").write_text(
+        clean + line + "\nexport type HookPermissionDecision = 'allow' | 'deny' | 'ask';\n")
+    assert leak.main(["--tasks", str(tmp_path), "--allowlist", str(allow)]) == 1
+    # 豁免项不再命中 ⇒ 红（防清单腐烂）
+    (tmp_path / "T9001" / "instruction.eval.md").write_text(clean)
+    assert leak.main(["--tasks", str(tmp_path), "--allowlist", str(allow)]) == 1
+
+
+def test_allowlist_entry_without_evidence_is_rejected(tmp_path):
+    allow = tmp_path / "allow.json"
+    allow.write_text(json.dumps({"T9001": [{"line": "x" * 30, "reason": "r"}]}))
+    with pytest.raises(SystemExit):
+        leak.load_allowlist(allow)
+
+
+def test_committed_allowlist_entries_all_carry_evidence():
+    allow = leak.load_allowlist(leak.ALLOWLIST)  # 缺字段会直接 SystemExit
+    assert set(allow) == {"T0014"}, f"豁免清单变了，逐条复核证据：{sorted(allow)}"
+
+
+# ── T04：instruction.eval.md 生成器 ────────────────────────────────────
+
+def _gen():
+    spec = importlib.util.spec_from_file_location("_build_eval", MVP / "build-eval-instruction.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_strip_fenced_blocks_removes_code_and_keeps_prose():
+    gen = _gen()
+    doc = "前文\n```ts\nconst secret = 1;\n```\n中间\n```\nmore();\n"  # 第二块未闭合
+    out = gen.strip_fenced_blocks(doc)
+    assert "secret" not in out and "more()" not in out and "```" not in out
+    assert "前文" in out and "中间" in out
+    assert out.count(gen.FENCE_PLACEHOLDER) == 2
+
+
+def test_committed_eval_instructions_match_generator():
+    """入库的 instruction.eval.md 必须是生成器现拼的结果（防手改）。"""
+    assert _gen().main(["--check"]) == 0
+
+
+def test_eval_instruction_drops_module_hint_and_keeps_raw_sentence():
+    for t in ("T0008", "T0026"):
+        ev = (c.MVP_TASKS / t / "instruction.eval.md").read_text(encoding="utf-8")
+        raw = (c.MVP_TASKS / t / "instruction.md").read_text(encoding="utf-8")
+        assert "文件名指示了实现应落在哪个模块" not in ev
+        assert raw.partition("\n---\n")[0].strip() in ev, "原句必须原样保留"
+
+
+def test_eval_instructions_carry_no_real_login_name():
+    """内联文档按 instruction.md 同一口径脱敏（`/Users/<USER>`）。"""
+    bad = [p.parent.name for p in c.MVP_TASKS.glob("*/instruction.eval.md")
+           if "/Users/zhourusheng" in p.read_text(encoding="utf-8")]
+    assert not bad, f"题面里有本机登录名：{bad[:5]}"

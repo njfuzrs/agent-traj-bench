@@ -30,7 +30,13 @@ T0014 / T0026 / T0065 都只泄 1 行，按比例算会被放过，而缺陷 1 �
     它是本门禁的阳性对照（缺陷 1 的 8 条必须全部报出来，否则判据失效）
   - `raw`：`tasks/*/instruction.md`（原句 + 环境事实，provenance）
 
-退出码：0 扫到题面且零泄漏；1 有泄漏；2 作用域为空。
+## 豁免（`meta/prompt-leak-allowlist.json`）
+
+只收「命中行在 base 里已存在、文档在描述现状」的情形（T0014 就是这样：缺陷 1 原先的
+8/34 里它那 1 行是误报）。每条必须带可复跑的证据。⚠️ 豁免项**不再命中**时也报红 ——
+否则题面一改，清单就成了没人知道还管不管用的旧账。
+
+退出码：0 扫到题面且零泄漏；1 有泄漏或豁免过期；2 作用域为空。
 ⛔ 空集不当通过（同 `check-contamination.py`）：`instruction.eval.md` 还没生成时
 默认模式必须红，而不是「0 个文件 0 命中」的假绿。
 """
@@ -47,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common as c  # noqa: E402
 
 MIN_LEN = 25
+ALLOWLIST = c.MVP_META / "prompt-leak-allowlist.json"
 COMMENT_PREFIXES = ("*", "//", "/*")
 
 
@@ -89,15 +96,37 @@ def load_prompts(source: str, tasks_dir: Path) -> dict[str, str]:
             for t in tasks if (tasks_dir / t / name).exists()}
 
 
-def scan(prompts: dict[str, str], tasks_dir: Path) -> dict[str, dict]:
-    """返回 {task: {n_candidates, leaked}}，只含有 gold patch 的题。"""
+def load_allowlist(path: Path) -> dict[str, set[str]]:
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    out: dict[str, set[str]] = {}
+    for t, items in raw.items():
+        if t.startswith("_"):
+            continue
+        for it in items:
+            if not (it.get("reason") and it.get("evidence")):
+                raise SystemExit(f"⛔ 豁免 {t} 缺 reason / evidence：{it.get('line')!r}")
+            out.setdefault(t, set()).add(it["line"])
+    return out
+
+
+def scan(prompts: dict[str, str], tasks_dir: Path,
+         allow: dict[str, set[str]] | None = None) -> dict[str, dict]:
+    """返回 {task: {n_candidates, leaked, allowed, stale_allow}}，只含有 gold patch 的题。"""
+    allow = allow or {}
     out: dict[str, dict] = {}
     for t, prompt in sorted(prompts.items()):
         gp = tasks_dir / t / "solution" / "gold_patch.diff"
         if not gp.exists():
             continue
         cand = gold_candidates(gp.read_text(encoding="utf-8", errors="replace"))
-        out[t] = {"n_candidates": len(cand), "leaked": leaked_lines(prompt, cand)}
+        hits = leaked_lines(prompt, cand)
+        ok = allow.get(t, set())
+        out[t] = {"n_candidates": len(cand),
+                  "leaked": [h for h in hits if h not in ok],
+                  "allowed": [h for h in hits if h in ok],
+                  "stale_allow": sorted(ok - set(hits))}
     return out
 
 
@@ -106,10 +135,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--source", choices=("eval", "t8", "raw"), default="eval")
     ap.add_argument("--tasks", type=Path, default=c.MVP_TASKS, help="tasks 根目录（测试用）")
     ap.add_argument("--json", action="store_true", help="输出逐题 JSON")
+    ap.add_argument("--allowlist", type=Path, default=ALLOWLIST)
+    ap.add_argument("--no-allowlist", action="store_true", help="不读豁免（看原始命中）")
     args = ap.parse_args(argv)
 
     prompts = load_prompts(args.source, args.tasks)
-    res = scan(prompts, args.tasks)
+    allow = {} if args.no_allowlist else load_allowlist(args.allowlist)
+    res = scan(prompts, args.tasks, allow)
     if not res:
         print(f"::error::--source {args.source} 下没扫到任何题面（{args.tasks}）"
               " ⇒ 作用域为空，⛔ 不当通过", file=sys.stderr)
@@ -122,9 +154,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::error::{t}: {len(r['leaked'])}/{r['n_candidates']} 行 gold patch 逐字出现在题面")
         for line in r["leaked"][:3]:
             print(f"    {line[:120]}")
+    # 豁免过期只在默认（eval）题面上判：t8 / raw 是别的题面，命中集本来就不同
+    stale = {t: r["stale_allow"] for t, r in res.items()
+             if r["stale_allow"] and args.source == "eval"}
+    for t, lines in stale.items():
+        print(f"::error::{t}: 豁免项已不再命中，从 {_rel(args.allowlist)} 删掉：{lines[0][:80]}")
+    n_allowed = sum(len(r["allowed"]) for r in res.values())
     print(f"--source {args.source}：扫描 {len(res)} 份题面，泄漏 {len(bad)} 份"
-          f"{'：' + ', '.join(bad) if bad else ''}")
-    return 1 if bad else 0
+          f"{'：' + ', '.join(bad) if bad else ''}"
+          f"{f'（豁免 {n_allowed} 行）' if n_allowed else ''}")
+    return 1 if bad or stale else 0
+
+
+def _rel(p: Path) -> str:
+    try:
+        return str(p.resolve().relative_to(c.REPO_ROOT))
+    except ValueError:
+        return str(p)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+{
+ "_note": "check-prompt-leak.py 的豁免清单。只收「命中行在 base 里已存在、文档是在描述现状」的情形。每条必须给可复跑的证据；豁免项不再命中时门禁报红（防清单腐烂）。⛔ 不许因为「改起来麻烦」加豁免。",
+ "T0014": [
+  {
+   "line": "process.env.SID_ENABLE_LOOP_DETECTION === \"1\"",
+   "reason": "base 已有该行，文档在描述 isLoopDetectionEnabled() 的现状；gold patch 只是在两个新函数里复用同一判断",
+   "evidence": "git -C sid-code grep -n 'SID_ENABLE_LOOP_DETECTION === \"1\"' f2396fb58d2c30d65f4bd376d248b27d987403c8 -- src/ → src/agent/loop-detection.ts:602（2026-11-04 实测）"
+  }
+ ]
+}
