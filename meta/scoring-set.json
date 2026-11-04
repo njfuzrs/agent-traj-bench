@@ -1,0 +1,293 @@
+{
+ "_note": "v0.2.1 计分集。由 scripts/build-scoring-set.py 生成，⛔ 不要手改。交付集仍是 survivors.json 的 39 条；scored 之外的题留在交付集里、不计分。task_kind 从 gold patch 实算；upstream_category 是上游会话分类器的原始标签，其中 test_authoring 的语义在反解成 task 后已翻转（测试是判据，不是产物），仅作 provenance。",
+ "version": "v0.2.1",
+ "ruling": "CI/CD 方案 §6.6 T00 裁决（2026-11-04）",
+ "n_delivered": 39,
+ "n_scored": 32,
+ "groups": {
+  "scored": [
+   "T0002",
+   "T0003",
+   "T0007",
+   "T0008",
+   "T0010",
+   "T0011",
+   "T0013",
+   "T0014",
+   "T0018",
+   "T0020",
+   "T0022",
+   "T0024",
+   "T0028",
+   "T0029",
+   "T0031",
+   "T0033",
+   "T0036",
+   "T0038",
+   "T0039",
+   "T0040",
+   "T0042",
+   "T0045",
+   "T0047",
+   "T0049",
+   "T0050",
+   "T0051",
+   "T0054",
+   "T0055",
+   "T0059",
+   "T0062",
+   "T0063",
+   "T0064"
+  ],
+  "audit": [
+   "T0026",
+   "T0034",
+   "T0052",
+   "T0056",
+   "T0065"
+  ],
+  "excluded_context": [
+   "T0012"
+  ],
+  "excluded_infra": [
+   "T0009"
+  ]
+ },
+ "reasons": {
+  "audit": {
+   "T0026": "二次评审「方案中哪些值得做」，要的是判断清单",
+   "T0034": "检查方案需求是否全部落地，要的是核对结论",
+   "T0052": "检查文档提到的问题是否落地并汇总结果",
+   "T0056": "检查两份方案的落地情况并汇总结果",
+   "T0065": "检查方案的问题与 todo 是否落地并汇总结果"
+  },
+  "excluded_context": {
+   "T0012": "原句指向「你刚刚修改的代码」「你的任务」，依赖题面之外的会话上下文"
+  },
+  "excluded_infra": {
+   "T0009": "eval 题面剥掉代码块后仍 >120KB，逼近 MAX_ARG_STRLEN（131072）；投递方式另立待办"
+  }
+ },
+ "kept_after_review": {
+  "T0007": "bug 报告型：给了症状，「做完」= bug 不再出现",
+  "T0011": "bug 报告型：给了症状，「做完」= bug 不再出现",
+  "T0014": "关键词误报：原句是「按照文档来执行代码修复」",
+  "T0055": "关键词误报：原句是「按照文档执行代码修复」",
+  "T0063": "bug 报告型：给了症状，「做完」= bug 不再出现"
+ },
+ "task_kind": {
+  "scored": {
+   "source_change": 32
+  },
+  "delivered": {
+   "source_change": 39
+  }
+ },
+ "upstream_category": {
+  "scored": {
+   "bug_fix": 16,
+   "test_authoring": 16
+  },
+  "delivered": {
+   "bug_fix": 18,
+   "test_authoring": 21
+  }
+ },
+ "per_task": {
+  "T0002": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0003": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0007": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0008": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0009": {
+   "group": "excluded_infra",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0010": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0011": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0012": {
+   "group": "excluded_context",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0013": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0014": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0018": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0020": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0022": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0024": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0026": {
+   "group": "audit",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0028": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0029": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0031": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0033": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0034": {
+   "group": "audit",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0036": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0038": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0039": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0040": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0042": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0045": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0047": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0049": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0050": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0051": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0052": {
+   "group": "audit",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0054": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0055": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0056": {
+   "group": "audit",
+   "task_kind": "source_change",
+   "upstream_category": "test_authoring"
+  },
+  "T0059": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0062": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0063": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0064": {
+   "group": "scored",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  },
+  "T0065": {
+   "group": "audit",
+   "task_kind": "source_change",
+   "upstream_category": "bug_fix"
+  }
+ }
+}

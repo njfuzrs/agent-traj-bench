@@ -4838,3 +4838,46 @@ def test_guard_never_counts_unfinished_as_capability_signal():
 def test_card_states_budget_qualifier():
     card = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8")
     assert "轮预算内完成率" in card and "true_zero_unfinished" in card
+
+# T05 / traj 缺陷 8：计分集按 T00 裁决②③，任务类型按 gold patch 实算
+
+def _scoring():
+    import json as _json
+    return _json.loads((c.MVP_META / "scoring-set.json").read_text(encoding="utf-8"))
+
+
+def test_scoring_set_matches_t00_ruling():
+    d = _scoring()
+    g = d["groups"]
+    assert set(g["audit"]) == {"T0026", "T0034", "T0052", "T0056", "T0065"}
+    assert g["excluded_context"] == ["T0012"] and g["excluded_infra"] == ["T0009"]
+    assert d["n_delivered"] == 39 and d["n_scored"] == len(g["scored"]) == 32
+    # 关键词误报 / bug 报告型保留计分
+    for t in ("T0014", "T0055", "T0007", "T0011", "T0063"):
+        assert t in g["scored"], t
+    # 分组互斥且覆盖交付集
+    allt = [t for ts in g.values() for t in ts]
+    assert len(allt) == len(set(allt)) == 39
+
+
+def test_scoring_set_is_generated_not_hand_edited():
+    spec = importlib.util.spec_from_file_location("_bss", MVP / "build-scoring-set.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main(["--check"]) == 0
+
+
+def test_task_kind_is_computed_and_card_stops_calling_them_test_authoring():
+    d = _scoring()
+    assert d["task_kind"]["delivered"] == {"source_change": 39}, d["task_kind"]
+    card = (REPO_ROOT / "DATASET_CARD.md").read_text(encoding="utf-8")
+    assert "| 任务类型（按 gold patch 实算） | `source_change` 39 |" in card
+    assert "测试自己测自己" not in card, "仍在按翻转的标签语义做披露"
+
+
+def test_delivered_set_and_survivors_unchanged():
+    """计分集不许改写交付集：37.8% 那批的分母（survivors.json）必须原样保留。"""
+    import json as _json
+    surv = _json.loads((c.MVP_REPORTS / "t6-recheck/survivors.json").read_text(encoding="utf-8"))
+    assert len(surv["survivors"]) == 39

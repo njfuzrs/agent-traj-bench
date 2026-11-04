@@ -207,10 +207,14 @@ LIMITATIONS = [
     "定位是「真实生产交互衍生的补充 benchmark」，不是通用 SWE 基准。",
     "**自指污染**：sid-code 本身就是 coding agent，仓库含 SWE-bench 判分逻辑与 prompt 模板，"
     "约 14% commit 与 evals 相关。已用 `excluded-paths.txt` 强制排除四个前缀，但仍须披露。",
-    "🔴 **任务类型覆盖窄**：交付 39 条实测**只有两类** —— `bug_fix` 18 / `test_authoring` 21。"
+    "🔴 **任务类型覆盖窄**：上游会话分类器的标签只有两类 —— `bug_fix` 18 / `test_authoring` 21。"
     "`feature_impl` 10 与 `refactor` 1 在 T1/T2 尚存，但 T3 生成的 65 条里已一条不剩"
     "（与另外 106 条一并未生成，未逐条归因）。⛔ 别写成「未过门禁」—— 门禁那层看到的 65 条里本就没有。"
-    "且 `test_authoring` 占 21/39，须连带披露「测试自己测自己」的退化风险。",
+    # 🔴 traj 缺陷 8 / T05：旧文写「须披露『测试自己测自己』的退化风险」，前提是标签语义没翻转。
+    # 实算 39/39 的 gold patch 不含测试文件 —— 测试全在 test_patch 里、判分时注入。
+    "⚠️ `test_authoring` 是**会话**层面的标签（那次会话的产物含测试），反解成 task 后语义已翻转："
+    "按 gold patch 实算 **39/39 都是改源码**（`meta/scoring-set.json` 的 `task_kind`），"
+    "测试全在判分阶段注入。⛔ 不要把这 21 条读成「写测试」任务。",
     "🔴 **难度锚点是代理指标**：用 `edit_ops` 而非真实解题难度，**且 S 档实测为 0 条**，"
     "只剩 M 12 / L 27 两档 ⇒ **不构成三档单调性证据**。"
     "⛔ 不要写成「锚点无效」—— 样本量为 0 时锚点既未被证伪也未被证实，那是两回事。",
@@ -1596,6 +1600,15 @@ def _budget_qualifier(zd: dict | None) -> list[str]:
         f"只有 {n_cap} 条是做完了才错。抬预算大概率抬分，所以它是下界，不是点估计。",
     ]
 
+def _task_kind_cell(surv: list[str]) -> str:
+    """「任务类型」从 `meta/scoring-set.json` 的 `task_kind` 取（T05），⛔ 不再用上游 category。"""
+    ss = c.MVP_META / "scoring-set.json"
+    if not ss.exists():
+        return "（未生成 `meta/scoring-set.json`，跑 `scripts/build-scoring-set.py`）"
+    per = json.loads(ss.read_text(encoding="utf-8"))["per_task"]
+    cnt = Counter(per[t]["task_kind"] for t in surv if t in per)
+    return " / ".join(f"`{k}` {v}" for k, v in cnt.most_common())
+
 
 def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: int,
                funnel: list, attrib: dict, n_surv: int, zd: dict | None,
@@ -1656,7 +1669,8 @@ def build_card(res: dict, gcells: dict, bcells: dict, cost: dict, ctl: dict, k: 
         "|---|---|",
         f"| 交付 task 数 | **{len(surv)}** |",
         f"| 来源仓库 | {_dist(repo)} |",
-        f"| 任务类型 | {_dist(cat)} |",
+        f"| 任务类型（按 gold patch 实算） | {_task_kind_cell(surv)} |",
+        f"| 上游会话标签（provenance，⚠️ 语义已翻转，见 Limitations 第 4 条） | {_dist(cat)} |",
         f"| 难度分档（`edit_ops` 代理指标） | "
         f"{' / '.join(f'`{kk}` {len(v.tasks)}' for kk, v in bcells.items())}"
         "　⚠️ **S 档为 0** |",

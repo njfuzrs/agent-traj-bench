@@ -347,6 +347,11 @@ jobs:
           python scripts/check-prompt-leak.py
           python scripts/build-eval-instruction.py --check
 
+      # ── 门禁⑭ 计分集与生成器一致（T05，traj 缺陷 8）────────────────
+      # meta/scoring-set.json 由 scripts/build-scoring-set.py 生成（处置清单是 T00 裁决），⛔ 不许手改。
+      - name: gate14 - 计分集与生成器一致
+        run: python scripts/build-scoring-set.py --check
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。
