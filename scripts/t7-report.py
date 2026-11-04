@@ -32,6 +32,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import statistics
@@ -1366,6 +1367,39 @@ def _card_usage(cfg: dict) -> list[str]:
         f"> - **有快照在手**（HF 仓的 `snapshots/`）：`{SCRIPTS_REL}/t4-build-env.py --from-snapshots <dir>`，逐份校验 `tar_sha256`，任一条不符即报红退出 4。\n"
         f"> - **有 mirror 在手**（仅采集机）：`{SCRIPTS_REL}/t4-build-env.py` 从 mirror 重建。\n"
         "> `meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果。",
+        "",
+        *_release_usage(),
+    ]
+
+
+def _release_usage() -> list[str]:
+    """v0.2.1 发布目录的用法（T06）。digest 现算，⛔ 不写死。"""
+    ss = c.MVP_META / "scoring-set.json"
+    if not ss.exists():
+        return []
+    spec = importlib.util.spec_from_file_location("_export_release", Path(__file__).parent / "export-release.py")
+    assert spec and spec.loader
+    ex = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ex)
+    tasks = ex.scored_tasks()
+    d = ex.digest(ex.plan(tasks))
+    return [
+        f"### v0.2.1：后续基线用这个（{len(tasks)} 题计分集）",
+        "",
+        "🔴 **v0.2.1 起，新基线不再走 `t8-rerun.py` 现拼题面**。评测题面是入库的 "
+        "`tasks/*/instruction.eval.md`（原句 + 剥掉代码块的内联文档 + F2P 路径清单），"
+        "判分加固（判分方 bun 配置 + 按 base blob 还原）在各题 `tests/` 里。"
+        "harbor 只读 `instruction.md`，所以先导出发布目录：",
+        "",
+        "```bash",
+        "hf download njfuzrs/agent-traj-bench --repo-type dataset --local-dir <hf> --include 'snapshots/*'",
+        f"python3 {SCRIPTS_REL}/export-release.py --snapshots <hf>/snapshots   # → dist/{ex.VERSION}/tasks/",
+        f"harbor run -p dist/{ex.VERSION}/tasks -a <agent> -n 1",
+        "```",
+        "",
+        f"- 计分集：`meta/scoring-set.json`（交付 39 / 计分 {len(tasks)}，处置理由逐条在里面）",
+        f"- `taskset_digest` = `{d}`（`export-release.py --digest-only` 现算）",
+        "- ⛔ 上面 37.8% 的读数属于 v0.2-mini 题集，**不能**与 v0.2.1 上跑出的数字比较。",
         "",
     ]
 

@@ -167,3 +167,48 @@ def test_eval_instructions_carry_no_real_login_name():
     bad = [p.parent.name for p in c.MVP_TASKS.glob("*/instruction.eval.md")
            if "/Users/zhourusheng" in p.read_text(encoding="utf-8")]
     assert not bad, f"题面里有本机登录名：{bad[:5]}"
+
+
+# ── T06：发布目录导出 ─────────────────────────────────────────────────
+
+def _export():
+    spec = importlib.util.spec_from_file_location("_export_release", MVP / "export-release.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_release_plan_swaps_in_eval_prompt_and_only_scored_tasks():
+    ex = _export()
+    tasks = ex.scored_tasks()
+    files = ex.plan(tasks)
+    assert {p.split("/")[1] for p in files} == set(tasks) and len(tasks) == 32
+    for t in ("T0008", "T0064"):
+        assert files[f"tasks/{t}/instruction.md"] == (c.MVP_TASKS / t / "instruction.eval.md").read_bytes()
+    # 不计分的题与 provenance 文件不进发布目录
+    assert not any(p.startswith(("tasks/T0009/", "tasks/T0026/", "tasks/T0012/")) for p in files)
+    assert not any(p.endswith(("instruction.eval.md", "meta.json")) for p in files)
+    # 判分加固随题发布
+    assert "tasks/T0064/tests/bunfig.verifier.toml" in files and "tasks/T0064/tests/protected.json" in files
+
+
+def test_release_digest_is_content_addressed():
+    ex = _export()
+    files = ex.plan(ex.scored_tasks())
+    d0 = ex.digest(files)
+    assert ex.digest(dict(reversed(list(files.items())))) == d0, "digest 不许依赖遍历顺序"
+    k = "tasks/T0064/instruction.md"
+    assert ex.digest({**files, k: files[k] + b" "}) != d0, "题面变了 digest 必须变"
+    s = "tasks/T0064/environment/repo-snapshot.tar.gz"
+    assert ex.digest({**files, s: ("snapshot", "0" * 64)}) != d0, "快照变了 digest 必须变"
+
+
+def test_release_digest_differs_from_v02_mini_shape():
+    """新旧题集 digest 必须不同：用旧形态（原句题面、39 题）拼一份对照。"""
+    ex = _export()
+    new = ex.digest(ex.plan(ex.scored_tasks()))
+    old_files = {}
+    for t in sorted(p.name for p in c.MVP_TASKS.iterdir() if p.is_dir()):
+        old_files[f"tasks/{t}/instruction.md"] = (c.MVP_TASKS / t / "instruction.md").read_bytes()
+    assert ex.digest(old_files) != new

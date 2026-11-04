@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — 基线评测报告
 
-> 生成于 2026-11-04 12:33 UTC，由 `scripts/t7-report.py` 从 run 产物**纯复算**。
+> 生成于 2026-11-04 12:55 UTC，由 `scripts/t7-report.py` 从 run 产物**纯复算**。
 > 取数源唯一：`reports/t8-rerun/`（39 条 task × k=1）。
 
 ## 1. 主结果

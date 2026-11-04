@@ -1,6 +1,6 @@
 # Agent-Traj-Bench v0.2-mini — Dataset Card
 
-> 生成于 2026-11-04 12:33 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
+> 生成于 2026-11-04 12:55 UTC，由 `scripts/t7-report.py --runs t8-rerun --card` 从产物**纯复算**。⛔ 本文没有一个手写数字。
 
 ## 这是什么
 
@@ -92,6 +92,20 @@
 > - **有快照在手**（HF 仓的 `snapshots/`）：`scripts/t4-build-env.py --from-snapshots <dir>`，逐份校验 `tar_sha256`，任一条不符即报红退出 4。
 > - **有 mirror 在手**（仅采集机）：`scripts/t4-build-env.py` 从 mirror 重建。
 > `meta/snapshots.jsonl` 存了每份的 `tar_sha256` 与 `tar_bytes`，可逐条校验重建结果。
+
+### v0.2.1：后续基线用这个（32 题计分集）
+
+🔴 **v0.2.1 起，新基线不再走 `t8-rerun.py` 现拼题面**。评测题面是入库的 `tasks/*/instruction.eval.md`（原句 + 剥掉代码块的内联文档 + F2P 路径清单），判分加固（判分方 bun 配置 + 按 base blob 还原）在各题 `tests/` 里。harbor 只读 `instruction.md`，所以先导出发布目录：
+
+```bash
+hf download njfuzrs/agent-traj-bench --repo-type dataset --local-dir <hf> --include 'snapshots/*'
+python3 scripts/export-release.py --snapshots <hf>/snapshots   # → dist/v0.2.1/tasks/
+harbor run -p dist/v0.2.1/tasks -a <agent> -n 1
+```
+
+- 计分集：`meta/scoring-set.json`（交付 39 / 计分 32，处置理由逐条在里面）
+- `taskset_digest` = `1457035c9cc64e722fd37b56f972e0c05783ba20b7eebb32125edacca745da66`（`export-release.py --digest-only` 现算）
+- ⛔ 上面 37.8% 的读数属于 v0.2-mini 题集，**不能**与 v0.2.1 上跑出的数字比较。
 
 ## Limitations（主动披露）
 
