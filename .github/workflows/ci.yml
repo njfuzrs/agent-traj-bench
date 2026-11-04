@@ -358,13 +358,22 @@ jobs:
       - name: gate15 - 判分加固自洽
         run: python scripts/build-verifier-pins.py --check
 
+      # ── 门禁⑯ 功效/阈值表自洽（T13）────────────────────────────────
+      # 三张表（可检出差距、McNemar 判定、m 取值）是 §3.3 / §5.2 的唯一取数源。
+      # 🔴 它们此前由**手算**写进文档，n=37 一行就偏了 5 pp（文档 27 pp，现算 31.9 pp）⇒
+      #    「39 题能拦多大退化」这个对外口径曾建立在一个偏乐观的数字上。
+      # ⛔ 不许把 --check 改成「只打印」：恒绿的统计门禁会把错的表锁进文档，
+      #    比没有门禁更糟（形态同 gate12 的「防线全在、调用全 0」）。
+      - name: gate16 - 功效/阈值表与文档一致
+        run: python scripts/eval-stats.py --check
+
       # ── 单测 ───────────────────────────────────────────────────────
       # ⚠️ 没有原始轨迹与 mirror 的那几条会 skip 并**说明原因**，
       # ⛔ 不许因为 CI 里 skip 就把它们删掉：它们在采集机上是真跑的。
       - name: 单测
         run: |
           pip install --quiet pytest
-          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py tests/test_prompt_leak.py -q
+          cd scripts && python -m pytest tests/test_mvp.py tests/test_contamination.py tests/test_prompt_leak.py tests/test_eval_stats.py -q
       # ── pipeline 单测 ──────────────────────────────────────────────
       # ⚠️ 没有原始轨迹的那 2 条会 skip 并说明原因（实测 195 passed / 2 skipped）。
       # ⛔ 不许因为 CI 里 skip 就删掉它们 —— 在采集机上是真跑的。
