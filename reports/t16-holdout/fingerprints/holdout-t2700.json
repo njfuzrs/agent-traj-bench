@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "run_dir": "reports/t16-holdout/round1/t2700/2026-11-06__10-28-52",
+  "n_trials": 24,
+  "fields": {
+    "model_id": "openai/origin-deepseek-v4-1-flash",
+    "sid_binary_sha256": "108524537aa864ea9dfdd9ba8a3538d937307e4fa31864b9320e12c05daab323",
+    "sid_commit": "e71b7b00b10f9443c6cf10a31062b2c0f83e871e",
+    "arch": "arm64",
+    "harbor_version": "0.22.0",
+    "taskset_digest": "24:3231a708b360653a:47b4d3cf393a72da",
+    "traj_bench_commit": "5bbd97404f53d452cc4d42323581b5c432f2b138",
+    "verdict_rule_version": "1",
+    "max_turns": 120,
+    "budget_usd": "1.8",
+    "max_duration_ms": "7290000",
+    "network_policy": "allowlist",
+    "permission_mode": "dangerously-skip-permissions",
+    "stall_escalation": "off"
+  },
+  "sources": {
+    "model_id": "config.json:agents[0].model_name",
+    "sid_binary_sha256": "<trial>/result.json:agent_result.metadata.sid_binary_sha256",
+    "sid_commit": "<trial>/result.json:agent_result.metadata.sid_commit",
+    "arch": "<trial>/agent/sid-code-build.json:arch_actual",
+    "harbor_version": "lock.json:harbor",
+    "taskset_digest": "lock.json:trials[].task.{name,digest} → taskset_fp.digest_fingerprint",
+    "traj_bench_commit": "declared",
+    "verdict_rule_version": "run_fingerprint.py:VERDICT_RULE_VERSION",
+    "max_turns": "<trial>/result.json:agent_result.metadata.sid_max_turns",
+    "budget_usd": "<trial>/result.json:agent_result.metadata.sid_max_budget_usd",
+    "max_duration_ms": "<trial>/result.json:agent_result.metadata.sid_max_duration_ms",
+    "network_policy": "declared",
+    "permission_mode": "<trial>/result.json:agent_result.metadata.sid_permission_mode_requested",
+    "stall_escalation": "<trial>/result.json:agent_result.metadata.sid_stall_escalation"
+  },
+  "declared": {
+    "traj_bench_commit": "5bbd97404f53d452cc4d42323581b5c432f2b138",
+    "network_policy": "allowlist"
+  },
+  "missing": [],
+  "conflicts": {}
+}
