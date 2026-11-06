@@ -45,3 +45,5 @@ dist/
 # 逐题结果在 reports/t15-baseline/round{1,2,3}/trials.json，指纹在 fingerprints/，这两类入库。
 reports/t15-baseline/round*/t*/
 reports/t15-baseline/stage/
+# D4 探针（k=1，不进基线）：run 产物不入库，只入 summary.json
+reports/d4-turns-probe/*/t*/
