@@ -40,3 +40,8 @@ __pycache__/
 
 # ── 发布目录（T06 派生物，scripts/export-release.py 生成；含 195MB 快照）──
 dist/
+
+# ── T15 k=3 基线 run 产物（1.2G）────────────────────────────────
+# 逐题结果在 reports/t15-baseline/round{1,2,3}/trials.json，指纹在 fingerprints/，这两类入库。
+reports/t15-baseline/round*/t*/
+reports/t15-baseline/stage/
