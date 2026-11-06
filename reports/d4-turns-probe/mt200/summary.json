@@ -1,0 +1,75 @@
+{
+  "n_judged": 14,
+  "n_infra": 0,
+  "still_capped": [
+    "T0062",
+    "T0064"
+  ],
+  "new_solved": [
+    "T0045",
+    "T0062"
+  ],
+  "half_uncapped": true,
+  "useful": false,
+  "decision": "(a)：不整套重跑",
+  "cost_usd": 3.57,
+  "max_turns": 200,
+  "per_task": {
+    "T0003": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0007": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0008": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0010": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0033": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0036": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0038": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0039": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0045": {
+      "subtype": "success",
+      "reward": 1.0
+    },
+    "T0049": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0050": {
+      "subtype": "success",
+      "reward": 0.0
+    },
+    "T0059": {
+      "subtype": "success",
+      "reward": 1.0
+    },
+    "T0062": {
+      "subtype": "error_max_turns",
+      "reward": 1.0
+    },
+    "T0064": {
+      "subtype": "error_max_turns",
+      "reward": 0.0
+    }
+  }
+}
