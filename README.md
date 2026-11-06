@@ -27,6 +27,7 @@
 | --- | --- | --- |
 | **题集本身**（39 条能不能跑起来） | `harbor run -p tasks -n 6` | 交付原句，**不含**下面两段 |
 | **基线读数**（37.8% 这个数） | `scripts/t8-rerun.py` | 原句 **+ 两段现拼** |
+| **v0.2.1 基线**（计分集 32 题，T15 k=3 / T16 样本外） | `scripts/t15-baseline.py`（见下方「v0.2.1 基线：一条命令」） | `dist/v0.2.1/tasks/` 的 `instruction.eval.md`（T04 定型，不现场拼） |
 
 `t8-rerun.py` 把 39 条复制到 stage 目录后，在题面原句之外拼了两段（都是修复实验的产物）：
 
@@ -66,6 +67,27 @@ python3 scripts/t7-report.py --runs t8-rerun --card
 ```bash
 harbor run -p tasks -n 6 -a <your-agent>
 ```
+
+### v0.2.1 基线：一条命令
+
+计分集 32 题的基线（T15 k=3、T16 样本外一轮）**只走这一个入口**，不经 `t8-rerun.py`：
+
+```bash
+# 0. 导出发布目录（需要 HF 快照）→ dist/v0.2.1/tasks/
+python3 scripts/export-release.py --snapshots <hf>/snapshots
+
+# 1. 只过闸不跑（$0），必须全绿
+~/.local/share/uv/tools/harbor/bin/python scripts/t15-baseline.py --dry-run \
+    --binary <sid-code 的 linux-arm64 二进制>
+
+# 2. 正式跑（一轮约 2h、约 $6，2026-11 实测）；--rounds 1 = 样本外一轮
+caffeinate -dimsu ~/.local/share/uv/tools/harbor/bin/python scripts/t15-baseline.py \
+    --binary <同上> [--rounds 1]
+```
+
+- 要用 harbor 的 uv 环境里的 python（闸要 `import harbor`）；harbor 失败也返 0，判据看产物里的逐题 reward。
+- 一轮 = 按 `task.toml` 硬顶分两档各跑一次 harbor，`max_duration_ms` = 硬顶 × 0.9（原因见脚本文件头）。
+- 逐题结果入库在 `reports/t15-baseline/round{1,2,3}/trials.json`；S/ε/m 用 `python3 scripts/eval-stats.py --baseline <k 份 trials.json> [--holdout <样本外 trials.json>]` 复算。
 
 ## 目录
 
